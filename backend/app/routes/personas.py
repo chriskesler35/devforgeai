@@ -112,16 +112,21 @@ async def get_persona(
 ):
     """Get persona details."""
     import uuid
+    persona = None
     try:
-        persona_uuid = _parse_uuid(persona_id)
+        persona_uuid = _uuid.UUID(persona_id)
         persona = await db.get(Persona, persona_uuid)
-    except ValueError:
+    except (ValueError, AttributeError):
+        # Not a valid UUID — fall through to name lookup
+        pass
+
+    if not persona:
         # Try to find by name
         result = await db.execute(
             select(Persona).where(Persona.name == persona_id)
         )
         persona = result.scalar_one_or_none()
-    
+
     if not persona:
         raise HTTPException(status_code=404, detail="Persona not found")
     

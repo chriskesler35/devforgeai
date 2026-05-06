@@ -4,7 +4,7 @@ import asyncio
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from fastapi.testclient import TestClient
 
 # Test database URL (in-memory SQLite)
@@ -43,13 +43,15 @@ async def client(db_session):
     """Create test client."""
     from app.main import app
     from app.database import get_db
+    from app.config import settings
     
     async def override_get_db():
         yield db_session
     
     app.dependency_overrides[get_db] = override_get_db
     
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    headers = {"Authorization": f"Bearer {settings.modelmesh_api_key}"}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=headers) as ac:
         yield ac
     
     app.dependency_overrides.clear()

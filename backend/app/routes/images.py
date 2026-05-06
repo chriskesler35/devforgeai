@@ -276,19 +276,43 @@ def _has_cli_flag(args: list[str], flag: str) -> bool:
     return any(arg == flag or arg.startswith(f"{flag}=") for arg in args)
 
 
+def _extract_cli_flag(args: list[str], flag: str) -> tuple[list[str], list[str]]:
+    """Extract `flag` (and its value) from args. Returns (extracted, remaining)."""
+    extracted: list[str] = []
+    remaining: list[str] = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == flag:
+            extracted.append(arg)
+            if i + 1 < len(args):
+                extracted.append(args[i + 1])
+                i += 2
+                continue
+        elif arg.startswith(f"{flag}="):
+            extracted.append(arg)
+        else:
+            remaining.append(arg)
+        i += 1
+    return extracted, remaining
+
+
 def _build_comfyui_launch_cmd(comfyui_python: Path, launch_args: str) -> list[str]:
     cmd = [str(comfyui_python), "main.py"]
     user_args = shlex.split(launch_args, posix=False) if launch_args else []
 
-    if not _has_cli_flag(user_args, "--listen"):
-        cmd.extend(["--listen", "0.0.0.0"])
-    if not _has_cli_flag(user_args, "--default-device"):
+    # For each managed default, prefer the user's value at the default's slot.
+    # Remaining user args (those not matching managed defaults) are appended last.
+    managed = [
+        ("--listen", ["--listen", "0.0.0.0"]),
         # Primary GPU, keeps others visible for overflow.
-        cmd.extend(["--default-device", "0"])
-    if not _has_cli_flag(user_args, "--preview-method"):
-        cmd.extend(["--preview-method", "auto"])
-    if not _has_cli_flag(user_args, "--enable-cors-header"):
-        cmd.extend(["--enable-cors-header", "*"])
+        ("--default-device", ["--default-device", "0"]),
+        ("--preview-method", ["--preview-method", "auto"]),
+        ("--enable-cors-header", ["--enable-cors-header", "*"]),
+    ]
+    for flag, default in managed:
+        override, user_args = _extract_cli_flag(user_args, flag)
+        cmd.extend(override if override else default)
 
     cmd.extend(user_args)
     return cmd

@@ -12,16 +12,21 @@ async def test_router_raises_no_model_available():
     db = AsyncMock()
     memory = MagicMock()
     router = Router(db, memory)
-    
-    # Should raise when no persona/model provided
+
+    persona = MagicMock()
+    persona.id = "test-persona"
+    persona.memory_enabled = False
+    persona.routing_rules = {}
+    persona.max_memory_messages = 10
+
+    # Should raise when no primary_model provided
     with pytest.raises(NoModelAvailableError):
-        async for _ in router.route_request(
-            persona=None,
+        await router.route_request(
+            persona=persona,
             primary_model=None,
             fallback_model=None,
             messages=[{"role": "user", "content": "test"}]
-        ):
-            pass
+        )
 
 
 @pytest.mark.asyncio
