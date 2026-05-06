@@ -11,6 +11,8 @@ import asyncio
 import logging
 import os
 import re
+import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple, Dict
@@ -476,6 +478,91 @@ _MAX_FILE_READ_BYTES = 200 * 1024  # 200 KB cap for read_file
 _MAX_LOCAL_FILE_READ_BYTES = 512 * 1024  # 512 KB cap for read_local_file
 _MAX_LOCAL_FILE_WRITE_BYTES = 2 * 1024 * 1024  # 2 MB cap for write_local_file
 
+_VIDEO_EXTENSIONS = {
+    ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".wmv", ".flv"
+}
+_IMAGE_TARGET_FORMATS = {
+    "png", "jpg", "jpeg", "webp", "bmp", "tiff", "gif"
+}
+
+
+def get_media_conversion_status() -> dict:
+    """Report whether optional media conversion dependencies are available."""
+    ffmpeg_path = _resolve_ffmpeg_executable()
+    ffmpeg_ready = False
+    ffmpeg_error = None
+    try:
+        result = subprocess.run(
+            [ffmpeg_path, "-version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env={**os.environ},
+        )
+        ffmpeg_ready = result.returncode == 0
+        if not ffmpeg_ready:
+            ffmpeg_error = (result.stderr or result.stdout or "ffmpeg returned a non-zero exit code").strip()
+    except FileNotFoundError:
+        ffmpeg_error = "ffmpeg executable was not found"
+    except Exception as exc:
+        ffmpeg_error = f"{type(exc).__name__}: {exc}"
+
+    pillow_ready = False
+    pillow_error = None
+    try:
+        from PIL import Image  # noqa: F401
+        pillow_ready = True
+    except Exception as exc:
+        pillow_error = f"{type(exc).__name__}: {exc}"
+
+    heif_ready = False
+    heif_error = None
+    try:
+        from pillow_heif import register_heif_opener
+        register_heif_opener()
+        heif_ready = True
+    except Exception as exc:
+        heif_error = f"{type(exc).__name__}: {exc}"
+
+    return {
+        "ready": ffmpeg_ready and pillow_ready,
+        "ffmpeg": {
+            "ready": ffmpeg_ready,
+            "path": ffmpeg_path,
+            "error": ffmpeg_error,
+        },
+        "pillow": {
+            "ready": pillow_ready,
+            "error": pillow_error,
+        },
+        "heif": {
+            "ready": heif_ready,
+            "error": heif_error,
+        },
+    }
+
+
+def _resolve_ffmpeg_executable() -> str:
+    """Resolve ffmpeg path across local shells, WinGet installs, and containers."""
+    env_ffmpeg = os.environ.get("FFMPEG_PATH", "").strip()
+    if env_ffmpeg and Path(env_ffmpeg).exists():
+        return env_ffmpeg
+
+    ffmpeg_on_path = shutil.which("ffmpeg")
+    if ffmpeg_on_path:
+        return ffmpeg_on_path
+
+    if os.name == "nt":
+        local_app_data = os.environ.get("LOCALAPPDATA", "")
+        if local_app_data:
+            winget_root = Path(local_app_data) / "Microsoft" / "WinGet" / "Packages"
+            if winget_root.exists():
+                matches = sorted(winget_root.glob("Gyan.FFmpeg*/**/bin/ffmpeg.exe"))
+                if matches:
+                    return str(matches[-1])
+
+    return "ffmpeg"
+
 
 def _resolve_workspace_path(relative_path: str, workspace_root: Path) -> Path:
     """Resolve a relative path against the workspace root.
@@ -521,6 +608,18 @@ def _resolve_execution_cwd(
     if not resolved.is_dir():
         raise ValueError(f"working_directory is not a directory: {resolved}")
     return resolved
+
+
+def _resolve_local_or_workspace_path(path_value: str, workspace_root: Path) -> Path:
+    """Resolve path as absolute local path or workspace-relative path."""
+    raw = (path_value or "").strip()
+    if not raw:
+        raise ValueError("Path is required.")
+
+    candidate = Path(raw).expanduser()
+    if candidate.is_absolute():
+        return candidate.resolve()
+    return _resolve_workspace_path(raw, workspace_root)
 
 
 async def tool_read_file(
@@ -759,6 +858,199 @@ async def tool_web_fetch(
         return {"success": False, "output": f"Fetch error: {exc}"}
 
 
+async def tool_convert_media(
+    source_path: str,
+    target_format: str,
+    workspace_root: Path,
+    *,
+    output_path: Optional[str] = None,
+    fps: int = 12,
+    width: Optional[int] = None,
+    image_width: Optional[int] = None,
+    image_height: Optional[int] = None,
+    image_scale_percent: Optional[int] = None,
+) -> dict:
+    """Convert images between formats or convert video files to GIF."""
+    try:
+        src = _resolve_local_or_workspace_path(source_path, workspace_root)
+    except ValueError as exc:
+        return {"success": False, "output": str(exc)}
+
+    if not src.exists() or not src.is_file():
+        return {"success": False, "output": f"Source file not found: {src}"}
+
+    fmt = (target_format or "").strip().lower().lstrip(".")
+    if not fmt:
+        return {"success": False, "output": "target_format is required."}
+
+    if output_path:
+        try:
+            out = _resolve_local_or_workspace_path(output_path, workspace_root)
+        except ValueError as exc:
+            return {"success": False, "output": str(exc)}
+    else:
+        out = src.with_suffix(f".{fmt}")
+
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        return {"success": False, "output": f"Failed to create output directory: {exc}"}
+
+    src_ext = src.suffix.lower()
+    is_video = src_ext in _VIDEO_EXTENSIONS
+
+    if is_video:
+        if fmt != "gif":
+            return {
+                "success": False,
+                "output": "Video conversion currently supports target_format='gif' only.",
+            }
+
+        gif_fps = fps if isinstance(fps, int) and fps > 0 else 12
+        vf_parts = [f"fps={gif_fps}"]
+        if isinstance(width, int) and width > 0:
+            vf_parts.append(f"scale={width}:-1:flags=lanczos")
+        vf = ",".join(vf_parts)
+
+        ffmpeg_executable = _resolve_ffmpeg_executable()
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                ffmpeg_executable,
+                "-y", "-i", str(src), "-vf", vf, str(out),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(workspace_root),
+                env={**os.environ},
+            )
+            try:
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=600)
+                exit_code = proc.returncode or 0
+                stdout = stdout_bytes.decode("utf-8", errors="replace")
+                stderr = stderr_bytes.decode("utf-8", errors="replace")
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.communicate()
+                stdout = ""
+                stderr = "[ffmpeg killed after 600s timeout]"
+                exit_code = -1
+        except FileNotFoundError:
+            return {
+                "success": False,
+                "output": (
+                    f"ffmpeg not found at '{ffmpeg_executable}'. "
+                    "Install FFmpeg and ensure it is on your PATH (or set FFMPEG_PATH), then restart the backend."
+                ),
+            }
+        except Exception as exc:
+            return {
+                "success": False,
+                "output": f"ffmpeg could not be launched from '{ffmpeg_executable}': {type(exc).__name__}: {exc}",
+            }
+
+        if exit_code != 0:
+            return {
+                "success": False,
+                "output": (
+                    f"ffmpeg conversion failed (exit {exit_code}) using '{ffmpeg_executable}'.\n"
+                    f"{stderr or stdout}"
+                )[:5000],
+            }
+
+        return {
+            "success": True,
+            "output": f"Converted video to GIF: {out}",
+            "source_path": str(src),
+            "output_path": str(out),
+        }
+
+    if fmt not in _IMAGE_TARGET_FORMATS:
+        return {
+            "success": False,
+            "output": f"Unsupported image target format: {fmt}",
+        }
+
+    if image_width is not None and image_width <= 0:
+        return {
+            "success": False,
+            "output": "image_width must be a positive integer.",
+        }
+
+    if image_height is not None and image_height <= 0:
+        return {
+            "success": False,
+            "output": "image_height must be a positive integer.",
+        }
+
+    if image_scale_percent is not None and image_scale_percent <= 0:
+        return {
+            "success": False,
+            "output": "image_scale_percent must be a positive integer.",
+        }
+
+    media_status = get_media_conversion_status()
+    if not media_status["pillow"]["ready"]:
+        return {
+            "success": False,
+            "output": f"Image conversion requires Pillow. {media_status['pillow'].get('error') or ''}".strip(),
+        }
+
+    try:
+        from PIL import Image
+        try:
+            from pillow_heif import register_heif_opener
+            register_heif_opener()
+        except Exception:
+            pass
+
+        with Image.open(src) as img:
+            if image_width is not None or image_height is not None:
+                original_w, original_h = img.size
+                if image_width is not None and image_height is not None:
+                    target_w = image_width
+                    target_h = image_height
+                elif image_width is not None:
+                    target_w = image_width
+                    target_h = max(1, int(round((original_h * target_w) / max(1, original_w))))
+                else:
+                    target_h = image_height or original_h
+                    target_w = max(1, int(round((original_w * target_h) / max(1, original_h))))
+
+                resample = getattr(Image, "Resampling", Image).LANCZOS
+                if (target_w, target_h) != (original_w, original_h):
+                    img = img.resize((target_w, target_h), resample=resample)
+            elif image_scale_percent is not None:
+                original_w, original_h = img.size
+                scale = image_scale_percent / 100.0
+                target_w = max(1, int(round(original_w * scale)))
+                target_h = max(1, int(round(original_h * scale)))
+
+                resample = getattr(Image, "Resampling", Image).LANCZOS
+                if (target_w, target_h) != (original_w, original_h):
+                    img = img.resize((target_w, target_h), resample=resample)
+
+            save_kwargs = {}
+            if fmt in {"jpg", "jpeg"}:
+                if img.mode in ("RGBA", "LA", "P"):
+                    img = img.convert("RGB")
+                save_kwargs["quality"] = 92
+            img.save(out, format=fmt.upper(), **save_kwargs)
+    except Exception as exc:
+        return {
+            "success": False,
+            "output": (
+                "Image conversion failed. For HEIC sources, install pillow-heif. "
+                f"Details: {exc}"
+            )[:5000],
+        }
+
+    return {
+        "success": True,
+        "output": f"Converted image to .{fmt}: {out}",
+        "source_path": str(src),
+        "output_path": str(out),
+    }
+
+
 async def execute_tool_call(
     tool_name: str,
     arguments: dict,
@@ -845,6 +1137,16 @@ async def execute_tool_call(
             method=arguments.get("method", "GET"),
             headers=arguments.get("headers"),
             body=arguments.get("body"),
+        )
+
+    if name == "convert_media":
+        return await tool_convert_media(
+            source_path=arguments.get("source_path", ""),
+            target_format=arguments.get("target_format", ""),
+            workspace_root=workspace_root,
+            output_path=arguments.get("output_path"),
+            fps=int(arguments.get("fps") or 12),
+            width=arguments.get("width"),
         )
 
     return {"success": False, "output": f"Unknown tool: {name}"}
