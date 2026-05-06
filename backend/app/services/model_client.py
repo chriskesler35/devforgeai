@@ -11,8 +11,6 @@ from app.services.codex_oauth import (
     codex_proxy_rejects_temperature,
     get_codex_proxy_api_key,
     get_codex_proxy_base_url,
-    get_codex_proxy_configuration_issue,
-    is_codex_proxy_reachable,
     should_use_codex_oauth_proxy,
 )
 from app.services.provider_credentials import get_provider_api_key
@@ -192,7 +190,6 @@ class ModelClient:
             configuration_issue = get_codex_proxy_configuration_issue()
             if configuration_issue:
                 raise ValueError(
-                    f"OpenAI Codex is not usable right now. {configuration_issue} "
                     "Configure CODEX_OAUTH_PROXY_BASE_URL to a compatible HTTP proxy or set OPENAI_API_KEY."
                 )
             if not is_codex_proxy_reachable():

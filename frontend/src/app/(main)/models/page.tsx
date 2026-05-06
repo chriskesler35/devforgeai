@@ -180,6 +180,8 @@ export default function ModelsPage() {
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null)
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null)
   const [syncing, setSyncing] = useState(false)
+  const [syncingProvider, setSyncingProvider] = useState(false)
+  const [selectedProviderSync, setSelectedProviderSync] = useState('openai')
   const [syncResult, setSyncResult] = useState<SyncRunResult | null>(null)
   const [catalogValidating, setCatalogValidating] = useState(false)
   const [catalogValidationResult, setCatalogValidationResult] = useState<CatalogValidationResult | null>(null)
@@ -275,6 +277,24 @@ export default function ModelsPage() {
       setSyncResult({ ok: false, message: 'Sync failed — check backend logs' })
     } finally {
       setSyncing(false)
+      setTimeout(() => setSyncResult(null), 5000)
+    }
+  }
+
+  const runProviderSync = async () => {
+    if (!selectedProviderSync) return
+    setSyncingProvider(true)
+    setSyncResult(null)
+    try {
+      const res = await fetch(`${API_BASE}/v1/models/sync/provider/${selectedProviderSync}`, { method: 'POST', headers: AUTH_HEADERS })
+      const data: SyncRunResult = await res.json()
+      setSyncResult(data)
+      await fetchModels()
+      await fetchSyncStatus()
+    } catch (_e: any) {
+      setSyncResult({ ok: false, message: `Provider sync failed for ${selectedProviderSync} — check backend logs` })
+    } finally {
+      setSyncingProvider(false)
       setTimeout(() => setSyncResult(null), 5000)
     }
   }
@@ -466,8 +486,8 @@ export default function ModelsPage() {
 
   const handleAddModel = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!validation?.live_verified) {
-      setValidationError('This model must pass a live validation check before it can be added.')
+    if (!validation?.valid) {
+      setValidationError('This model is not valid for the selected provider.')
       return
     }
     try {
@@ -778,6 +798,28 @@ export default function ModelsPage() {
           >
             {catalogValidating ? 'Validating…' : 'Validate Catalog'}
           </button>
+          <div className="flex items-center gap-2">
+            <select
+              value={selectedProviderSync}
+              onChange={(e) => setSelectedProviderSync(e.target.value)}
+              className="rounded-md border border-gray-300 bg-white px-2 py-2 text-sm text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+            >
+              <option value="openai">OpenAI</option>
+              <option value="openai-codex">OpenAI Codex</option>
+              <option value="github-copilot">GitHub Copilot</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="google">Google</option>
+              <option value="ollama">Ollama</option>
+            </select>
+            <button
+              onClick={runProviderSync}
+              disabled={syncingProvider}
+              className="inline-flex items-center px-4 py-2 border border-amber-300 dark:border-amber-700 text-sm font-medium rounded-md text-amber-700 dark:text-amber-200 bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 dark:hover:bg-amber-900/30 disabled:opacity-50"
+            >
+              {syncingProvider ? 'Syncing provider…' : 'Sync Selected Provider'}
+            </button>
+          </div>
           <button
             onClick={() => setShowAddModal(true)}
             className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-orange-600 hover:bg-orange-700"
@@ -1092,10 +1134,10 @@ export default function ModelsPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={!validation?.live_verified}
+                  disabled={!validation?.valid}
                   className="px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Add Model
+                  {validation?.live_verified ? 'Add Model (validated)' : 'Add Model (needs review)'}
                 </button>
               </div>
             </form>

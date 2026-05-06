@@ -8,10 +8,15 @@ from alembic import context
 from app.models import Base
 
 config = context.config
-# Use sync URL for migrations (psycopg2), get password from env
-db_password = os.environ.get("POSTGRES_PASSWORD", "modelmesh_local_dev")
-db_url = f"postgresql://modelmesh:{db_password}@postgres:5432/modelmesh"
-config.set_main_option("sqlalchemy.url", db_url)
+# Determine DB URL: prefer DATABASE_URL env var, fall back to PostgreSQL default.
+# For local SQLite development, set DATABASE_URL=sqlite:///./modelmesh.db
+_raw_db_url = os.environ.get("DATABASE_URL")
+if not _raw_db_url:
+    db_password = os.environ.get("POSTGRES_PASSWORD", "modelmesh_local_dev")
+    _raw_db_url = f"postgresql://modelmesh:{db_password}@postgres:5432/modelmesh"
+# Alembic requires a sync driver; convert async SQLite/PostgreSQL URLs
+_db_url = _raw_db_url.replace("sqlite+aiosqlite", "sqlite").replace("postgresql+asyncpg", "postgresql")
+config.set_main_option("sqlalchemy.url", _db_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

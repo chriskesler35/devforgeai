@@ -1,7 +1,9 @@
 """Model validation endpoint — confirms a model ID is real and returns authoritative metadata."""
 
+import asyncio
 import os
 import logging
+import time
 from typing import Optional
 from urllib.parse import urlparse
 from fastapi import APIRouter, Depends
@@ -11,6 +13,7 @@ import litellm
 from app.middleware.auth import verify_api_key
 from app.config import settings
 from app.services.codex_oauth import (
+    get_codex_oauth_tokens,
     get_codex_proxy_api_key,
     get_codex_proxy_base_url,
     get_codex_proxy_configuration_issue,
@@ -48,6 +51,54 @@ CAPABILITY_FLAGS = {
     "code":             None,                     # infer from model name
 }
 
+# provider:model_id -> unix expiry when transient failures should be treated as
+# temporarily verified-for-use.
+_TRANSIENT_VALIDATION_CACHE: dict[str, float] = {}
+
+
+def _transient_cache_key(provider: str, model_id: str) -> str:
+    return f"{(provider or '').strip().lower()}::{(model_id or '').strip().lower()}"
+
+
+def _transient_ttl_seconds() -> int:
+    raw = (os.environ.get("MODEL_VALIDATE_TRANSIENT_TTL_SECONDS") or "900").strip()
+    try:
+        ttl = int(raw)
+    except ValueError:
+        ttl = 900
+    return max(30, ttl)
+
+
+def _set_transient_verified(provider: str, model_id: str) -> None:
+    _TRANSIENT_VALIDATION_CACHE[_transient_cache_key(provider, model_id)] = time.time() + _transient_ttl_seconds()
+
+
+def _has_transient_verified(provider: str, model_id: str) -> bool:
+    key = _transient_cache_key(provider, model_id)
+    expiry = _TRANSIENT_VALIDATION_CACHE.get(key)
+    if not expiry:
+        return False
+    if expiry <= time.time():
+        _TRANSIENT_VALIDATION_CACHE.pop(key, None)
+        return False
+    return True
+
+
+def _is_transient_validation_error(exc: Exception) -> bool:
+    """Best-effort check for retryable provider failures during live probes."""
+    text = f"{type(exc).__name__}: {exc}".lower()
+    transient_markers = (
+        "rate",
+        "429",
+        "503",
+        "504",
+        "timeout",
+        "temporarily unavailable",
+        "connection reset",
+        "try again",
+    )
+    return any(marker in text for marker in transient_markers)
+
 
 def _build_litellm_model(provider: str, model_id: str) -> str:
     prefix = PROVIDER_PREFIX.get(provider.lower(), "")
@@ -63,12 +114,14 @@ def _get_api_key(provider: str) -> Optional[str]:
                 or os.environ.get("GOOGLE_API_KEY")
                 or settings.gemini_api_key
                 or settings.google_api_key)
+    codex_access_token = (get_codex_oauth_tokens().get("access_token") or "").strip() or None
     key_map = {
         "anthropic":  os.environ.get("ANTHROPIC_API_KEY") or settings.anthropic_api_key,
         "openrouter": os.environ.get("OPENROUTER_API_KEY") or settings.openrouter_api_key,
-    "openai":     os.environ.get("OPENAI_API_KEY") or settings.openai_api_key,
-    "openai-codex": os.environ.get("OPENAI_API_KEY") or settings.openai_api_key,
-    "ollama":     None,
+        # If OPENAI_API_KEY is missing, fall back to Codex CLI OAuth access_token.
+        "openai": os.environ.get("OPENAI_API_KEY") or settings.openai_api_key or codex_access_token,
+        "openai-codex": os.environ.get("OPENAI_API_KEY") or settings.openai_api_key or codex_access_token,
+        "ollama": None,
     }
     return key_map.get(p)
 
@@ -128,6 +181,8 @@ async def validate_model_config(model_id: str, provider: str) -> dict:
     source = "unknown"
     warning = None
     max_output_tokens = None
+    catalog_matched = False
+    transient_failure = False
 
     if db_info is not None:
         source = "litellm_db"
@@ -143,26 +198,40 @@ async def validate_model_config(model_id: str, provider: str) -> dict:
     is_image_only = "imagen" in model_id.lower() or "dall-e" in model_id.lower() or "comfyui" in model_id.lower()
     probe_valid: Optional[bool] = None
 
-    if provider not in {"ollama", "github-copilot"}:
+    if provider != "ollama":
         try:
             from app.routes.model_sync import discover_provider_models, get_catalog_model_viability
 
             catalog_models, catalog_source = await discover_provider_models(provider)
-            if catalog_source in {"provider_api", "codex_proxy"}:
-                catalog_model = next((m for m in catalog_models if m.get("model_id") == model_id), None)
-                if catalog_model:
-                    is_viable, viability_warning, _ = get_catalog_model_viability(catalog_model)
-                    if is_viable:
+            catalog_model = next((m for m in catalog_models if m.get("model_id") == model_id), None)
+            if catalog_model:
+                is_viable, viability_warning, _ = get_catalog_model_viability(catalog_model)
+                if is_viable:
+                    if catalog_source in {"provider_api", "codex_proxy"}:
                         probe_valid = True
                         source = "catalog_probe"
                         warning = None
                     else:
-                        probe_valid = False
-                        source = "catalog_probe"
-                        warning = viability_warning
+                        # Static catalog fallback: valid metadata, but not live-verified.
+                        catalog_matched = True
+                        source = f"catalog_{catalog_source}"
+                        display_name = display_name or catalog_model.get("display_name")
+                        context_window = context_window or catalog_model.get("ctx")
+                        max_output_tokens = max_output_tokens or catalog_model.get("max_output_tokens")
+                        if cost_input is None:
+                            cost_input = float(catalog_model.get("input") or 0.0)
+                        if cost_output is None:
+                            cost_output = float(catalog_model.get("output") or 0.0)
+                        if not capabilities or capabilities == {"chat": True, "streaming": True}:
+                            capabilities = catalog_model.get("caps") or capabilities
+                        warning = warning or "Model was found in provider catalog fallback; live verification is currently unavailable."
                 else:
                     probe_valid = False
-                    warning = f"This model is not exposed by the live {provider} catalog."
+                    source = "catalog_probe"
+                    warning = viability_warning
+            elif catalog_source in {"provider_api", "codex_proxy"}:
+                probe_valid = False
+                warning = f"This model is not exposed by the live {provider} catalog."
         except Exception as e:
             logger.debug("Catalog validation fallback for %s/%s failed: %s", provider, model_id, e)
 
@@ -231,9 +300,29 @@ async def validate_model_config(model_id: str, provider: str) -> dict:
                     warning = f"No API key configured for {provider} — cannot live-verify"
 
             if probe_valid is not False and "api_key" in kwargs:
-                await litellm.acompletion(**kwargs)
-                probe_valid = True
-                source = "api_probe"
+                last_error: Optional[Exception] = None
+                # Retry transient failures (e.g. rate limits) before declaring
+                # live verification unavailable.
+                for attempt in range(3):
+                    try:
+                        await litellm.acompletion(**kwargs)
+                        probe_valid = True
+                        source = "api_probe"
+                        last_error = None
+                        break
+                    except litellm.exceptions.NotFoundError:
+                        raise
+                    except litellm.exceptions.AuthenticationError:
+                        raise
+                    except Exception as exc:
+                        last_error = exc
+                        if attempt < 2 and _is_transient_validation_error(exc):
+                            await asyncio.sleep(0.5 * (2 ** attempt))
+                            continue
+                        raise
+
+                if last_error is not None and probe_valid is None:
+                    warning = f"Could not verify live after retries — {type(last_error).__name__}"
         except litellm.exceptions.NotFoundError:
             probe_valid = False
         except litellm.exceptions.AuthenticationError:
@@ -242,6 +331,7 @@ async def validate_model_config(model_id: str, provider: str) -> dict:
         except Exception as e:
             probe_valid = None
             warning = f"Could not verify live — {type(e).__name__}"
+            transient_failure = _is_transient_validation_error(e)
 
     if provider == "ollama":
         valid = bool(probe_valid)
@@ -249,7 +339,7 @@ async def validate_model_config(model_id: str, provider: str) -> dict:
         valid = True
     elif probe_valid is False:
         valid = False
-    elif db_info is not None:
+    elif db_info is not None or catalog_matched:
         valid = True
         if not warning:
             warning = "Found in model database but not live-verified"
@@ -257,6 +347,20 @@ async def validate_model_config(model_id: str, provider: str) -> dict:
         valid = False
 
     live_verified = bool(probe_valid is True and source in {"api_probe", "catalog_probe"})
+
+    # If the model is otherwise valid but live probe failed due to a transient
+    # provider condition (e.g. rate limiting), grant temporary verified-for-use
+    # status so it can appear in validated lists and be used immediately.
+    if valid and transient_failure:
+        _set_transient_verified(provider, model_id)
+
+    if valid and not live_verified and _has_transient_verified(provider, model_id):
+        live_verified = True
+        source = "transient_cache"
+        warning = (
+            "Temporarily marked validated due to recent transient provider failures; "
+            "revalidate later for persistent live verification."
+        )
 
     return {
         "valid": valid,

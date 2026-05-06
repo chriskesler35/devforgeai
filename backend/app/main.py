@@ -1,6 +1,7 @@
 """FastAPI application entry point."""
 
 import os
+import asyncio
 import logging
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -102,7 +103,6 @@ from app.routes.feedback import router as feedback_router
 from app.routes.learning import router as learning_router
 from app.routes.custom_workflows import router as custom_workflows_router
 from app.routes.notifications import router as notifications_router
-from app.routes.websocket import router as websocket_router
 from app.routes.runtime_capabilities import router as runtime_capabilities_router
 from app.routes.chat_attachments import router as chat_attachments_router
 from app.routes.tools import router as tools_router
@@ -112,6 +112,32 @@ from app.routes.routing import router as routing_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
+    model_sync_task: asyncio.Task | None = None
+
+    async def _run_model_sync_once(trigger: str) -> None:
+        from app.database import AsyncSessionLocal as _ASL
+        from app.routes.model_sync import run_model_sync
+        import logging as _log
+
+        async with _ASL() as _session:
+            result = await run_model_sync(_session, deduplicate_existing=False)
+            _log.getLogger(__name__).info(
+                f"{trigger} model sync: {len(result['added'])} new, "
+                f"ollama={'yes' if result['ollama_available'] else 'no'}"
+            )
+
+    async def _periodic_model_sync(interval_minutes: int) -> None:
+        import logging as _log
+
+        while True:
+            await asyncio.sleep(max(1, interval_minutes) * 60)
+            try:
+                await _run_model_sync_once("Periodic")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _log.getLogger(__name__).warning(f"Periodic model sync failed (non-fatal): {exc}")
+
     # Startup — create tables then run column migrations
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -159,17 +185,18 @@ async def lifespan(app: FastAPI):
 
     # Auto-sync Ollama models + key-gated paid models on every startup
     try:
-        from app.routes.model_sync import run_model_sync
-        async with AsyncSessionLocal() as session:
-            result = await run_model_sync(session, deduplicate_existing=False)
-            import logging as _log
-            _log.getLogger(__name__).info(
-                f"Startup model sync: {len(result['added'])} new, "
-                f"ollama={'yes' if result['ollama_available'] else 'no'}"
-            )
+        await _run_model_sync_once("Startup")
     except Exception as _e:
         import logging as _log
         _log.getLogger(__name__).warning(f"Startup model sync failed (non-fatal): {_e}")
+
+    # Keep provider catalogs fresh without requiring backend restarts.
+    # Override with MODEL_SYNC_INTERVAL_MINUTES (default: 60).
+    try:
+        sync_interval_minutes = int((os.environ.get("MODEL_SYNC_INTERVAL_MINUTES") or "60").strip())
+    except ValueError:
+        sync_interval_minutes = 60
+    model_sync_task = asyncio.create_task(_periodic_model_sync(sync_interval_minutes))
     
     # Start Telegram polling (non-blocking background task)
     from app.routes.telegram_bot import start_polling as _start_telegram
@@ -178,6 +205,13 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
+    if model_sync_task:
+        model_sync_task.cancel()
+        try:
+            await model_sync_task
+        except asyncio.CancelledError:
+            pass
+
     from app.routes.telegram_bot import stop_polling as _stop_telegram
     await _stop_telegram()
     await close_redis()
@@ -247,7 +281,6 @@ app.include_router(preferences_router)
 app.include_router(app_settings_router)
 app.include_router(workflows_router)
 app.include_router(audio_router)
-app.include_router(websocket_router)
 app.include_router(feedback_router)
 app.include_router(learning_router)
 app.include_router(custom_workflows_router)

@@ -1,6 +1,6 @@
 'use client'
 
-import { API_BASE, API_KEY, AUTH_HEADERS, getApiBase } from '@/lib/config'
+import { API_BASE, API_KEY, AUTH_HEADERS } from '@/lib/config'
 import VoiceMode, { VoiceModeToggle } from '@/components/VoiceMode'
 
 import { useState, useEffect, useRef, useCallback, Suspense } from 'react'
@@ -42,7 +42,6 @@ interface Model {
   model_id: string
   display_name: string
   is_active: boolean
-  provider_id?: string
   provider_name?: string
 }
 
@@ -53,37 +52,9 @@ interface Persona {
   is_default?: boolean
 }
 
-interface RuntimeCapabilities {
-  image_providers?: {
-    'comfyui-local'?: boolean
-    'gemini-imagen'?: boolean
-  }
-}
-
-interface AttachmentDraft {
-  id: string
-  name: string
-  size: number
-  content: string
-  truncated: boolean
-  charCount: number
-  fileType: string
-}
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function fileTypeIcon(ext: string): string {
-  const icons: Record<string, string> = {
-    pdf: '\u{1F4C4}', docx: '\u{1F4DD}', doc: '\u{1F4DD}',
-    xlsx: '\u{1F4CA}', xls: '\u{1F4CA}', csv: '\u{1F4CA}',
-    pptx: '\u{1F4D1}', ppt: '\u{1F4D1}',
-    json: '\u{1F4CB}', yaml: '\u{1F4CB}', yml: '\u{1F4CB}',
-    py: '\u{1F40D}', js: '\u{1F7E8}', ts: '\u{1F7E6}', tsx: '\u{1F7E6}', jsx: '\u{1F7E8}',
-    md: '\u{1F4D6}', txt: '\u{1F4C3}',
-  }
-  return icons[ext] || '\u{1F4CE}'
-}
-
-function timeAgo(dateStr: string | null): string {  if (!dateStr) return ''
+function timeAgo(dateStr: string | null): string {
+  if (!dateStr) return ''
   const diff = Date.now() - new Date(dateStr).getTime()
   const m = Math.floor(diff / 60000)
   if (m < 1) return 'just now'
@@ -157,6 +128,7 @@ function renderMarkdown(text: string): string {
 function Sidebar({
   conversations, activeId, onSelect, onNew, onDelete, onPin, onKeepForever, onRename,
   personas, selectedPersonaId, onPersonaChange, models, selectedModelId, onModelChange,
+  modelSetupNeededByProvider,
   searchQuery, onSearchChange, collapsed, onToggle, width, onWidthChange
 }: {
   conversations: Conversation[]
@@ -173,6 +145,7 @@ function Sidebar({
   models: Model[]
   selectedModelId: string
   onModelChange: (id: string) => void
+  modelSetupNeededByProvider: Record<string, boolean>
   searchQuery: string
   onSearchChange: (q: string) => void
   collapsed: boolean
@@ -297,7 +270,10 @@ function Sidebar({
               ).map(([group, ms]) => (
                 <optgroup key={group} label={group}>
                   {(ms as Model[]).map(m => (
-                    <option key={m.id} value={m.id}>{m.display_name || m.model_id}</option>
+                    <option key={m.id} value={m.model_id}>
+                      {(m.display_name || m.model_id)}
+                      {modelSetupNeededByProvider[(m.provider_name || '').toLowerCase()] ? ' (setup required)' : ''}
+                    </option>
                   ))}
                 </optgroup>
               ))}
@@ -1576,10 +1552,6 @@ export default function ChatPage() {
   const [models, setModels] = useState<Model[]>([])
   const [selectedModelId, setSelectedModelId] = useState('')
   const [input, setInput] = useState('')
-  const [attachmentDrafts, setAttachmentDrafts] = useState<AttachmentDraft[]>([])
-  const [attachmentsUploading, setAttachmentsUploading] = useState(false)
-  const [chatDropActive, setChatDropActive] = useState(false)
-  const [attachmentSummaryOpen, setAttachmentSummaryOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(288)  // px; matches old w-72
@@ -1604,20 +1576,18 @@ export default function ChatPage() {
 
   // ── Identity wizard state ─────────────────────────────────────────────────
   const [wizardMode, setWizardMode] = useState<WizardMode | null>(null)
-
-  // ── Active method state ───────────────────────────────────────────────────
-  const [activeMethodId, setActiveMethodId] = useState<string>('standard')
-  const [activeMethodName, setActiveMethodName] = useState<string>('')
-  const [activeMethodIcon, setActiveMethodIcon] = useState<string>('')
-  const [dynamicMethodCmds, setDynamicMethodCmds] = useState<Array<{cmd: string; hint: string; desc: string}>>([])
+  const [providerAuthReady, setProviderAuthReady] = useState({
+    checked: false,
+    copilotReady: false,
+    codexReady: false,
+  })
 
   // ── Slash commands ────────────────────────────────────────────────────────
   const [slashOpen, setSlashOpen] = useState(false)
   const [slashFilter, setSlashFilter] = useState('')
   const [slashIndex, setSlashIndex] = useState(0)
-  const slashListRef = useRef<HTMLDivElement>(null)
 
-  const BASE_SLASH_COMMANDS = [
+  const SLASH_COMMANDS = [
     { cmd: '/help',        hint: '',            desc: 'Show all available commands' },
     { cmd: '/reset',       hint: '',            desc: 'Clear conversation and start fresh' },
     { cmd: '/onboard',     hint: '',            desc: 'Re-run full first-time setup wizard' },
@@ -1632,26 +1602,148 @@ export default function ChatPage() {
     { cmd: '/theme',       hint: '',            desc: 'Toggle dark/light mode' },
     { cmd: '/clear',       hint: '',            desc: 'Clear chat display' },
     { cmd: '/settings',    hint: '',            desc: 'Open settings page' },
-    // Built-in method shortcuts
-    { cmd: '/method',      hint: '<name>',      desc: 'Activate a development method by name' },
-    { cmd: '/standard',    hint: '',            desc: 'Switch to Standard assistant mode' },
-    { cmd: '/bmad',        hint: '',            desc: '🧠 Activate BMAD Method (full-stack agentic dev)' },
-    { cmd: '/gsd',         hint: '',            desc: '⚡ Activate GSD (get stuff done fast)' },
-    { cmd: '/superpowers', hint: '',            desc: '🦸 Activate SuperPowers (AI toolkit unleashed)' },
-    { cmd: '/specaudit',   hint: '',            desc: '✅ Activate SpecAudit (spec review & validation)' },
-    { cmd: '/mvp-loop',    hint: '',            desc: '🚧 Activate MVP Loop (rapid MVP builder)' },
-    { cmd: '/gtrack',      hint: '',            desc: '📊 Activate GTrack (goal & task tracking)' },
-    { cmd: '/discovery',   hint: '',            desc: '🔎 Activate Discovery (requirements shaping & handoff)' },
-    { cmd: '/retrospective', hint: '',          desc: '🪞 Activate Retrospective (learning capture & carry-forward)' },
+    { cmd: '/method',      hint: '<name>',      desc: 'Switch development method (bmad/gsd/superpowers/gtrack)' },
   ]
-
-  const SLASH_COMMANDS = [...BASE_SLASH_COMMANDS, ...dynamicMethodCmds]
 
   const filteredCommands = SLASH_COMMANDS.filter(c =>
     c.cmd.startsWith('/' + slashFilter) || c.desc.toLowerCase().includes(slashFilter.toLowerCase())
   )
 
   const { submitTask, addToast } = useToast()
+
+  const refreshProviderAuthReadiness = useCallback(async () => {
+    try {
+      const [runtimeRes, keysRes] = await Promise.all([
+        fetch(`${API_BASE}/v1/api-keys/runtime-status`, { headers: AUTH_HEADERS }).then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch(`${API_BASE}/v1/api-keys`, { headers: AUTH_HEADERS }).then(r => r.ok ? r.json() : null).catch(() => null),
+      ])
+
+      const openaiKeySet = Boolean((keysRes?.data || []).find((k: any) => k.provider === 'openai')?.is_set)
+      const codexReady = Boolean(runtimeRes?.openai_oauth?.usable) || openaiKeySet
+      const copilotReady = Boolean(runtimeRes?.github_copilot?.usable || runtimeRes?.github_copilot?.has_token)
+
+      const next = { checked: true, copilotReady, codexReady }
+      setProviderAuthReady(next)
+      return next
+    } catch {
+      const next = { checked: true, copilotReady: false, codexReady: false }
+      setProviderAuthReady(next)
+      return next
+    }
+  }, [])
+
+  const startGithubSignIn = useCallback(async () => {
+    const statusRes = await fetch(`${API_BASE}/v1/auth/github/status`, { headers: AUTH_HEADERS })
+    const statusData = statusRes.ok ? await statusRes.json() : null
+
+    if (!statusData?.configured) {
+      addToast({
+        type: 'info',
+        title: 'GitHub OAuth not configured',
+        message: 'Set GITHUB_TOKEN in backend/.env or configure GITHUB_CLIENT_ID/SECRET, then retry.',
+        autoClose: 7000,
+      })
+      return
+    }
+
+    const authRes = await fetch(
+      `${API_BASE}/v1/auth/github/authorize?origin=${encodeURIComponent(window.location.origin)}`,
+      { headers: AUTH_HEADERS }
+    )
+    if (!authRes.ok) throw new Error(`HTTP ${authRes.status}`)
+    const { authorize_url, state } = await authRes.json()
+    sessionStorage.setItem('github_oauth_state', state)
+    sessionStorage.setItem('github_oauth_redirect', '/chat')
+    window.location.href = authorize_url
+  }, [addToast])
+
+  const startCodexLogin = useCallback(async () => {
+    const launchRes = await fetch(`${API_BASE}/v1/api-keys/openai-oauth/launch-cli-login`, {
+      method: 'POST',
+      headers: AUTH_HEADERS,
+    })
+    const launchData = await launchRes.json().catch(() => ({}))
+    if (!launchRes.ok) {
+      const detail = String(launchData?.detail || `HTTP ${launchRes.status}`)
+      const cliMissing = launchRes.status === 404 || detail.toLowerCase().includes('not installed')
+
+      if (cliMissing) {
+        const openInstallGuide = window.confirm(
+          'Codex CLI is not installed. Click OK to open installation docs. Click Cancel to open Settings and use OPENAI_API_KEY instead.'
+        )
+        if (openInstallGuide) {
+          window.open('https://github.com/openai/codex', '_blank', 'noopener,noreferrer')
+        } else {
+          window.location.href = '/settings'
+        }
+        return
+      }
+      throw new Error(detail)
+    }
+
+    addToast({
+      type: 'info',
+      title: 'Codex login started',
+      message: launchData?.message || 'Finish the browser/device auth flow, then retry your message.',
+      autoClose: 7000,
+    })
+  }, [addToast])
+
+  const promptProviderSetup = useCallback(async (providerName: string) => {
+    const provider = (providerName || '').toLowerCase()
+    if (provider === 'github-copilot') {
+      const shouldLogin = window.confirm('GitHub Copilot needs setup. Sign in with GitHub now?')
+      if (!shouldLogin) return
+      try {
+        await startGithubSignIn()
+      } catch (oauthError: any) {
+        addToast({
+          type: 'error',
+          title: 'Could not start GitHub sign-in',
+          message: oauthError?.message || 'Please configure credentials in Settings/API keys.',
+          autoClose: 7000,
+        })
+      }
+      return
+    }
+
+    if (provider === 'openai-codex') {
+      const shouldLogin = window.confirm('OpenAI Codex needs setup. Launch Codex CLI device login now?')
+      if (!shouldLogin) return
+      try {
+        await startCodexLogin()
+      } catch (launchError: any) {
+        addToast({
+          type: 'error',
+          title: 'Could not start Codex login',
+          message: launchError?.message || 'Set OPENAI_API_KEY or run codex login manually.',
+          autoClose: 7000,
+        })
+      }
+    }
+  }, [addToast, startCodexLogin, startGithubSignIn])
+
+  const handleModelChange = useCallback(async (modelId: string) => {
+    setSelectedModelId(modelId)
+    if (!modelId) return
+
+    const selected = models.find(m => m.model_id === modelId)
+    const provider = (selected?.provider_name || '').toLowerCase()
+    if (!provider) return
+
+    let readiness = providerAuthReady
+    if (!readiness.checked) {
+      readiness = await refreshProviderAuthReadiness()
+    }
+
+    const needsSetup =
+      (provider === 'github-copilot' && !readiness.copilotReady) ||
+      (provider === 'openai-codex' && !readiness.codexReady)
+
+    if (needsSetup) {
+      await promptProviderSetup(provider)
+    }
+  }, [models, promptProviderSetup, providerAuthReady, refreshProviderAuthReadiness])
 
   const executeSlashCommand = useCallback(async (raw: string) => {
     const [cmd, ...args] = raw.trim().split(/\s+/)
@@ -1709,15 +1801,12 @@ export default function ChatPage() {
         break
       case '/image':
         if (arg) {
-          const provider = sanitizeImageProvider(lastImageProviderRef.current)
           // Pre-fill prompt and auto-submit
           setImagePrompt(arg)
-          setImageProvider(provider)
           setShowImageGen(true)
           // Small delay to let state settle, then fire generation
-          setTimeout(() => generateImage(arg, provider), 50)
+          setTimeout(() => generateImage(arg), 50)
         } else {
-          setImageProvider(sanitizeImageProvider(lastImageProviderRef.current))
           setShowImageGen(true)
         }
         break
@@ -1735,14 +1824,10 @@ export default function ChatPage() {
       }
       case '/model': {
         if (arg) {
-          const match = models.find(m =>
-            (m.display_name || '').toLowerCase().includes(arg.toLowerCase()) ||
-            m.model_id.toLowerCase().includes(arg.toLowerCase()) ||
-            m.id === arg
-          )
+          const match = personas.find(p => p.name.toLowerCase().includes(arg.toLowerCase()) || p.id === arg)
           if (match) {
-            setSelectedModelId(match.id)
-            addToast({ type: 'success', title: 'Model switched', message: match.display_name || match.model_id, autoClose: 2000 })
+            setSelectedPersonaId(match.id)
+            addToast({ type: 'success', title: 'Model switched', message: match.name, autoClose: 2000 })
           } else {
             addToast({ type: 'error', title: 'Not found', message: `No match for "${arg}"`, autoClose: 3000 })
           }
@@ -1750,65 +1835,8 @@ export default function ChatPage() {
         break
       }
       case '/method': {
-        const methodId = arg.trim().toLowerCase()
-        if (!methodId) {
-          addToast({ type: 'info', title: 'Usage', message: '/method <name>  e.g. /method bmad or /bmad', autoClose: 3500 })
-          break
-        }
-        try {
-          const res = await fetch(`${API_BASE}/v1/methods/activate`, {
-            method: 'POST',
-            headers: { ...AUTH_HEADERS, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ method_id: methodId }),
-          })
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({ detail: 'Unknown error' }))
-            addToast({ type: 'error', title: 'Method not found', message: err.detail || `"${methodId}" not found`, autoClose: 3500 })
-            break
-          }
-          const data = await res.json()
-          const name = data.name || methodId
-          const icon = data.icon || '⚡'
-          setActiveMethodId(methodId)
-          setActiveMethodName(name)
-          setActiveMethodIcon(icon)
-          addToast({ type: 'success', title: `${icon} ${name} activated`, message: 'Method applied to next messages.', autoClose: 2500 })
-        } catch {
-          addToast({ type: 'error', title: 'Activation failed', message: 'Could not activate method', autoClose: 3000 })
-        }
-        break
-      }
-      case '/standard':
-      case '/bmad':
-      case '/gsd':
-      case '/superpowers':
-      case '/specaudit':
-      case '/mvp-loop':
-      case '/discovery':
-      case '/gtrack':
-      case '/retrospective': {
-        const methodId = cmd.slice(1)
-        try {
-          const res = await fetch(`${API_BASE}/v1/methods/activate`, {
-            method: 'POST',
-            headers: { ...AUTH_HEADERS, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ method_id: methodId }),
-          })
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({ detail: 'Unknown error' }))
-            addToast({ type: 'error', title: 'Activation failed', message: err.detail || `Could not activate ${methodId}`, autoClose: 3500 })
-            break
-          }
-          const data = await res.json()
-          const name = data.name || methodId
-          const icon = data.icon || '⚡'
-          setActiveMethodId(methodId)
-          setActiveMethodName(name)
-          setActiveMethodIcon(icon)
-          addToast({ type: 'success', title: `${icon} ${name} activated`, message: 'Method applied to next messages.', autoClose: 2500 })
-        } catch {
-          addToast({ type: 'error', title: 'Activation failed', message: `Could not activate ${methodId}`, autoClose: 3000 })
-        }
+        // Redirect to methods page (full implementation in progress)
+        window.location.href = '/methods'
         break
       }
       case '/export': {
@@ -1823,63 +1851,19 @@ export default function ChatPage() {
         URL.revokeObjectURL(url)
         break
       }
-      default: {
-        // Handle dynamic method and skill commands registered at runtime
-        const dynamicCmd = dynamicMethodCmds.find(d => d.cmd === cmd)
-        if (dynamicCmd) {
-          // skill-* commands: strip the "skill-" prefix to get skill_id; others use the cmd minus /
-          const isSkill = cmd.startsWith('/skill-')
-          const methodId = isSkill ? cmd.slice('/skill-'.length) : cmd.slice(1)
-          try {
-            const endpoint = isSkill
-              ? `${API_BASE}/v1/methods/activate`
-              : `${API_BASE}/v1/methods/activate`
-            const res = await fetch(endpoint, {
-              method: 'POST',
-              headers: { ...AUTH_HEADERS, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ method_id: methodId }),
-            })
-            if (!res.ok) {
-              addToast({ type: 'error', title: 'Activation failed', message: `Could not activate ${methodId}`, autoClose: 3500 })
-              break
-            }
-            const data = await res.json()
-            const name = data.name || methodId
-            const icon = data.icon || '🔧'
-            setActiveMethodId(methodId)
-            setActiveMethodName(name)
-            setActiveMethodIcon(icon)
-            addToast({ type: 'success', title: `${icon} ${name} activated`, message: 'Applied to next messages.', autoClose: 2500 })
-          } catch {
-            addToast({ type: 'error', title: 'Activation failed', message: `Could not activate ${methodId}`, autoClose: 3000 })
-          }
-        }
-        break
-      }
     }
-  }, [activeConvId, messages, personas, models, dynamicMethodCmds, addToast, setUserExists])
+  }, [activeConvId, messages, personas, addToast, setUserExists])
 
   const [showImageGen, setShowImageGen] = useState(false)
   const [imagePrompt, setImagePrompt] = useState('')
   const [generatingImage, setGeneratingImage] = useState(false)
   const [imageProvider, setImageProvider] = useState<'gemini-imagen' | 'comfyui-local'>('gemini-imagen')
-  // Track the provider used for the most recent generated image so adjustments default to the same one
-  const lastImageProviderRef = useRef<'gemini-imagen' | 'comfyui-local'>('gemini-imagen')
 
   // Workflow list for ComfyUI — user picks one saved workflow, nothing else.
   // To change checkpoint/LoRA/size/negative prompt, edit and save the workflow in ComfyUI.
   const [workflows, setWorkflows] = useState<Array<{id: string, name: string, description: string, category: string}>>([])
   const [selectedWorkflowId, setSelectedWorkflowId] = useState('sdxl-standard')
   const [comfyStatus, setComfyStatus] = useState<'online' | 'offline' | 'checking'>('checking')
-  const [runtimeCapabilities, setRuntimeCapabilities] = useState<RuntimeCapabilities | null>(null)
-  const comfyLocalAvailable = runtimeCapabilities?.image_providers?.['comfyui-local'] ?? (comfyStatus === 'online')
-
-  const sanitizeImageProvider = useCallback((provider: 'gemini-imagen' | 'comfyui-local') => {
-    if (provider === 'comfyui-local' && !comfyLocalAvailable) {
-      return 'gemini-imagen' as const
-    }
-    return provider
-  }, [comfyLocalAvailable])
 
   // Track pending image tasks: taskId → assistantMessageId
   const pendingImageTasksRef = useRef<Map<string, string | { msgId: string; startedAt: number }>>(new Map())
@@ -1888,108 +1872,29 @@ export default function ChatPage() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const imagePromptRef = useRef<HTMLTextAreaElement>(null)
   const searchTimer = useRef<ReturnType<typeof setTimeout>>()
-
-  const uploadAttachmentFiles = useCallback(async (files: FileList | File[]) => {
-    const fileList = Array.from(files || [])
-    if (fileList.length === 0) return
-
-    // Proportional token budget: 200k total chars, min 10k per file
-    const perFileBudget = Math.max(10_000, Math.min(60_000, Math.floor(200_000 / fileList.length)))
-
-    setAttachmentsUploading(true)
-    try {
-      for (const file of fileList) {
-        const formData = new FormData()
-        formData.append('file', file)
-        formData.append('max_chars', String(perFileBudget))
-
-        const res = await fetch(`${API_BASE}/v1/chat/attachments/extract`, {
-          method: 'POST',
-          headers: { Authorization: AUTH_HEADERS['Authorization'] },
-          body: formData,
-        })
-
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ detail: 'Upload failed' }))
-          addToast({
-            type: 'error',
-            title: `Failed to read ${file.name}`,
-            message: err?.detail || `Upload failed (${res.status})`,
-            autoClose: 5000,
-          })
-          continue
-        }
-
-        const data = await res.json()
-        setAttachmentDrafts(prev => [
-          ...prev,
-          {
-            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            name: data.file_name || file.name,
-            size: file.size,
-            content: data.extracted_text || '',
-            truncated: Boolean(data.truncated),
-            charCount: data.extracted_chars || 0,
-            fileType: data.extension || 'txt',
-          },
-        ])
-      }
-    } finally {
-      setAttachmentsUploading(false)
-    }
-  }, [addToast])
-
-  const onChatDrop = useCallback(async (e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setChatDropActive(false)
-    if (showImageGen || loading) return
-    if (e.dataTransfer?.files?.length) {
-      await uploadAttachmentFiles(e.dataTransfer.files)
-    }
-  }, [showImageGen, loading, uploadAttachmentFiles])
-
-  const removeAttachmentDraft = useCallback((id: string) => {
-    setAttachmentDrafts(prev => prev.filter(a => a.id !== id))
-  }, [])
 
   // ── Fetch available workflows when image gen opens ──────────────────────
   useEffect(() => {
     if (!showImageGen) return
     const load = async () => {
       try {
-        const [wfRes, stRes, capsRes] = await Promise.all([
+        const [wfRes, stRes] = await Promise.all([
           fetch(`${API_BASE}/v1/workflows`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({ data: [] })),
           fetch(`${API_BASE}/v1/comfyui/status`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({ status: 'offline' })),
-          fetch(`${API_BASE}/v1/runtime/capabilities`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({} as RuntimeCapabilities)),
         ])
         setWorkflows(wfRes.data || [])
         setComfyStatus(stRes.status === 'online' ? 'online' : 'offline')
-        setRuntimeCapabilities(capsRes || null)
         // Default to the first workflow if current selection isn't in the list
         if (wfRes.data?.length > 0 && !wfRes.data.find((w: any) => w.id === selectedWorkflowId)) {
           setSelectedWorkflowId(wfRes.data[0].id)
-        }
-        if ((capsRes?.image_providers?.['comfyui-local'] ?? false) === false) {
-          setImageProvider('gemini-imagen')
-          lastImageProviderRef.current = 'gemini-imagen'
         }
       } catch { /* silent */ }
     }
     load()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showImageGen])
-
-  useEffect(() => {
-    if (comfyLocalAvailable) return
-    if (imageProvider === 'comfyui-local') {
-      setImageProvider('gemini-imagen')
-      lastImageProviderRef.current = 'gemini-imagen'
-    }
-  }, [comfyLocalAvailable, imageProvider])
 
   // ── Poll for image task completion → inject inline ────────────────────────
   // Helper to handle a completed image task
@@ -2073,58 +1978,22 @@ export default function ChatPage() {
     return () => clearInterval(interval)
   }, [handleImageTaskComplete])
 
-  const fetchValidatedChatModels = useCallback(async (): Promise<Model[]> => {
-    const all: Model[] = []
-    const pageSize = 200
-    let offset = 0
-    let hasMore = true
-
-    while (hasMore) {
-      const res = await fetch(
-        `${API_BASE}/v1/models?active_only=true&usable_only=true&validated_only=true&chat_only=true&limit=${pageSize}&offset=${offset}`,
-        { headers: AUTH_HEADERS }
-      )
-      if (!res.ok) break
-
-      const payload = await res.json().catch(() => ({ data: [], has_more: false }))
-      const page = (payload?.data || []) as Model[]
-      all.push(...page.filter((m: Model) => m.is_active))
-
-      hasMore = Boolean(payload?.has_more) && page.length > 0
-      offset += pageSize
-
-      // Hard stop to avoid accidental infinite loops if backend pagination metadata breaks.
-      if (offset > 5000) break
-    }
-
-    // Deduplicate by provider+model_id to avoid duplicate options while
-    // preserving same model IDs that exist under different providers.
-    const seen = new Set<string>()
-    return all.filter((m) => {
-      const key = `${m.provider_name || 'unknown'}::${m.model_id || ''}`
-      if (!m.model_id || seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
-  }, [])
-
   // ── Init ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     const init = async () => {
       try {
-        const [models, personasRes, convsRes, identityRes, methodsRes, activeMethodRes, skillsRes] = await Promise.all([
-          fetchValidatedChatModels(),
+        const [modelsRes, personasRes, convsRes, identityRes] = await Promise.all([
+          fetch(`${API_BASE}/v1/models?active_only=true&usable_only=true&validated_only=true&chat_only=true`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({ data: [] })),
           fetch(`${API_BASE}/v1/personas`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({ data: [] })),
           fetch(`${API_BASE}/v1/conversations?limit=100&pinned_first=true`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({ data: [] })),
           fetch(`${API_BASE}/v1/identity/status`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({})),
-          fetch(`${API_BASE}/v1/methods/`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({ data: [] })),
-          fetch(`${API_BASE}/v1/methods/active`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => null),
-          fetch(`${API_BASE}/v1/skills`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({ data: [] })),
+          refreshProviderAuthReadiness(),
         ])
 
         const ps: Persona[] = personasRes.data || []
         setPersonas(ps)
-        setModels(models)
+        const ms: Model[] = (modelsRes.data || []).filter((m: Model) => m.is_active)
+        setModels(ms)
 
         const defaultP = ps.find(p => p.is_default) || ps[0]
         if (defaultP) setSelectedPersonaId(defaultP.id)
@@ -2134,32 +2003,6 @@ export default function ChatPage() {
 
         // Set AI name from soul.md if available
         if (identityRes.ai_name) setAiName(identityRes.ai_name)
-
-        // Load active method badge
-        if (activeMethodRes?.id) {
-          setActiveMethodId(activeMethodRes.id)
-          setActiveMethodName(activeMethodRes.name || activeMethodRes.id)
-          setActiveMethodIcon(activeMethodRes.icon || '⚡')
-        }
-
-        // Build dynamic slash commands for custom methods + enabled skills
-        const extraCmds: Array<{cmd: string; hint: string; desc: string}> = []
-        const builtInMethodIds = new Set(['standard','bmad','gsd','superpowers','specaudit','mvp-loop','gtrack','discovery','retrospective'])
-        const allMethods: any[] = methodsRes.data || []
-        for (const m of allMethods) {
-          if (!builtInMethodIds.has(m.id) && m.id) {
-            const safeName = m.id.replace(/[^a-z0-9-]/g, '-').toLowerCase()
-            extraCmds.push({ cmd: `/${safeName}`, hint: '', desc: `${m.icon || '🔧'} Activate ${m.name}` })
-          }
-        }
-        const allSkills: any[] = skillsRes.data || skillsRes.skills || []
-        for (const s of allSkills) {
-          if (s.enabled && s.skill_id) {
-            const safeName = s.skill_id.replace(/[^a-z0-9-]/g, '-').toLowerCase()
-            extraCmds.push({ cmd: `/skill-${safeName}`, hint: '', desc: `🔧 Activate skill: ${s.name || s.skill_id}` })
-          }
-        }
-        if (extraCmds.length > 0) setDynamicMethodCmds(extraCmds)
 
         // Show first-run wizard if setup is incomplete
         if (identityRes.first_run) {
@@ -2338,144 +2181,33 @@ export default function ChatPage() {
   // Detect image generation intent from natural language
   const detectImageIntent = (text: string): string | null => {
     const lower = text.toLowerCase()
-
-    // Slash commands take priority
-    if (lower.startsWith('/imagine ') || lower.startsWith('/img ')) {
-      return text.split(' ').slice(1).join(' ')
-    }
-
-    // Never auto-route long or structured planning prompts.
-    // These often mention image generation as part of architecture discussion.
-    const planningSignals = [
-      'proof out',
-      'project concept',
-      'workable project',
-      'walk through',
-      'how it tests my stack',
-      'memory/context',
-      'latency/reliability',
-      'why it\'s good',
-      'state-heavy',
-      'rpg',
-      'visual novel',
-      'build a project',
-    ]
-    if (text.length > 280 || text.includes('\n') || planningSignals.some(signal => lower.includes(signal))) {
-      return null
-    }
-
-    // Reject modification/adjustment requests — these refer to an EXISTING image and should
-    // go to the LLM naturally rather than triggering a fresh image generation job.
-    const imageEditPatterns = [
-      'adjust the image',
-      'adjust this image',
-      'adjust that image',
-      'edit the image',
-      'edit this image',
-      'edit that image',
-      'modify the image',
-      'modify this image',
-      'change the image',
-      'change this image',
-      'update the image',
-      'update this image',
-      'improve the image',
-      'improve this image',
-      'enhance the image',
-      'enhance this image',
-      'tweak the image',
-      'tweak this image',
-      'fix the image',
-      'fix this image',
-      'refine the image',
-      'refine this image',
-      'regenerate the image',
-      'remake the image',
-      'redo the image',
-      'this image',
-      'that image',
-      'the previous image',
-      'last image',
-      'the generated image',
-    ]
-    if (imageEditPatterns.some(pattern => lower.includes(pattern))) {
-      return null
-    }
-
-    // Reject common non-image context patterns that use similar keywords
-    const nonImagePatterns = [
-      'create a concept',
-      'create concept',
-      'design concept',
-      'design document',
-      'create design',
-      'design architecture',
-      'create architecture',
-      'architecture design',
-      'design pattern',
-      'create pattern',
-      'build a concept',
-      'build concept',
-      'design system',
-      'create system',
-      'design spec',
-      'create spec',
-    ]
-    if (nonImagePatterns.some(pattern => lower.includes(pattern))) {
-      return null
-    }
-
-    // Route only when the prompt is a clear image command.
-    const explicitImageCommand = /^(please\s+)?(generate|create|draw|paint|render|make|show)\s+(me\s+)?(an?\s+)?(image|picture|photo|illustration|artwork|drawing|painting|portrait|wallpaper|logo|icon|banner)\b/i
-    if (explicitImageCommand.test(text.trim())) {
-      return text
-    }
-
-    const strongImagePhrases = [
-      'generate an image of',
-      'generate a picture of',
-      'create an image of',
-      'create a picture of',
-      'draw an image of',
-      'draw a picture of',
-      'show me an image of',
-      'show me a picture of',
-    ]
-    if (strongImagePhrases.some(v => lower.includes(v))) return text
-
+    const imageVerbs = ['generate', 'create', 'make', 'draw', 'paint', 'render', 'design', 'produce', 'show me']
+    const imageNouns = ['image', 'picture', 'photo', 'illustration', 'artwork', 'drawing', 'painting', 'portrait', 'wallpaper', 'logo', 'icon', 'banner']
+    const hasVerb = imageVerbs.some(v => lower.includes(v))
+    const hasNoun = imageNouns.some(n => lower.includes(n))
+    if (hasVerb && hasNoun) return text
+    // Also catch "/imagine" style
+    if (lower.startsWith('/imagine ') || lower.startsWith('/img ')) return text.split(' ').slice(1).join(' ')
     return null
   }
 
   const sendMessage = async (directText?: string) => {
-    const rawText = directText?.trim() || input.trim()
-    const hasAttachments = attachmentDrafts.length > 0
-    if ((!rawText && !hasAttachments) || loading || attachmentsUploading) return
+    const text = directText?.trim() || input.trim()
+    if (!text || loading) return
     if (!directText) setInput('')
 
     // Intercept slash commands before sending to AI
-    if (rawText.startsWith('/')) {
-      await executeSlashCommand(rawText)
+    if (text.startsWith('/')) {
+      await executeSlashCommand(text)
       return
     }
 
     // Route to image generation if intent detected
-    const imagePromptDetected = detectImageIntent(rawText)
+    const imagePromptDetected = detectImageIntent(text)
     if (imagePromptDetected) {
       generateImage(imagePromptDetected)
       return
     }
-
-    const attachmentBlock = hasAttachments
-      ? attachmentDrafts.map(a => {
-          const kb = Math.max(1, Math.round(a.size / 1024))
-          const truncation = a.truncated ? '\n[Note: extracted text was truncated for size limits.]' : ''
-          return `### Attachment: ${a.name} (${kb} KB)\n${a.content}${truncation}`
-        }).join('\n\n')
-      : ''
-
-    const text = hasAttachments
-      ? `${rawText || 'Please analyze the attached files.'}\n\n---\nAttached file content:\n\n${attachmentBlock}`
-      : rawText
 
     const userMsg: Message = {
       id: `tmp-${Date.now()}`,
@@ -2498,7 +2230,31 @@ export default function ChatPage() {
     setMessages(prev => [...prev, assistantMsg])
 
     const historyMsgs = [...messages, userMsg].map(m => ({ role: m.role, content: m.content }))
-    let sentSuccessfully = false
+
+    const promptProviderLogin = async (errorMessage: string) => {
+      const selectedProvider = models.find(m => m.model_id === selectedModelId)?.provider_name?.toLowerCase() || ''
+      const msg = (errorMessage || '').toLowerCase()
+
+      const needsCopilotLogin =
+        selectedProvider === 'github-copilot' ||
+        msg.includes('github copilot is not available') ||
+        (msg.includes('copilot') && msg.includes('sign in'))
+
+      if (needsCopilotLogin) {
+        await promptProviderSetup('github-copilot')
+        return
+      }
+
+      const needsCodexLogin =
+        selectedProvider === 'openai-codex' ||
+        msg.includes('openai codex') ||
+        msg.includes('codex oauth') ||
+        (msg.includes('codex') && msg.includes('credentials'))
+
+      if (needsCodexLogin) {
+        await promptProviderSetup('openai-codex')
+      }
+    }
 
     try {
       const body: any = {
@@ -2509,7 +2265,7 @@ export default function ChatPage() {
       }
       if (activeConvId) body.conversation_id = activeConvId
 
-      const res = await fetch(`${getApiBase()}/v1/chat/completions`, {
+      const res = await fetch(`${API_BASE}/v1/chat/completions`, {
         method: 'POST',
         headers: AUTH_HEADERS,
         body: JSON.stringify(body),
@@ -2541,7 +2297,6 @@ export default function ChatPage() {
           : m
       ))
       setActiveModelName(modelName)
-      sentSuccessfully = true
 
       // Update conversation state
       if (convId && convId !== activeConvId) {
@@ -2594,12 +2349,9 @@ export default function ChatPage() {
           ? { ...m, content: `Error: ${e.message}`, streaming: false }
           : m
       ))
+      await promptProviderLogin(e?.message || '')
     } finally {
       setLoading(false)
-      if (sentSuccessfully) {
-        setAttachmentDrafts([])
-        setAttachmentSummaryOpen(false)
-      }
       textareaRef.current?.focus()
     }
   }
@@ -2616,28 +2368,13 @@ export default function ChatPage() {
     ? [...messages].reverse().find(m => m.role === 'assistant' && !m.streaming && m.content && !m.content.startsWith('Error:'))?.content ?? null
     : null
 
-  const generateImage = async (
-    overridePrompt?: string,
-    overrideProvider?: 'gemini-imagen' | 'comfyui-local'
-  ) => {
+  const generateImage = async (overridePrompt?: string) => {
     const prompt = (overridePrompt ?? imagePrompt).trim()
     if (!prompt || generatingImage) return
     setGeneratingImage(true)
     setShowImageGen(false)
 
-    const requestedProvider = overrideProvider ?? imageProvider
-    const provider = sanitizeImageProvider(requestedProvider)
-    if (requestedProvider === 'comfyui-local' && provider === 'gemini-imagen') {
-      addToast({
-        type: 'info',
-        title: 'ComfyUI unavailable',
-        message: 'Switched to Gemini (Cloud) for this image.',
-        autoClose: 2800,
-      })
-      setImageProvider('gemini-imagen')
-    }
-    // Record the provider so the panel defaults to the same one next time
-    lastImageProviderRef.current = provider
+    const provider = imageProvider
     const wfId = provider === 'comfyui-local' ? selectedWorkflowId : undefined
     const wfName = workflows.find(w => w.id === wfId)?.name
     // Gemini-only size. For ComfyUI, size comes from the workflow.
@@ -2871,70 +2608,9 @@ export default function ChatPage() {
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (slashOpen && filteredCommands.length > 0) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault()
-        setSlashIndex(i => Math.min(i + 1, filteredCommands.length - 1))
-        return
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault()
-        setSlashIndex(i => Math.max(i - 1, 0))
-        return
-      }
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault()
-        const chosen = filteredCommands[slashIndex]
-        if (chosen) {
-          setSlashOpen(false)
-          setSlashFilter('')
-          if (!chosen.hint) {
-            setInput('')
-            sendMessage(chosen.cmd)
-          } else {
-            setInput(`${chosen.cmd} `)
-            textareaRef.current?.focus()
-          }
-        }
-        return
-      }
-      if (e.key === 'Escape') {
-        setSlashOpen(false)
-        setSlashFilter('')
-        return
-      }
-      if (e.key === 'Tab') {
-        e.preventDefault()
-        const chosen = filteredCommands[slashIndex]
-        if (chosen) {
-          const full = chosen.hint ? `${chosen.cmd} ` : chosen.cmd
-          setInput(full)
-          setSlashFilter(chosen.cmd.slice(1))
-          if (!chosen.hint) {
-            setSlashOpen(false)
-          }
-        }
-        return
-      }
-    }
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault()
       sendMessage()
-    }
-  }
-
-  // ── Input change handler with slash detection ─────────────────────────────
-  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const val = e.target.value
-    setInput(val)
-    if (val.startsWith('/')) {
-      const filter = val.slice(1)
-      setSlashFilter(filter)
-      setSlashOpen(true)
-      setSlashIndex(0)
-    } else {
-      setSlashOpen(false)
-      setSlashFilter('')
     }
   }
 
@@ -2974,7 +2650,11 @@ export default function ChatPage() {
         onPersonaChange={setSelectedPersonaId}
         models={models}
         selectedModelId={selectedModelId}
-        onModelChange={setSelectedModelId}
+        onModelChange={handleModelChange}
+        modelSetupNeededByProvider={{
+          'github-copilot': providerAuthReady.checked && !providerAuthReady.copilotReady,
+          'openai-codex': providerAuthReady.checked && !providerAuthReady.codexReady,
+        }}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         collapsed={sidebarCollapsed}
@@ -3032,29 +2712,6 @@ export default function ChatPage() {
               <span className="text-xs bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 px-2 py-0.5 rounded-full">
                 {activePersona.name}
               </span>
-            )}
-            {activeMethodId && activeMethodId !== 'standard' && activeMethodName && (
-              <button
-                title={`Active method: ${activeMethodName} — click to deactivate`}
-                onClick={async () => {
-                  try {
-                    await fetch(`${API_BASE}/v1/methods/activate`, {
-                      method: 'POST',
-                      headers: { ...AUTH_HEADERS, 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ method_id: 'standard' }),
-                    })
-                    setActiveMethodId('standard')
-                    setActiveMethodName('')
-                    setActiveMethodIcon('')
-                    addToast({ type: 'info', title: 'Standard mode', message: 'Returned to standard assistant.', autoClose: 2000 })
-                  } catch { /* silent */ }
-                }}
-                className="text-xs bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-2 py-0.5 rounded-full hover:bg-indigo-200 dark:hover:bg-indigo-800/40 transition-colors flex items-center gap-1"
-              >
-                <span>{activeMethodIcon}</span>
-                <span>{activeMethodName}</span>
-                <span className="text-indigo-400">×</span>
-              </button>
             )}
             {activeModelName && (
               <span className="text-xs bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 px-2 py-0.5 rounded-full hidden sm:block">
@@ -3196,136 +2853,7 @@ export default function ChatPage() {
 
         {/* Input bar */}
         <div className="flex-shrink-0 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700 px-4 pt-3 pb-4 rounded-b-xl">
-          <div
-            className={`max-w-4xl mx-auto rounded-xl transition-colors ${chatDropActive ? 'bg-orange-50/80 dark:bg-orange-900/20' : ''}`}
-            onDragEnter={e => {
-              if (showImageGen) return
-              e.preventDefault()
-              e.stopPropagation()
-              setChatDropActive(true)
-            }}
-            onDragOver={e => {
-              if (showImageGen) return
-              e.preventDefault()
-              e.stopPropagation()
-              setChatDropActive(true)
-            }}
-            onDragLeave={e => {
-              if (showImageGen) return
-              e.preventDefault()
-              e.stopPropagation()
-              const nextTarget = e.relatedTarget as Node | null
-              if (!nextTarget || !e.currentTarget.contains(nextTarget)) {
-                setChatDropActive(false)
-              }
-            }}
-            onDrop={onChatDrop}
-          >
-            {!showImageGen && chatDropActive && (
-              <div className="mb-2 rounded-lg border-2 border-dashed border-orange-300 dark:border-orange-700 px-3 py-2 text-xs text-orange-700 dark:text-orange-300">
-                Drop files to attach them for analysis.
-              </div>
-            )}
-
-            {/* Multi-file summary panel — shown when ≥2 attachments */}
-            {!showImageGen && attachmentDrafts.length >= 2 && (() => {
-              const totalChars = attachmentDrafts.reduce((s, a) => s + a.charCount, 0)
-              const totalTokens = Math.round(totalChars / 4)
-              const isLarge = totalTokens > 80_000
-              return (
-                <div className="mb-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 text-xs overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => setAttachmentSummaryOpen(p => !p)}
-                    className="w-full flex items-center justify-between px-3 py-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700/50"
-                  >
-                    <span className="font-medium flex items-center gap-2">
-                      <span>📎 {attachmentDrafts.length} files</span>
-                      <span className="text-gray-400">&middot;</span>
-                      <span>{(totalChars / 1000).toFixed(0)}K chars</span>
-                      <span className="text-gray-400">&middot;</span>
-                      <span className={isLarge ? 'text-amber-600 dark:text-amber-400' : ''}>
-                        ~{totalTokens >= 1000 ? `${(totalTokens / 1000).toFixed(0)}K` : totalTokens} tokens
-                        {isLarge && ' ⚠'}
-                      </span>
-                    </span>
-                    <span className="text-gray-400 ml-2">{attachmentSummaryOpen ? '▲' : '▼'}</span>
-                  </button>
-                  {attachmentSummaryOpen && (
-                    <div className="border-t border-gray-200 dark:border-gray-700 px-3 py-2 space-y-1.5">
-                      {attachmentDrafts.map(att => {
-                        const tokK = att.charCount / 4
-                        return (
-                          <div key={att.id} className="flex items-center justify-between gap-2 min-w-0">
-                            <span className="flex items-center gap-1.5 min-w-0">
-                              <span>{fileTypeIcon(att.fileType)}</span>
-                              <span className="truncate text-gray-700 dark:text-gray-200 max-w-[200px]">{att.name}</span>
-                              <span className="flex-shrink-0 px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 uppercase text-[10px] tracking-wide">{att.fileType}</span>
-                            </span>
-                            <span className="flex-shrink-0 flex items-center gap-1.5 text-gray-400">
-                              <span>{tokK >= 1000 ? `${(tokK / 1000).toFixed(1)}K` : Math.round(tokK)} tok</span>
-                              {att.truncated && <span className="text-amber-600 dark:text-amber-400">truncated</span>}
-                            </span>
-                          </div>
-                        )
-                      })}
-                      {isLarge && (
-                        <p className="mt-1.5 text-amber-600 dark:text-amber-400 leading-snug">
-                          ⚠ Large context — use a model with a big context window or remove some files.
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )
-            })()}
-
-            {/* Attachment chips */}
-            {!showImageGen && attachmentDrafts.length > 0 && (
-              <div className="mb-2 flex flex-wrap gap-2">
-                {attachmentDrafts.map(att => (
-                  <span key={att.id} className="inline-flex items-center gap-1 rounded-full border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 px-2.5 py-1 text-xs text-gray-700 dark:text-gray-200">
-                    <span>{fileTypeIcon(att.fileType)}</span>
-                    <span className="max-w-[200px] truncate">{att.name}</span>
-                    {att.truncated && <span className="text-amber-600 dark:text-amber-400 ml-0.5">truncated</span>}
-                    <button
-                      type="button"
-                      onClick={() => removeAttachmentDraft(att.id)}
-                      className="text-gray-400 hover:text-red-500 ml-0.5"
-                      title="Remove attachment"
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {/* Analyze quick-action — shown when files attached but no text typed */}
-            {!showImageGen && attachmentDrafts.length > 0 && !input.trim() && (
-              <button
-                type="button"
-                onClick={() => sendMessage('Please analyze the attached file(s) and provide a comprehensive summary, key insights, and any notable findings.')}
-                disabled={loading || attachmentsUploading}
-                className="mb-2 w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl border-2 border-dashed border-orange-300 dark:border-orange-700 text-orange-600 dark:text-orange-400 text-sm font-medium hover:bg-orange-50 dark:hover:bg-orange-900/20 disabled:opacity-50 transition-colors"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-                Analyze attached {attachmentDrafts.length === 1 ? 'file' : `${attachmentDrafts.length} files`}
-              </button>
-            )}
-
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              onChange={async e => {
-                if (e.target.files?.length) await uploadAttachmentFiles(e.target.files)
-                e.currentTarget.value = ''
-              }}
-            />
+          <div className="max-w-4xl mx-auto">
             <div className="flex gap-2 items-end relative">
               {/* Toggle: chat <-> image mode */}
               <button
@@ -3338,8 +2866,6 @@ export default function ChatPage() {
                       setImagePrompt(input)
                       setInput('')
                     }
-                    // Keep follow-up image tweaks on the same provider as the last generated image.
-                    setImageProvider(sanitizeImageProvider(lastImageProviderRef.current))
                   } else {
                     // image → chat: carry image draft into chat input
                     if (imagePrompt.trim() && !input.trim()) {
@@ -3372,20 +2898,14 @@ export default function ChatPage() {
                   <div className="flex gap-2 items-center flex-wrap">
                     <select
                       value={imageProvider}
-                      onChange={e => setImageProvider(sanitizeImageProvider(e.target.value as any))}
+                      onChange={e => setImageProvider(e.target.value as any)}
                       className="text-xs rounded-lg border border-purple-200 dark:border-purple-700 dark:bg-gray-800 dark:text-gray-200 py-1.5 pl-2 pr-6 focus:ring-purple-400 focus:border-purple-400"
                     >
-                      <option value="comfyui-local" disabled={!comfyLocalAvailable}>ComfyUI (Local){!comfyLocalAvailable ? ' - Unavailable' : ''}</option>
+                      <option value="comfyui-local">ComfyUI (Local)</option>
                       <option value="gemini-imagen">Gemini (Cloud)</option>
                     </select>
 
-                    {!comfyLocalAvailable && (
-                      <span className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded px-2 py-1">
-                        Local ComfyUI is offline. Cloud mode is active.
-                      </span>
-                    )}
-
-                    {imageProvider === 'comfyui-local' && comfyLocalAvailable && (
+                    {imageProvider === 'comfyui-local' && (
                       <>
                         {/* Workflow picker — only selection needed; everything
                             else (checkpoint, LoRA, size, negative prompt) is
@@ -3414,7 +2934,7 @@ export default function ChatPage() {
                   </div>
 
                   {/* Patience notice for local ComfyUI generation */}
-                  {imageProvider === 'comfyui-local' && comfyLocalAvailable && (
+                  {imageProvider === 'comfyui-local' && (
                     <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-100 dark:border-purple-800/40 text-xs text-purple-700 dark:text-purple-300">
                       <span className="flex-shrink-0 mt-0.5">⏳</span>
                       <span>
@@ -3455,84 +2975,24 @@ export default function ChatPage() {
               ) : (
                 /* Chat mode input */
                 <>
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={loading || attachmentsUploading}
-                    title="Attach files for analysis"
-                    className="flex-shrink-0 p-2.5 rounded-xl border border-gray-200 dark:border-gray-700 text-gray-400 hover:text-orange-500 hover:border-orange-300 disabled:opacity-50 transition-colors"
-                  >
-                    {attachmentsUploading ? (
-                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                      </svg>
-                    ) : (
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828L18 9.828a4 4 0 10-5.656-5.656L5.757 10.757a6 6 0 108.486 8.486L20.5 13" />
-                      </svg>
-                    )}
-                  </button>
-                  <div className="flex-1 relative">
-                    {/* Slash command dropdown */}
-                    {slashOpen && filteredCommands.length > 0 && (
-                      <div
-                        ref={slashListRef}
-                        className="absolute bottom-full left-0 mb-1 w-full max-w-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl overflow-hidden z-50"
-                        style={{ maxHeight: '260px', overflowY: 'auto' }}
-                      >
-                        {filteredCommands.map((c, i) => (
-                          <button
-                            key={c.cmd}
-                            type="button"
-                            onMouseDown={e => {
-                              e.preventDefault()
-                              setSlashOpen(false)
-                              setSlashFilter('')
-                              if (!c.hint) {
-                                setInput('')
-                                sendMessage(c.cmd)
-                              } else {
-                                setInput(`${c.cmd} `)
-                                textareaRef.current?.focus()
-                              }
-                            }}
-                            className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition-colors ${
-                              i === slashIndex
-                                ? 'bg-orange-50 dark:bg-orange-900/20 text-orange-700 dark:text-orange-300'
-                                : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50'
-                            }`}
-                          >
-                            <span className="font-mono text-orange-600 dark:text-orange-400 font-semibold flex-shrink-0">{c.cmd}</span>
-                            {c.hint && <span className="text-gray-400 flex-shrink-0 text-xs">{c.hint}</span>}
-                            <span className="text-gray-500 dark:text-gray-400 text-xs truncate ml-auto">{c.desc}</span>
-                          </button>
-                        ))}
-                        <div className="px-3 py-1.5 border-t border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/80">
-                          <span className="text-[10px] text-gray-400">↑↓ navigate · Enter/Tab select · Esc close</span>
-                        </div>
-                      </div>
-                    )}
-                    <textarea
-                      ref={textareaRef}
-                      value={input}
-                      onChange={handleInputChange}
-                      onKeyDown={handleKeyDown}
-                      onBlur={() => setTimeout(() => setSlashOpen(false), 150)}
-                      placeholder="Message... (/ for commands, Ctrl+Enter to send)"
-                      disabled={loading}
-                      rows={1}
-                      className="w-full resize-none rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 dark:text-white px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent disabled:opacity-50 leading-relaxed whitespace-pre-wrap break-words overflow-y-auto"
-                      style={{ minHeight: '42px' }}
-                    />
-                  </div>
+                  <textarea
+                    ref={textareaRef}
+                    value={input}
+                    onChange={e => setInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Message... (Ctrl+Enter to send)"
+                    disabled={loading}
+                    rows={1}
+                    className="flex-1 resize-none rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 dark:text-white px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent disabled:opacity-50 leading-relaxed whitespace-pre-wrap break-words overflow-y-auto"
+                    style={{ minHeight: '42px' }}
+                  />
                   <MicrophoneButton
                     onTranscript={(text) => setInput(prev => prev ? prev + ' ' + text : text)}
                     disabled={loading}
                   />
                   <button
                     onClick={() => sendMessage()}
-                    disabled={loading || attachmentsUploading || (!input.trim() && attachmentDrafts.length === 0)}
+                    disabled={loading || !input.trim()}
                     className="flex-shrink-0 px-4 py-2.5 bg-orange-500 hover:bg-orange-600 disabled:bg-gray-200 dark:disabled:bg-gray-700 text-white disabled:text-gray-400 rounded-xl font-medium text-sm transition-colors"
                   >
                     {loading ? (
@@ -3552,11 +3012,7 @@ export default function ChatPage() {
             </div>
             <div className="flex justify-between items-center mt-2 px-1">
               <span className="text-xs text-gray-400">
-                {showImageGen
-                  ? 'Image mode'
-                  : attachmentsUploading
-                    ? 'Processing attachments...'
-                    : (input.length > 0 ? `${input.length} chars` : `${attachmentDrafts.length} attachment(s)`)}
+                {showImageGen ? 'Image mode' : (input.length > 0 ? `${input.length} chars` : '')}
               </span>
               <span className="text-xs text-gray-400">
                 {showImageGen ? 'Enter to generate' : 'Ctrl+Enter to send'}

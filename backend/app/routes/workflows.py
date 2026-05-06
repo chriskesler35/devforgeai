@@ -2,7 +2,9 @@
 
 import json
 import logging
+import re
 from pathlib import Path
+from urllib.parse import urlparse, quote
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.middleware.auth import verify_api_key
@@ -18,6 +20,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1", tags=["workflows"], dependencies=[Depends(verify_api_key)])
 
 _WORKFLOW_DIR = Path(__file__).parent.parent.parent.parent / "data" / "workflows"
+_REMOTE_WORKFLOW_DIR = _WORKFLOW_DIR / "_remote"
 
 
 _CONTROL_WIDGETS = {"fixed", "increment", "decrement", "randomize"}
@@ -239,7 +242,8 @@ class CheckpointsResponse(BaseModel):
 def find_workflow_path(workflow_id: str, comfyui_dir: str = "") -> Optional[Path]:
     """Find a workflow .json file by ID across all known directories.
 
-    Search order: built-in (data/workflows/) → ComfyUI/workflows → ComfyUI/user/default/workflows.
+    Search order: built-in (data/workflows/) → ComfyUI/workflows → ComfyUI/user/default/workflows
+    → cached remote workflows (data/workflows/_remote/<host>/).
     Returns the first match, or None.
     """
     candidates = [_WORKFLOW_DIR / f"{workflow_id}.json"]
@@ -250,6 +254,14 @@ def find_workflow_path(workflow_id: str, comfyui_dir: str = "") -> Optional[Path
     for p in candidates:
         if p.exists():
             return p
+    # Fall back to any cached remote host directory.
+    if _REMOTE_WORKFLOW_DIR.exists():
+        for host_dir in _REMOTE_WORKFLOW_DIR.iterdir():
+            if not host_dir.is_dir():
+                continue
+            candidate = host_dir / f"{workflow_id}.json"
+            if candidate.exists():
+                return candidate
     return None
 
 
@@ -289,16 +301,128 @@ def _scan_workflow_dir(directory: Path, seen_ids: set, workflows: list):
             logger.warning(f"Skipping workflow {path.name}: {e}")
 
 
+def _remote_host_slug(comfyui_url: str) -> str:
+    """Stable filesystem-safe slug for a remote host (e.g. host_100_106_217_99_8188)."""
+    parsed = urlparse(comfyui_url)
+    host = parsed.hostname or "remote"
+    port = parsed.port or 8188
+    raw = f"{host}_{port}"
+    return re.sub(r"[^a-zA-Z0-9_.-]", "_", raw)
+
+
+def _remote_host_dir(comfyui_url: str) -> Path:
+    return _REMOTE_WORKFLOW_DIR / _remote_host_slug(comfyui_url)
+
+
+async def _sync_remote_workflows(comfyui_url: str, timeout: float = 5.0) -> Optional[Path]:
+    """Pull workflow JSON files from a remote ComfyUI /userdata API and cache them locally.
+
+    Returns the local cache directory for this host, or None if the host is unreachable.
+    """
+    base = comfyui_url.rstrip("/")
+    host_dir = _remote_host_dir(comfyui_url)
+    host_dir.mkdir(parents=True, exist_ok=True)
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        try:
+            listing_resp = await client.get(
+                f"{base}/userdata",
+                params={"dir": "workflows", "recurse": "true"},
+            )
+        except Exception as e:
+            logger.debug(f"Remote workflow listing unreachable ({comfyui_url}): {e}")
+            return host_dir if any(host_dir.glob("*.json")) else None
+
+        if listing_resp.status_code != 200:
+            logger.debug(
+                f"Remote workflow listing returned {listing_resp.status_code} from {comfyui_url}"
+            )
+            return host_dir if any(host_dir.glob("*.json")) else None
+
+        try:
+            entries = listing_resp.json()
+        except ValueError:
+            logger.debug(f"Remote workflow listing not JSON from {comfyui_url}")
+            return host_dir if any(host_dir.glob("*.json")) else None
+
+        # ComfyUI may return either a flat list of names or objects with a path/name field.
+        names: list[str] = []
+        if isinstance(entries, list):
+            for entry in entries:
+                if isinstance(entry, str):
+                    names.append(entry)
+                elif isinstance(entry, dict):
+                    candidate = entry.get("path") or entry.get("name")
+                    if isinstance(candidate, str):
+                        names.append(candidate)
+        names = [n for n in names if n.lower().endswith(".json")]
+
+        synced = 0
+        for name in names:
+            safe_stem = re.sub(r"[^a-zA-Z0-9_.-]", "_", Path(name).stem)
+            if not safe_stem:
+                continue
+            try:
+                file_resp = await client.get(
+                    f"{base}/userdata/{quote('workflows/' + name, safe='')}"
+                )
+            except Exception as e:
+                logger.debug(f"Failed to fetch remote workflow {name}: {e}")
+                continue
+            if file_resp.status_code != 200:
+                continue
+            try:
+                payload = file_resp.json()
+            except ValueError:
+                continue
+            normalized = _normalize_remote_workflow(safe_stem, payload)
+            target = host_dir / f"{safe_stem}.json"
+            target.write_text(json.dumps(normalized, indent=2), encoding="utf-8")
+            synced += 1
+        if synced:
+            logger.info(f"Synced {synced} workflows from remote ComfyUI {comfyui_url}")
+    return host_dir
+
+
+def _normalize_remote_workflow(workflow_id: str, payload: dict) -> dict:
+    """Wrap a raw ComfyUI workflow JSON in the summary metadata shape used internally."""
+    if not isinstance(payload, dict):
+        payload = {}
+    # If the file is already in our internal shape (has 'workflow' key), keep it.
+    if "workflow" in payload and isinstance(payload.get("workflow"), dict):
+        return {
+            "name": payload.get("name", workflow_id),
+            "description": payload.get("description", "Imported from remote ComfyUI"),
+            "category": payload.get("category", "txt2img"),
+            "default_checkpoint": payload.get("default_checkpoint", ""),
+            "default_size": payload.get("default_size", "1024x1024"),
+            "sizes": payload.get("sizes", ["1024x1024"]),
+            "compatible_checkpoints": payload.get("compatible_checkpoints", []),
+            "workflow": payload["workflow"],
+        }
+    # Otherwise treat the whole payload as a raw ComfyUI workflow graph.
+    return {
+        "name": workflow_id,
+        "description": "Imported from remote ComfyUI",
+        "category": "txt2img",
+        "default_checkpoint": "",
+        "default_size": "1024x1024",
+        "sizes": ["1024x1024"],
+        "compatible_checkpoints": [],
+        "workflow": payload,
+    }
+
+
 @router.get("/workflows", response_model=WorkflowListResponse)
 async def list_workflows(db: AsyncSession = Depends(get_db)):
-    """List available workflow templates from built-in and ComfyUI directories."""
+    """List available workflow templates from built-in, local ComfyUI, and remote ComfyUI sources."""
     workflows = []
     seen_ids: set = set()
 
     # 1. Built-in workflows (data/workflows/)
     _scan_workflow_dir(_WORKFLOW_DIR, seen_ids, workflows)
 
-    # 2. ComfyUI installation workflow directories
+    # 2. Local ComfyUI installation workflow directories
     comfyui_dir = await get_setting("comfyui_dir", db)
     if comfyui_dir:
         comfyui_path = Path(comfyui_dir)
@@ -306,6 +430,17 @@ async def list_workflows(db: AsyncSession = Depends(get_db)):
         _scan_workflow_dir(comfyui_path / "workflows", seen_ids, workflows)
         # User default workflows folder
         _scan_workflow_dir(comfyui_path / "user" / "default" / "workflows", seen_ids, workflows)
+
+    # 3. Remote ComfyUI workflows (cached locally for offline access)
+    configured = await get_setting("comfyui_url", db)
+    for url in _parse_comfyui_urls(configured):
+        try:
+            host_dir = await _sync_remote_workflows(url)
+        except Exception as e:
+            logger.debug(f"Remote workflow sync failed for {url}: {e}")
+            host_dir = _remote_host_dir(url)  # surface any previously-cached files
+        if host_dir and host_dir.exists():
+            _scan_workflow_dir(host_dir, seen_ids, workflows)
 
     return WorkflowListResponse(data=workflows)
 

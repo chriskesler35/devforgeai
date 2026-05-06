@@ -70,6 +70,24 @@ MIGRATIONS = [
     "ALTER TABLE models ADD COLUMN validation_warning VARCHAR(500)",
     "ALTER TABLE models ADD COLUMN validation_error VARCHAR(500)",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_models_provider_model_id ON models(provider_id, model_id)",
+    """CREATE TABLE IF NOT EXISTS installed_skills (
+        id VARCHAR(36) PRIMARY KEY,
+        skill_id VARCHAR(120) NOT NULL UNIQUE,
+        name VARCHAR(200) NOT NULL,
+        version VARCHAR(80) NOT NULL,
+        status VARCHAR(40) NOT NULL DEFAULT 'installed',
+        trust_level VARCHAR(40),
+        install_url TEXT,
+        manifest_url TEXT,
+        install_path TEXT NOT NULL,
+        manifest JSON NOT NULL,
+        health_status VARCHAR(40) NOT NULL DEFAULT 'ok',
+        health_message TEXT,
+        error TEXT,
+        installed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
+    "CREATE INDEX IF NOT EXISTS ix_installed_skills_skill_id ON installed_skills(skill_id)",
 ]
 
 

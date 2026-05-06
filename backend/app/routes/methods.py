@@ -653,6 +653,49 @@ async def clear_stack():
     return {"ok": True, "active_stack": []}
 
 
+# ─── Per-method settings (chat injection toggle, etc.) ────────────────────────
+
+@router.get("/{method_id}/settings")
+async def get_method_settings(method_id: str):
+    """Return runtime settings for a method (e.g. chat_injection toggle).
+
+    Settings are merged on top of the method's built-in defaults so callers
+    always get the effective config that runtime code uses.
+    """
+    state = _load_state()
+    overrides = (state.get("method_settings") or {}).get(method_id, {}) or {}
+    builtin = (BUILT_IN_METHODS.get(method_id) or {}).get("settings", {}) or {}
+    effective = {**builtin, "chat_injection": True, **overrides}
+    return {
+        "method_id": method_id,
+        "builtin_defaults": builtin,
+        "overrides": overrides,
+        "effective": effective,
+    }
+
+
+@router.post("/{method_id}/settings", dependencies=[require_role("member")])
+async def update_method_settings(method_id: str, body: MethodSettingsUpdate):
+    """Update runtime settings for a method. Merges into method_settings[method_id].
+
+    Recognised keys:
+      - chat_injection (bool, default True): whether to inject the method's
+        system prompt into chat / agent runs. Lets users disable a method
+        without un-activating it.
+    Other keys are stored verbatim and surfaced via GET for UI use.
+    """
+    state = _load_state()
+    all_settings = state.get("method_settings") or {}
+    current = all_settings.get(method_id, {}) or {}
+    current.update(body.settings or {})
+    all_settings[method_id] = current
+    state["method_settings"] = all_settings
+    _save_state(state)
+    builtin = (BUILT_IN_METHODS.get(method_id) or {}).get("settings", {}) or {}
+    effective = {**builtin, "chat_injection": True, **current}
+    return {"ok": True, "method_id": method_id, "overrides": current, "effective": effective}
+
+
 # ─── Import / Export ──────────────────────────────────────────────────────────
 
 @router.get("/custom/{method_id}/export")

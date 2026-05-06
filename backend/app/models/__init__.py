@@ -24,6 +24,7 @@ from app.models.learning_suggestion import LearningSuggestion
 from app.models.notification import Notification
 from app.models.custom_workflow import CustomWorkflow
 from app.models.oauth_credential import OAuthCredential
+from app.models.installed_skill import InstalledSkill
 
 __all__ = [
     "Base", "BaseMixin", "Provider", "Model", "Persona",
@@ -36,4 +37,5 @@ __all__ = [
     "LearningSuggestion",
     "Notification",
     "OAuthCredential",
+    "InstalledSkill",
 ]

@@ -159,6 +159,10 @@ class CallbackBody(BaseModel):
     state: Optional[str] = None
 
 
+class VscodeTokenBody(BaseModel):
+    access_token: str
+
+
 @router.post("/callback")
 async def github_callback(body: CallbackBody):
     """Exchange an OAuth code for a GitHub access token + find/create user + JWT."""
@@ -281,6 +285,221 @@ async def github_callback(body: CallbackBody):
         "expires_in_seconds": settings.jwt_expiry_hours * 3600,
         "user": safe_user,
     }
+
+
+@router.get("/cli-status")
+async def github_cli_status():
+    """Report whether `gh` CLI is installed and authenticated.
+
+    The GitHub CLI's OAuth app IS whitelisted for Copilot, so its token works
+    where a custom OAuth app's token returns 404 from the Copilot endpoint.
+    """
+    import shutil
+    import subprocess
+    gh_path = shutil.which("gh")
+    if not gh_path:
+        return {"installed": False, "authenticated": False, "message": "gh CLI not found on PATH"}
+    try:
+        result = subprocess.run(
+            [gh_path, "auth", "status"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return {
+            "installed": True,
+            "authenticated": result.returncode == 0,
+            "message": (result.stderr or result.stdout or "").strip()[:500],
+            "gh_path": gh_path,
+        }
+    except Exception as exc:
+        return {"installed": True, "authenticated": False, "message": f"{type(exc).__name__}: {exc}"}
+
+
+@router.post("/cli-import")
+async def github_cli_import():
+    """Read a GitHub OAuth token from `gh auth token` and store it for Copilot.
+
+    The `gh` CLI uses an OAuth app GitHub has whitelisted for Copilot, so its
+    token can successfully exchange at /copilot_internal/v2/token. This is the
+    recommended path when a custom OAuth app token gets 404 from Copilot.
+    """
+    import shutil
+    import subprocess
+    gh_path = shutil.which("gh")
+    if not gh_path:
+        raise HTTPException(
+            status_code=503,
+            detail="GitHub CLI not installed. Install from https://cli.github.com/",
+        )
+    try:
+        result = subprocess.run(
+            [gh_path, "auth", "token"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to invoke gh: {exc}")
+    if result.returncode != 0:
+        msg = (result.stderr or result.stdout or "").strip()[:300]
+        raise HTTPException(
+            status_code=400,
+            detail=f"gh auth token failed: {msg or 'not logged in'}. Run `gh auth login` first.",
+        )
+    access_token = result.stdout.strip()
+    if not access_token:
+        raise HTTPException(status_code=400, detail="gh returned an empty token")
+
+    # Reuse the same logic as /vscode-token to store it on the user record.
+    return await github_vscode_token(VscodeTokenBody(access_token=access_token))
+
+
+# ─── Copilot device flow ─────────────────────────────────────────────────────
+# Uses the same OAuth client_id as the official GitHub Copilot extensions
+# (Iv1.b507a08c87ecfe98). This client_id is whitelisted by GitHub for the
+# /copilot_internal/v2/token endpoint, so tokens issued via this device flow
+# can actually call Copilot. Custom OAuth Apps and the gh CLI's client_id
+# both return 404 on that endpoint regardless of subscription.
+COPILOT_OAUTH_CLIENT_ID = "Iv1.b507a08c87ecfe98"
+GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code"
+GITHUB_DEVICE_TOKEN_URL = "https://github.com/login/oauth/access_token"
+
+
+class DevicePollBody(BaseModel):
+    device_code: str
+
+
+@router.post("/copilot-device-start")
+async def copilot_device_start():
+    """Begin the GitHub device flow against the official Copilot OAuth client.
+
+    Returns the user_code (shown to the user) and verification_uri (where they
+    enter it), plus the device_code used to poll for completion.
+    """
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.post(
+            GITHUB_DEVICE_CODE_URL,
+            headers={"Accept": "application/json"},
+            data={"client_id": COPILOT_OAUTH_CLIENT_ID, "scope": "read:user"},
+        )
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"GitHub device-code request failed: {r.status_code} {r.text[:200]}")
+    payload = r.json()
+    return {
+        "device_code": payload.get("device_code"),
+        "user_code": payload.get("user_code"),
+        "verification_uri": payload.get("verification_uri"),
+        "expires_in": payload.get("expires_in"),
+        "interval": payload.get("interval", 5),
+    }
+
+
+@router.post("/copilot-device-poll")
+async def copilot_device_poll(body: DevicePollBody):
+    """Poll GitHub for the user-completed device flow. On success, persist the
+    token (which IS Copilot-whitelisted) onto the current user record."""
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.post(
+            GITHUB_DEVICE_TOKEN_URL,
+            headers={"Accept": "application/json"},
+            data={
+                "client_id": COPILOT_OAUTH_CLIENT_ID,
+                "device_code": body.device_code,
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            },
+        )
+    data = r.json() if r.status_code == 200 else {}
+    err = data.get("error")
+    if err in {"authorization_pending", "slow_down"}:
+        return {"status": "pending", "error": err, "interval": data.get("interval")}
+    if err:
+        # expired_token, access_denied, unsupported_grant_type, etc.
+        return {"status": "error", "error": err, "error_description": data.get("error_description")}
+    access_token = (data.get("access_token") or "").strip()
+    if not access_token:
+        raise HTTPException(status_code=502, detail=f"Unexpected device-flow response: {r.text[:200]}")
+    # Reuse the existing storage path; this is a real GitHub user OAuth token.
+    result = await github_vscode_token(VscodeTokenBody(access_token=access_token))
+    return {"status": "ok", "user": result.get("user")}
+
+
+
+async def github_vscode_token(body: VscodeTokenBody):
+    """Store a GitHub token supplied by VS Code's built-in GitHub auth provider.
+
+    VS Code uses a GitHub authentication session that is closer to what Copilot
+    itself expects than a generic web OAuth app token. This endpoint lets the
+    extension bridge that token into the backend for Copilot model calls.
+    """
+    access_token = (body.access_token or "").strip()
+    if not access_token:
+        raise HTTPException(status_code=400, detail="Missing access_token")
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        profile_resp = await client.get(
+            GITHUB_USER_URL,
+            headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+        )
+        if profile_resp.status_code != 200:
+            raise HTTPException(status_code=400, detail="Failed to fetch GitHub profile from VS Code token")
+        profile = profile_resp.json()
+
+        email = profile.get("email")
+        if not email:
+            emails_resp = await client.get(
+                GITHUB_EMAILS_URL,
+                headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+            )
+            if emails_resp.status_code == 200:
+                emails = emails_resp.json()
+                primary = next((e for e in emails if e.get("primary") and e.get("verified")), None)
+                if primary:
+                    email = primary.get("email")
+
+    github_login = profile.get("login") or ""
+    display_name = profile.get("name") or github_login
+    avatar_url = profile.get("avatar_url") or ""
+    github_id = profile.get("id")
+
+    users = _load_users()
+    user = None
+    for u in users.values():
+        if u.get("github_id") == github_id or u.get("username") == github_login:
+            user = u
+            break
+
+    now_iso = _now_iso()
+    if user:
+        user["github_id"] = github_id
+        user["github_login"] = github_login
+        user["github_token"] = access_token
+        user["avatar_url"] = avatar_url
+        user["last_active"] = now_iso
+        user["auth_provider"] = "github-vscode"
+        if email and not user.get("email"):
+            user["email"] = email
+    else:
+        role = "owner" if not users else "member"
+        user_id = str(uuid.uuid4())
+        user = {
+            "id": user_id,
+            "username": github_login or f"github-{github_id}",
+            "display_name": display_name,
+            "email": email,
+            "role": role,
+            "is_active": True,
+            "password_hash": "",
+            "github_id": github_id,
+            "github_login": github_login,
+            "github_token": access_token,
+            "avatar_url": avatar_url,
+            "auth_provider": "github-vscode",
+            "created_at": now_iso,
+            "last_active": now_iso,
+        }
+        users[user_id] = user
+
+    _save_users(users)
+
+    safe_user = {k: v for k, v in user.items() if k not in ("password_hash", "github_token")}
+    return {"ok": True, "user": safe_user}
 
 
 def _now_iso() -> str:

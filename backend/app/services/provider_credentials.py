@@ -15,7 +15,6 @@ from typing import Optional
 from app.config import settings
 from app.services.codex_oauth import (
     has_codex_cli_auth,
-    is_codex_proxy_reachable,
     provider_supports_codex_oauth,
 )
 from app.services.github_copilot import get_copilot_auth_token
@@ -102,7 +101,9 @@ def has_provider_api_key(provider_name: str) -> bool:
     if provider_supports_codex_oauth(normalized):
         if get_provider_api_key(normalized):
             return True
-        return has_codex_cli_auth() and is_codex_proxy_reachable()
+        # Auth tokens in ~/.codex/auth.json are usable directly against OpenAI
+        # even when the local proxy is offline — so treat them as valid.
+        return has_codex_cli_auth()
     if normalized == "github-copilot":
         return bool(get_copilot_auth_token())
     return bool(get_provider_api_key(provider_name))

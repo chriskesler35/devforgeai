@@ -243,11 +243,12 @@ async def create_model(
         raise HTTPException(status_code=404, detail="Provider not found")
 
     validation = await validate_model_config(model.model_id, provider.name)
-    if not validation.get("live_verified"):
+    live_verified = bool(validation.get("live_verified"))
+    if not live_verified and not validation.get("valid"):
         raise HTTPException(
             status_code=400,
             detail=validation.get("warning")
-            or f"Model '{model.model_id}' has not been successfully live-validated for provider '{provider.name}'.",
+            or f"Model '{model.model_id}' is not valid for provider '{provider.name}'.",
         )
     
     new_model = Model(
@@ -260,10 +261,16 @@ async def create_model(
         context_window=model.context_window,
         capabilities=model.capabilities or {},
         is_active=model.is_active if model.is_active is not None else True,
-        validation_status="validated",
-        validated_at=datetime.utcnow(),
+        validation_status="validated" if live_verified else "unverified",
+        validated_at=datetime.utcnow() if live_verified else None,
         validation_source=validation.get("source"),
-        validation_warning=validation.get("warning"),
+        validation_warning=(
+            validation.get("warning")
+            or (
+                "Model metadata is valid but live provider verification did not succeed yet."
+                if not live_verified else None
+            )
+        ),
         validation_error=None,
     )
     db.add(new_model)

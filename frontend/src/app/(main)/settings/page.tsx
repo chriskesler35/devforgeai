@@ -115,6 +115,7 @@ function ApiKeysTab() {
   const [clearing, setClearing] = useState(false)
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeCredentialStatus | null>(null)
   const [providerInventory, setProviderInventory] = useState<Record<string, ProviderInventory>>({})
+  const [copilotDevice, setCopilotDevice] = useState<{ user_code: string; verification_uri: string; device_code: string; status: 'pending' | 'ok' | 'error'; error?: string } | null>(null)
 
   const fetchRuntimeStatus = useCallback(async () => {
     try {
@@ -304,6 +305,97 @@ function ApiKeysTab() {
     }
   }
 
+  const importGitHubFromCli = async () => {
+    try {
+      const statusRes = await fetch(`${API_BASE}/v1/auth/github/cli-status`, { headers: AUTH_HEADERS })
+      const statusData = statusRes.ok ? await statusRes.json() : null
+      if (!statusData?.installed) {
+        addToast({
+          type: 'error',
+          title: 'GitHub CLI not installed',
+          message: 'Install gh from https://cli.github.com/, then run "gh auth login".',
+          autoClose: 6000,
+        })
+        return
+      }
+      if (!statusData?.authenticated) {
+        addToast({
+          type: 'error',
+          title: 'GitHub CLI not authenticated',
+          message: 'Open a terminal and run: gh auth login --web -s "read:user user:email"',
+          autoClose: 8000,
+        })
+        return
+      }
+      const res = await fetch(`${API_BASE}/v1/auth/github/cli-import`, {
+        method: 'POST',
+        headers: AUTH_HEADERS,
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail || 'CLI import failed')
+      addToast({
+        type: 'success',
+        title: 'GitHub CLI token imported',
+        message: 'Verifying Copilot access…',
+        autoClose: 3000,
+      })
+      await fetchRuntimeStatus()
+    } catch (e: any) {
+      addToast({ type: 'error', title: 'CLI import failed', message: e.message || 'Could not import gh token', autoClose: 5000 })
+    }
+  }
+
+  const startCopilotDeviceFlow = async () => {
+    try {
+      const startRes = await fetch(`${API_BASE}/v1/auth/github/copilot-device-start`, {
+        method: 'POST', headers: AUTH_HEADERS,
+      })
+      const startData = await startRes.json()
+      if (!startRes.ok) throw new Error(startData.detail || 'Could not start device flow')
+      setCopilotDevice({
+        user_code: startData.user_code,
+        verification_uri: startData.verification_uri,
+        device_code: startData.device_code,
+        status: 'pending',
+      })
+      try { window.open(startData.verification_uri, '_blank', 'noopener') } catch {}
+      try { await navigator.clipboard.writeText(startData.user_code) } catch {}
+
+      const interval = Math.max(2, Number(startData.interval) || 5) * 1000
+      const expiresAt = Date.now() + (Number(startData.expires_in) || 900) * 1000
+      // Poll until the user authorizes (or expiry)
+      const poll = async (): Promise<void> => {
+        if (Date.now() > expiresAt) {
+          setCopilotDevice((s) => s ? { ...s, status: 'error', error: 'expired' } : s)
+          return
+        }
+        const pollRes = await fetch(`${API_BASE}/v1/auth/github/copilot-device-poll`, {
+          method: 'POST',
+          headers: { ...AUTH_HEADERS, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device_code: startData.device_code }),
+        })
+        const pollData = await pollRes.json()
+        if (pollData.status === 'ok') {
+          setCopilotDevice((s) => s ? { ...s, status: 'ok' } : s)
+          addToast({ type: 'success', title: 'Copilot connected', message: 'Live model list will populate on next sync.', autoClose: 4000 })
+          await fetchRuntimeStatus()
+          // Trigger a model sync so the new GPT/Claude entries show up immediately
+          fetch(`${API_BASE}/v1/models/sync/provider/github-copilot`, { method: 'POST', headers: AUTH_HEADERS }).catch(() => {})
+          return
+        }
+        if (pollData.status === 'error') {
+          setCopilotDevice((s) => s ? { ...s, status: 'error', error: pollData.error || 'failed' } : s)
+          addToast({ type: 'error', title: 'Copilot auth failed', message: pollData.error_description || pollData.error || 'unknown', autoClose: 5000 })
+          return
+        }
+        setTimeout(poll, interval)
+      }
+      setTimeout(poll, interval)
+    } catch (e: any) {
+      addToast({ type: 'error', title: 'Device flow failed', message: e.message || 'Could not start device flow', autoClose: 5000 })
+    }
+  }
+
   const launchCodexCliLogin = async () => {
     try {
       const res = await fetch(`${API_BASE}/v1/api-keys/openai-oauth/launch-cli-login`, {
@@ -461,9 +553,21 @@ function ApiKeysTab() {
             )}
             <div className="mt-3 flex flex-wrap gap-2">
               <button
+                onClick={startCopilotDeviceFlow}
+                title="Sign in using the official GitHub Copilot OAuth client. This is the only flow whose token can call the Copilot API."
+                className="text-xs px-2 py-1 rounded border border-emerald-400 hover:bg-emerald-100 text-emerald-800 font-semibold">
+                Sign in to Copilot (device flow)
+              </button>
+              <button
                 onClick={connectGitHubOAuth}
                 className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-100 text-slate-800 font-medium">
                 {runtimeStatus.github_copilot.has_token ? 'Reconnect GitHub OAuth' : 'Connect with GitHub OAuth'}
+              </button>
+              <button
+                onClick={importGitHubFromCli}
+                title='Imports a token from "gh auth token" (does NOT work for Copilot — kept for git push only).'
+                className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-100 text-slate-700">
+                Import from GitHub CLI
               </button>
               <button
                 onClick={fetchRuntimeStatus}
@@ -471,6 +575,24 @@ function ApiKeysTab() {
                 Refresh status
               </button>
             </div>
+            {copilotDevice && (
+              <div className="mt-3 rounded border border-emerald-300 bg-white p-3 text-xs text-slate-800">
+                {copilotDevice.status === 'pending' && (
+                  <>
+                    <div className="font-semibold text-emerald-800">Waiting for GitHub authorization…</div>
+                    <div className="mt-1">1. Open <a href={copilotDevice.verification_uri} target="_blank" rel="noreferrer" className="underline text-emerald-700">{copilotDevice.verification_uri}</a></div>
+                    <div>2. Enter this code (already copied to clipboard):</div>
+                    <div className="mt-1 font-mono text-lg tracking-widest text-emerald-900 select-all">{copilotDevice.user_code}</div>
+                  </>
+                )}
+                {copilotDevice.status === 'ok' && (
+                  <div className="text-emerald-800 font-semibold">✓ Copilot connected. Refreshing model list…</div>
+                )}
+                {copilotDevice.status === 'error' && (
+                  <div className="text-rose-700">Device flow failed: {copilotDevice.error}</div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

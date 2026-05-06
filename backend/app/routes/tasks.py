@@ -141,16 +141,17 @@ async def _run_image_gen(task_id: str, params: dict):
                         if hasattr(comfy_err, 'detail'):
                             err_detail = str(comfy_err.detail)
                         logger.error(f"ComfyUI generation failed: {err_detail}")
-                        task.user_message = f"ComfyUI error: {err_detail[:120]}. Falling back to Gemini…"
-                        task.progress = 35
-                        await db.commit()
-                        used_model = "gemini-imagen"
+                        # User explicitly selected ComfyUI — surface the error rather than
+                        # silently falling back to a different (paid, cloud) provider.
+                        raise ValueError(f"ComfyUI generation failed: {err_detail}")
                 else:
-                    logger.warning("ComfyUI not reachable, falling back to Gemini")
-                    task.user_message = "ComfyUI unavailable, falling back to Gemini…"
-                    task.progress = 30
-                    await db.commit()
-                    used_model = "gemini-imagen"
+                    logger.warning(
+                        f"ComfyUI not reachable at {active_comfyui_url or configured_comfyui_url!r}"
+                    )
+                    raise ValueError(
+                        f"ComfyUI is not reachable at {active_comfyui_url or configured_comfyui_url or '(unset)'}. "
+                        "Check that the server is running and COMFYUI_URL is correct."
+                    )
 
             if used_model == "gemini-imagen" or (model == "gemini-imagen" and result is None):
                 api_key = (os.environ.get('GEMINI_API_KEY')

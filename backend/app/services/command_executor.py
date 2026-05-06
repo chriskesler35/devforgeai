@@ -412,9 +412,11 @@ def get_first_github_token() -> Optional[str]:
     pipeline runs are tied to sessions, not users yet). Good enough for
     single-user self-hosted setups.
     """
+    def _looks_like_pat(token: str) -> bool:
+        t = (token or "").strip().lower()
+        return t.startswith("github_pat_") or t.startswith("ghp_")
+
     env_token = os.environ.get("GITHUB_TOKEN", "").strip()
-    if env_token:
-        return env_token
 
     import json as _json
     users_file = Path(__file__).parent.parent.parent.parent / "data" / "collab_users.json"
@@ -422,12 +424,24 @@ def get_first_github_token() -> Optional[str]:
         return None
     try:
         users = _json.loads(users_file.read_text(encoding="utf-8"))
+        first_collab_token: Optional[str] = None
         for u in users.values():
             tok = u.get("github_token")
             if tok:
-                return tok
+                tok = tok.strip()
+                if tok and not _looks_like_pat(tok):
+                    # Prefer OAuth-style user tokens for Copilot API calls.
+                    return tok
+                if tok and not first_collab_token:
+                    first_collab_token = tok
+        if first_collab_token and _looks_like_pat(env_token):
+            # If env token is a PAT, prefer any collaboration token.
+            return first_collab_token
     except Exception:
-        return None
+        pass
+
+    if env_token:
+        return env_token
     return None
 
 

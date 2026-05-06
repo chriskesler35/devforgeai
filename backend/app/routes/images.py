@@ -786,10 +786,16 @@ async def generate_with_comfyui(
     # If it's ComfyUI editor format (nodes/links arrays), convert it.
     # Fetch ComfyUI's own node schema so the converter knows which widget
     # values map to which input names for each node class.
-    if not is_api_format and isinstance(template_data, dict) and "nodes" in template_data:
+    editor_source = None
+    if not is_api_format:
+        if isinstance(template_data, dict) and "nodes" in template_data:
+            editor_source = template_data
+        elif isinstance(workflow_json, dict) and "nodes" in workflow_json:
+            editor_source = workflow_json
+    if editor_source is not None:
         logger.info(f"Converting editor-format workflow: {template_path.name}")
         node_schema = await _fetch_object_info_schema(comfyui_url)
-        workflow_json = _convert_editor_to_api(template_data, node_schema=node_schema)
+        workflow_json = _convert_editor_to_api(editor_source, node_schema=node_schema)
         if not workflow_json:
             raise HTTPException(
                 status_code=400,
@@ -1460,10 +1466,16 @@ async def generate_img2img_with_comfyui(
     )
 
     # Convert ComfyUI editor format (nodes/links arrays) to API format if needed
-    if not is_api_format and isinstance(template_data, dict) and "nodes" in template_data:
+    editor_source = None
+    if not is_api_format:
+        if isinstance(template_data, dict) and "nodes" in template_data:
+            editor_source = template_data
+        elif isinstance(workflow_json, dict) and "nodes" in workflow_json:
+            editor_source = workflow_json
+    if editor_source is not None:
         logger.info(f"Converting editor-format workflow to API format: {workflow_id}")
         node_schema = await _fetch_object_info_schema(comfyui_url)
-        workflow_json = _convert_editor_to_api(template_data, node_schema=node_schema)
+        workflow_json = _convert_editor_to_api(editor_source, node_schema=node_schema)
         if not workflow_json:
             raise HTTPException(
                 status_code=400,
@@ -1660,14 +1672,17 @@ async def generate_image(
                 configured_comfyui_url = await get_setting("comfyui_url", db)
                 comfyui_dir = await get_setting("comfyui_dir", db)
 
-                # Try ComfyUI; fall back to Gemini on any failure (unreachable, timeout, error)
-                comfyui_failed = False
-                comfyui_error = ""
+                # User explicitly chose ComfyUI — surface failures rather than silently
+                # falling back to a paid cloud provider.
                 try:
                     active_comfyui_url = await _resolve_comfyui_endpoint(configured_comfyui_url)
                     if not active_comfyui_url:
-                        raise Exception(
-                            f"ComfyUI not reachable at any configured URL: {configured_comfyui_url}"
+                        raise HTTPException(
+                            status_code=503,
+                            detail=(
+                                f"ComfyUI is not reachable at any configured URL: "
+                                f"{configured_comfyui_url or '(unset)'}"
+                            ),
                         )
                     result = await generate_with_comfyui(
                         prompt=request.prompt,
@@ -1676,20 +1691,15 @@ async def generate_image(
                         comfyui_dir=comfyui_dir,
                         poll_timeout_seconds=await _get_comfyui_poll_timeout_seconds(db),
                     )
+                except HTTPException:
+                    raise
                 except Exception as comfy_err:
-                    comfyui_failed = True
-                    comfyui_error = getattr(comfy_err, 'detail', str(comfy_err))
-                    logger.error(f"ComfyUI generation failed: {comfyui_error}")
-
-                if comfyui_failed:
-                    api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY') or getattr(settings, 'gemini_api_key', None) or getattr(settings, 'google_api_key', None)
-                    if not api_key:
-                        raise HTTPException(
-                            status_code=503,
-                            detail=f"ComfyUI failed ({comfyui_error}) and no Gemini API key configured for fallback."
-                        )
-                    result = await generate_with_gemini_imagen(request.prompt, api_key, request.size)
-                    request.model = "gemini-imagen"
+                    err_detail = getattr(comfy_err, 'detail', str(comfy_err))
+                    logger.error(f"ComfyUI generation failed: {err_detail}")
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"ComfyUI generation failed: {err_detail}",
+                    )
 
             else:
                 raise HTTPException(

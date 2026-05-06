@@ -56,14 +56,86 @@ async def _ensure_model_assignment_usable(model_ref: Optional[str]) -> None:
             ),
         )
 
+
+async def _resolve_method_phase_prompt(method_phase: Optional[str], db: AsyncSession) -> dict:
+    """Look up a phase's system prompt across the active method, the active stack,
+    all built-in METHOD_PHASE_TEMPLATES, and any active CustomMethod.
+
+    Returns dict with: phase_name, phase_role, phase_system_prompt, source_method.
+    All fields may be empty strings / None when no match is found.
+    """
+    out = {
+        "phase_name": None,
+        "phase_role": None,
+        "phase_system_prompt": "",
+        "source_method": None,
+    }
+    if not method_phase or not method_phase.strip():
+        return out
+
+    target = method_phase.strip().lower()
+
+    # Build search order: active method first, then stack, then all other built-ins
+    search_methods: List[str] = []
+    try:
+        from app.routes.methods import _load_state as _load_method_state
+        state = _load_method_state()
+        active = state.get("active_method") or "standard"
+        stack = state.get("active_stack") or []
+        for m in [active] + list(stack):
+            if m and m not in search_methods:
+                search_methods.append(m)
+    except Exception as e:
+        logger.debug(f"Could not load method state: {e}")
+
+    try:
+        from app.services.phase_templates import METHOD_PHASE_TEMPLATES
+        for m in list(METHOD_PHASE_TEMPLATES.keys()):
+            if m not in search_methods:
+                search_methods.append(m)
+
+        for method_id in search_methods:
+            phases = METHOD_PHASE_TEMPLATES.get(method_id) or []
+            for ph in phases:
+                if (ph.get("name") or "").strip().lower() == target:
+                    out["phase_name"] = ph.get("name")
+                    out["phase_role"] = ph.get("role")
+                    out["phase_system_prompt"] = ph.get("system_prompt") or ""
+                    out["source_method"] = method_id
+                    return out
+    except Exception as e:
+        logger.warning(f"Built-in phase template lookup failed: {e}")
+
+    # Custom methods (DB)
+    try:
+        from app.models.custom_method import CustomMethod
+        result = await db.execute(
+            select(CustomMethod).where(CustomMethod.is_active == True)  # noqa: E712
+        )
+        for cm in result.scalars().all():
+            for ph in (cm.phases or []):
+                if (ph.get("name") or "").strip().lower() == target:
+                    out["phase_name"] = ph.get("name")
+                    out["phase_role"] = ph.get("role")
+                    out["phase_system_prompt"] = ph.get("system_prompt") or ""
+                    out["source_method"] = cm.id
+                    return out
+    except Exception as e:
+        logger.warning(f"Custom method phase lookup failed: {e}")
+
+    return out
+
+
 async def _resolve_agent_model(agent: Agent, db: AsyncSession) -> dict:
     """
     Resolve the effective model and system prompt for an agent.
 
     Model priority:  persona.primary_model → agent.model_id → None
-    Prompt strategy: persona.system_prompt is the foundation;
-                     agent.system_prompt (if set) is appended as role-specific
-                     additional instructions.  If no persona, agent prompt is used alone.
+    Prompt composition (top → bottom, joined by `\n\n---\n\n`):
+        1. Persona system_prompt   (foundational voice)
+        2. Agent  system_prompt    (role-specific instructions)
+        3. Phase  system_prompt    (current method phase, looked up via agent.method_phase)
+    Any layer that's empty is skipped. The result is `effective_system_prompt`.
     """
     resolved = {
         "resolved_model_id": None,
@@ -72,7 +144,14 @@ async def _resolve_agent_model(agent: Agent, db: AsyncSession) -> dict:
         "persona_name": None,
         "persona_system_prompt": None,
         "effective_system_prompt": agent.system_prompt or "",
+        "method_phase": getattr(agent, "method_phase", None),
+        "phase_name": None,
+        "phase_role": None,
+        "phase_system_prompt": "",
+        "phase_source_method": None,
     }
+
+    persona_prompt = ""
 
     # Try persona first
     if agent.persona_id:
@@ -83,11 +162,8 @@ async def _resolve_agent_model(agent: Agent, db: AsyncSession) -> dict:
             persona = persona_result.scalar_one_or_none()
             if persona:
                 resolved["persona_name"] = persona.name
-                resolved["persona_system_prompt"] = persona.system_prompt or ""
-
-                # Build effective prompt: persona is the base, agent adds role specifics
-                parts = [p.strip() for p in [persona.system_prompt or "", agent.system_prompt or ""] if p and p.strip()]
-                resolved["effective_system_prompt"] = "\n\n".join(parts)
+                persona_prompt = persona.system_prompt or ""
+                resolved["persona_system_prompt"] = persona_prompt
 
                 if persona.primary_model_id:
                     from app.routes.workbench import _resolve_model
@@ -110,6 +186,26 @@ async def _resolve_agent_model(agent: Agent, db: AsyncSession) -> dict:
                 resolved["resolved_via"] = "direct"
         except Exception as e:
             logger.warning(f"Failed to resolve direct model for agent {agent.id}: {e}")
+
+    # Resolve method-phase prompt (built-ins + custom methods)
+    phase_info = await _resolve_method_phase_prompt(getattr(agent, "method_phase", None), db)
+    resolved["phase_name"] = phase_info.get("phase_name")
+    resolved["phase_role"] = phase_info.get("phase_role")
+    resolved["phase_system_prompt"] = phase_info.get("phase_system_prompt") or ""
+    resolved["phase_source_method"] = phase_info.get("source_method")
+
+    # Compose effective system prompt: persona → agent → phase
+    layers: List[str] = []
+    if persona_prompt and persona_prompt.strip():
+        layers.append(f"# Persona\n{persona_prompt.strip()}")
+    if agent.system_prompt and agent.system_prompt.strip():
+        layers.append(f"# Agent Role\n{agent.system_prompt.strip()}")
+    if resolved["phase_system_prompt"] and resolved["phase_system_prompt"].strip():
+        phase_label = resolved["phase_name"] or "Phase"
+        layers.append(f"# Method Phase: {phase_label}\n{resolved['phase_system_prompt'].strip()}")
+
+    if layers:
+        resolved["effective_system_prompt"] = "\n\n---\n\n".join(layers)
 
     return resolved
 
@@ -177,6 +273,10 @@ class AgentResponse(BaseModel):
     resolved_model_name: Optional[str] = None
     resolved_via: Optional[str] = None  # "persona" | "direct" | None
     method_phase: Optional[str] = None
+    phase_name: Optional[str] = None
+    phase_role: Optional[str] = None
+    phase_source_method: Optional[str] = None
+    phase_system_prompt: Optional[str] = None
     tools: List[str] = []
     memory_enabled: bool = True
     max_iterations: int = 10
@@ -198,6 +298,7 @@ class AgentRunRequest(BaseModel):
     task: str
     context: Optional[dict] = None
     stream: Optional[bool] = False
+    model_id: Optional[str] = None  # override model for this run
 
 
 class AgentRunResponse(BaseModel):
@@ -295,6 +396,7 @@ async def create_agent(agent: AgentCreate, db: AsyncSession = Depends(get_db)):
         system_prompt=agent.system_prompt,
         model_id=model_uuid,
         persona_id=persona_uuid,
+        method_phase=agent.method_phase,
         tools=agent.tools,
         memory_enabled=agent.memory_enabled,
         max_iterations=agent.max_iterations,
@@ -390,6 +492,7 @@ async def update_agent(agent_id: str, updates: AgentUpdate, db: AsyncSession = D
             user_id=user.id if user else None,
             model_id=model_uuid,
             persona_id=persona_uuid,
+            method_phase=updates.method_phase if updates.method_phase is not None else None,
         )
         db.add(agent)
         await db.commit()
@@ -408,7 +511,8 @@ async def update_agent(agent_id: str, updates: AgentUpdate, db: AsyncSession = D
         raise HTTPException(status_code=404, detail="Agent not found")
 
     for field in ['name', 'agent_type', 'description', 'system_prompt',
-                  'tools', 'memory_enabled', 'max_iterations', 'timeout_seconds', 'is_active']:
+                  'method_phase', 'tools', 'memory_enabled', 'max_iterations',
+                  'timeout_seconds', 'is_active']:
         val = getattr(updates, field, None)
         if val is not None:
             setattr(agent, field, val)
@@ -560,6 +664,34 @@ async def run_agent(agent_id: str, body: AgentRunRequest, db: AsyncSession = Dep
         agent.tools = default_data.get("tools", [])
         agent.max_iterations = default_data.get("max_iterations", 10)
         agent.timeout_seconds = default_data.get("timeout_seconds", 300)
+        agent.persona_id = None
+        agent.method_phase = None
+        agent.model_id = None
+
+    # ── Compose merged system prompt: Persona → Agent → Method Phase ─────
+    # This wires Method Phase Bindings → Agents → Personas into the runtime
+    # system prompt, matching the layering used by the pipeline executor.
+    try:
+        merged = await _resolve_agent_model(agent, db)
+        effective_prompt = merged.get("effective_system_prompt") or (
+            getattr(agent, "system_prompt", "") or ""
+        )
+        # Override the in-flight agent object so AgentRunner._build_system_prompt
+        # and the single-shot path below pick up the merged prompt.
+        try:
+            agent.system_prompt = effective_prompt
+        except Exception:
+            # Some ORM-detached objects may reject setattr; ignore.
+            pass
+        logger.info(
+            "agent_run prompt wiring: agent=%s phase=%s persona=%s source_method=%s",
+            getattr(agent, "name", agent_id),
+            merged.get("phase_name"),
+            merged.get("persona_name"),
+            merged.get("phase_source_method"),
+        )
+    except Exception as _e:
+        logger.warning(f"Failed to compose merged agent prompt: {_e}")
 
     agent_tools = getattr(agent, "tools", []) or []
 

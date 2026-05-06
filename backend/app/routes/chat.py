@@ -712,10 +712,11 @@ async def _stream_response(
                     ),
                 })
 
-            # Inject unified identity/soul/user/method context (shared with workbench)
+            # Inject unified identity/soul/user/method context (shared with workbench).
+            # Uses async variant so active custom methods are also surfaced to the model.
             try:
-                from app.services.identity_context import build_identity_context
-                identity_block = build_identity_context(include_method=True)
+                from app.services.identity_context import build_identity_context_async
+                identity_block = await build_identity_context_async(db=db, include_method=True)
                 if identity_block:
                     msg_dicts.insert(0, {"role": "system", "content": identity_block})
             except Exception as _e:
@@ -980,10 +981,11 @@ async def _sync_response(
                 }
             )
 
-        # Inject unified identity/soul/user/method context (shared with workbench)
+        # Inject unified identity/soul/user/method context (shared with workbench).
+        # Async variant also surfaces active custom methods.
         try:
-            from app.services.identity_context import build_identity_context
-            identity_block = build_identity_context(include_method=True)
+            from app.services.identity_context import build_identity_context_async
+            identity_block = await build_identity_context_async(db=db, include_method=True)
             if identity_block:
                 msg_dicts.insert(0, {"role": "system", "content": identity_block})
         except Exception as _e:

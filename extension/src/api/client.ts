@@ -145,4 +145,20 @@ export class ModelMeshClient {
     const data = await response.json() as { data: Array<{ id: string; name: string }> };
     return data.data.map((p) => ({ id: p.id, name: p.name }));
   }
+
+  async connectVscodeGithubToken(accessToken: string): Promise<void> {
+    const response = await fetch(`${this.config.apiUrl}/auth/github/vscode-token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.config.apiKey}`,
+      },
+      body: JSON.stringify({ access_token: accessToken }),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`ModelMesh GitHub auth bridge error: ${error}`);
+    }
+  }
 }

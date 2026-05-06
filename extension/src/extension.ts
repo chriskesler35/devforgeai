@@ -49,11 +49,22 @@ export function activate(context: vscode.ExtensionContext) {
     () => personaProvider.refresh()
   );
 
+  const connectGithubCmd = vscode.commands.registerCommand(
+    'modelmesh.connectGithub',
+    async () => {
+      const session = await vscode.authentication.getSession('github', ['read:user', 'user:email'], { createIfNone: true });
+      const client = new ModelMeshClient();
+      await client.connectVscodeGithubToken(session.accessToken);
+      vscode.window.showInformationMessage('ModelMesh: Connected VS Code GitHub session');
+    }
+  );
+
   context.subscriptions.push(
     sendSelectionCmd,
     newConversationCmd,
     selectPersonaCmd,
     refreshPersonasCmd,
+    connectGithubCmd,
     treeView
   );
 }

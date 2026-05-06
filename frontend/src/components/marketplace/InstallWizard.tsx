@@ -12,7 +12,7 @@ export interface InstallWizardProps {
   onSuccess: (skillId: string) => void;
   onStartInstall: (skillId: string) => Promise<{ job_id: string }>;
   onPollProgress: (jobId: string) => Promise<{
-    status: 'downloading' | 'validating' | 'extracting' | 'checking' | 'finalizing' | 'success' | 'failed';
+    status: 'queued' | 'downloading' | 'validating' | 'extracting' | 'checking' | 'finalizing' | 'success' | 'failed';
     current_step: number;
     progress: number;
     step_messages: Record<string, string>;

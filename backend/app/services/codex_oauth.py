@@ -148,7 +148,11 @@ def get_codex_proxy_configuration_issue() -> Optional[str]:
             "Model Mesh requires an OpenAI-compatible http(s) base URL."
         )
 
+    # If CLI auth tokens are present we can use the access_token directly
+    # against api.openai.com — no proxy needed, so this is not an issue.
     if is_default_codex_proxy_base_url() and shutil.which("codex") and not is_codex_proxy_reachable(cache_ttl_seconds=0):
+        if has_codex_cli_auth():
+            return None  # tokens usable directly, proxy offline is fine
         return (
             "The installed Codex CLI does not expose the default OpenAI-compatible HTTP proxy "
             f"at {base_url}. Its app-server uses stdio or websocket transports instead."
