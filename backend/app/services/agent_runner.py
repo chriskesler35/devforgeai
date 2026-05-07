@@ -158,11 +158,15 @@ class AgentRunner:
         )
 
         if uses_native:
-            # The tool schemas are sent separately; just remind the model.
+            # Native tool schemas are sent separately, but include CMD fallback
+            # instructions so models without robust native tool support can still
+            # execute tools via text-parsed commands.
             suffix = (
                 "\n\nYou have access to tools (read_file, write_file, list_dir, "
-                "run_shell, install_package, web_fetch). Use them to complete the "
-                "task. When finished, provide your final answer."
+                "run_shell, install_package, web_fetch). Prefer native tool calls "
+                "when supported. If native tool calls are unavailable, use CMD: "
+                "blocks exactly as specified below."
+                "\n\n" + get_tool_prompt_fragment(tool_names)
             )
         else:
             suffix = "\n\n" + get_tool_prompt_fragment(tool_names)
@@ -744,17 +748,85 @@ class AgentRunner:
                         )
                     continue
 
-                # No tool calls — final answer
-                yield {
-                    "event": "done",
-                    "output": response_text,
-                    "run_id": run_id,
-                    "iteration_count": iteration + 1,
-                    "input_tokens": total_input_tokens,
-                    "output_tokens": total_output_tokens,
-                    "duration_ms": int((time.time() - start_time) * 1000),
-                }
-                return
+                # Native produced no tool_calls. Fall back to CMD parsing so
+                # models that don't emit OpenAI tool_calls can still use tools.
+                commands = parse_cmd_blocks(response_text or "")
+
+                if not commands:
+                    yield {
+                        "event": "done",
+                        "output": response_text,
+                        "run_id": run_id,
+                        "iteration_count": iteration + 1,
+                        "input_tokens": total_input_tokens,
+                        "output_tokens": total_output_tokens,
+                        "duration_ms": int((time.time() - start_time) * 1000),
+                    }
+                    return
+
+                # Execute parsed CMD commands and continue the loop.
+                from app.services.command_executor import run_command
+                from app.services.command_classifier import classify_command, CommandTier
+
+                tool_results: list[dict] = []
+                for cmd in commands:
+                    yield {"event": "tool_call", "iteration": iteration, "command": cmd}
+
+                    tier = classify_command(cmd)
+                    if tier == CommandTier.BLOCKED:
+                        result = {
+                            "command": cmd,
+                            "exit_code": -1,
+                            "stdout": "",
+                            "stderr": "Command blocked by sandbox policy.",
+                            "success": False,
+                        }
+                    else:
+                        try:
+                            exit_code, stdout, stderr, duration_ms = await run_command(
+                                cmd, self.project_path, timeout_sec=60,
+                            )
+                            result = {
+                                "command": cmd,
+                                "exit_code": exit_code,
+                                "stdout": stdout[:2000] if stdout else "",
+                                "stderr": stderr[:2000] if stderr else "",
+                                "success": exit_code == 0,
+                            }
+                        except Exception as e:
+                            result = {
+                                "command": cmd,
+                                "exit_code": -1,
+                                "stdout": "",
+                                "stderr": str(e),
+                                "success": False,
+                            }
+
+                    tool_results.append(result)
+                    yield {
+                        "event": "tool_result",
+                        "iteration": iteration,
+                        "command": result["command"],
+                        "success": result["success"],
+                        "stdout": result["stdout"][:500],
+                        "stderr": result["stderr"][:500],
+                        "exit_code": result["exit_code"],
+                    }
+
+                messages.append({"role": "assistant", "content": response_text})
+                feedback = self._format_tool_results(tool_results)
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Tool execution results:\n{feedback}\n\n"
+                            "Continue with the task. When done, respond with "
+                            "DONE: followed by your final answer."
+                        ),
+                    }
+                )
+                yield {"event": "iteration_complete", "iteration": iteration}
+                continue
 
             # ── Text-streaming path (CMD: blocks) ────────────────────
             chunks: list[str] = []

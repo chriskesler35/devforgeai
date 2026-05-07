@@ -19,63 +19,17 @@ from typing import Any
 
 # ── Capability detection ──────────────────────────────────────────────────────
 
-# Providers that always support function calling via their API.
-FUNCTION_CALLING_PROVIDERS: frozenset[str] = frozenset(
-    {
-        "openai",
-        "openai-codex",
-        "anthropic",
-        "google",
-        "openrouter",
-        "github-copilot",
-    }
-)
-
-# Ollama model base-names (prefix match, case-insensitive, ignores :tag suffix)
-# that support OpenAI-compatible function calling.  Keep this list current as
-# new models are released with tool support.
-OLLAMA_FUNCTION_CALLING_MODELS: frozenset[str] = frozenset(
-    {
-        "qwen2.5-coder",
-        "qwen2.5",
-        "qwen2",
-        "qwen3",
-        "llama3.1",
-        "llama3.2",
-        "llama3.3",
-        "mistral",
-        "mistral-nemo",
-        "devstral",
-        "command-r",
-        "command-r-plus",
-        "firefunction-v2",
-        "hermes3",
-        "nous-hermes2",
-        "functionary",
-        "nexusraven",
-    }
-)
-
-
 def provider_supports_function_calling(
     provider_name: str, model_id: str = ""
 ) -> bool:
-    """Return True if this provider+model combo supports native function calling.
+    """Return True for all provider/model combinations.
 
-    For Ollama, checks the model base name against a known-good list.
-    For all major cloud providers, always returns True.
+    DevForgeAI is configured to expose full tool access to all models. Any
+    provider/model-specific reliability handling should happen after the model
+    responds, not by pre-emptively excluding tool transport.
     """
-    pname = (provider_name or "").lower().strip()
-    if pname in FUNCTION_CALLING_PROVIDERS:
-        return True
-    if pname == "ollama":
-        # Strip version tag: "qwen2.5-coder:32b" → "qwen2.5-coder"
-        model_base = (model_id or "").lower().split(":")[0]
-        return any(
-            model_base.startswith(known)
-            for known in OLLAMA_FUNCTION_CALLING_MODELS
-        )
-    return False
+    _ = provider_name, model_id
+    return True
 
 
 # ── Tool schemas (OpenAI function-calling format) ─────────────────────────────
