@@ -7,6 +7,7 @@ import asyncio
 import os
 import re
 import socket
+import subprocess
 from pathlib import Path
 from typing import Any, Dict
 from datetime import datetime, timezone
@@ -34,6 +35,128 @@ router = APIRouter(prefix="/v1", tags=["chat"], dependencies=[Depends(verify_api
 # Keyed by conversation_id string.
 _workflow_session_state: Dict[str, Dict[str, Any]] = {}
 _LOCAL_MODEL_PROVIDERS = {"ollama", "local", "lm-studio", "lmstudio", "llamacpp"}
+_MODEL_VRAM_MAP_MB: dict[str, int] = {
+    "0.6b": 800,
+    "1b": 1200,
+    "1.5b": 1500,
+    "3b": 2500,
+    "7b": 6500,
+    "8b": 7500,
+    "13b": 9000,
+    "14b": 10000,
+    "32b": 21000,
+    "33b": 22000,
+    "34b": 23000,
+    "70b": 45000,
+    "llama3.1:8b": 7500,
+    "qwen2.5-coder:7b": 6500,
+    "qwen2.5-coder:14b": 10000,
+    "qwen2.5-coder:32b": 21000,
+}
+
+
+def _is_cloud_model(model: Model | None, provider: Provider | None) -> bool:
+    if not model:
+        return False
+    model_id = (model.model_id or "").strip().lower()
+    if model_id.endswith(":cloud"):
+        return True
+    provider_name = (provider.name or "").strip().lower() if provider else ""
+    return provider_name not in _LOCAL_MODEL_PROVIDERS
+
+
+def _estimate_model_vram_mb(model_id: str) -> int:
+    normalized = (model_id or "").strip().lower()
+    if not normalized:
+        return 0
+    if normalized.endswith(":cloud"):
+        return 0
+    if normalized in _MODEL_VRAM_MAP_MB:
+        return _MODEL_VRAM_MAP_MB[normalized]
+    for token, vram_mb in _MODEL_VRAM_MAP_MB.items():
+        if token in normalized:
+            return vram_mb
+    return 5000
+
+
+def _get_total_free_vram_mb() -> int | None:
+    """Return aggregate free VRAM from nvidia-smi, or None if unavailable."""
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.free",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    free_values: list[int] = []
+    for line in (result.stdout or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            free_values.append(int(line))
+        except Exception:
+            continue
+
+    if not free_values:
+        return None
+    return sum(free_values)
+
+
+def _vram_guard_enabled() -> bool:
+    raw = (os.getenv("DEVFORGEAI_VRAM_GUARD_ENABLED", "true") or "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _evaluate_vram_fitness(model: Model | None, provider: Provider | None) -> tuple[bool, str]:
+    """Block local model execution when free VRAM is insufficient."""
+    if not model or not provider or not _vram_guard_enabled():
+        return True, ""
+
+    provider_name = (provider.name or "").lower().strip()
+    if provider_name not in _LOCAL_MODEL_PROVIDERS:
+        return True, ""
+
+    model_id = (model.model_id or "").strip()
+    if model_id.lower().endswith(":cloud"):
+        return True, ""
+
+    required_mb = _estimate_model_vram_mb(model_id)
+    if required_mb <= 0:
+        return True, ""
+
+    free_mb = _get_total_free_vram_mb()
+    if free_mb is None:
+        return False, (
+            f"Cannot verify GPU VRAM for local model '{model_id}'. "
+            "Cloud fallback required to avoid local OOM risk."
+        )
+
+    headroom_raw = (os.getenv("DEVFORGEAI_VRAM_HEADROOM_RATIO", "1.10") or "1.10").strip()
+    try:
+        headroom_ratio = float(headroom_raw)
+    except Exception:
+        headroom_ratio = 1.10
+    if headroom_ratio < 1.0:
+        headroom_ratio = 1.0
+
+    needed_with_headroom = int(required_mb * headroom_ratio)
+    if free_mb < needed_with_headroom:
+        return False, (
+            f"Local VRAM check failed for '{model_id}': requires about {needed_with_headroom} MB "
+            f"(including headroom), only {free_mb} MB free."
+        )
+    return True, ""
 
 
 def _tool_loop_max_rounds() -> int:
@@ -54,6 +177,42 @@ def _tool_loop_timeout_seconds() -> int:
     except Exception:
         value = 60
     return max(15, min(value, 300))
+
+
+def _chat_completion_timeout_seconds() -> int:
+    """Base timeout for non-tool single model calls."""
+    raw = (os.getenv("DEVFORGEAI_CHAT_TIMEOUT_SECONDS", "45") or "45").strip()
+    try:
+        value = int(raw)
+    except Exception:
+        value = 45
+    return max(20, min(value, 600))
+
+
+def _adaptive_model_timeout_seconds(model: Model | None, provider: Provider | None, *, base: int) -> int:
+    """Raise timeout ceiling for local/Ollama workloads that may run longer."""
+    if not model or not provider:
+        return base
+
+    provider_name = (provider.name or "").lower().strip()
+    if provider_name not in _LOCAL_MODEL_PROVIDERS and provider_name != "ollama":
+        return base
+
+    model_id = (model.model_id or "").strip().lower()
+    if model_id.endswith(":cloud"):
+        raw = (os.getenv("DEVFORGEAI_OLLAMA_CLOUD_TIMEOUT_SECONDS", "360") or "360").strip()
+        try:
+            cloud_timeout = int(raw)
+        except Exception:
+            cloud_timeout = 360
+        return max(base, max(30, min(cloud_timeout, 600)))
+
+    raw = (os.getenv("DEVFORGEAI_LOCAL_MODEL_TIMEOUT_SECONDS", "180") or "180").strip()
+    try:
+        local_timeout = int(raw)
+    except Exception:
+        local_timeout = 180
+    return max(base, max(30, min(local_timeout, 600)))
 
 
 def _model_supports_tools(model, provider) -> bool:
@@ -123,6 +282,30 @@ async def _find_recovery_model(db: AsyncSession, excluded_model_ids: set[str] | 
     )
     for model, provider in result.all():
         if str(model.id) in excluded:
+            continue
+        ok, _reason = _evaluate_model_connectivity(model, provider)
+        if ok:
+            return model, provider
+    return None, None
+
+
+async def _find_cloud_recovery_model(
+    db: AsyncSession,
+    excluded_model_ids: set[str] | None = None,
+) -> tuple[Model | None, Provider | None]:
+    """Find a validated, connected cloud model for safe fallback."""
+    excluded = excluded_model_ids or set()
+    result = await db.execute(
+        select(Model, Provider)
+        .join(Provider, Model.provider_id == Provider.id)
+        .where(Model.is_active == True)
+        .where(Model.validation_status == "validated")
+        .order_by(Model.validated_at.desc().nulls_last(), Model.created_at.desc())
+    )
+    for model, provider in result.all():
+        if str(model.id) in excluded:
+            continue
+        if not _is_cloud_model(model, provider):
             continue
         ok, _reason = _evaluate_model_connectivity(model, provider)
         if ok:
@@ -213,63 +396,82 @@ def _extract_text_tool_calls(response_text: str) -> list[dict]:
         if span:
             candidates.append(span)
 
+    def _parse_call_item(item: Any) -> dict | None:
+        if not isinstance(item, dict):
+            return None
+
+        call_id = str(item.get("id") or f"call_{uuid.uuid4().hex[:8]}")
+        fn_block = item.get("function") if isinstance(item.get("function"), dict) else {}
+        name = str(
+            fn_block.get("name")
+            or item.get("name")
+            or item.get("tool")
+            or item.get("tool_name")
+            or ""
+        ).strip()
+        raw_args = fn_block.get("arguments", item.get("arguments", item.get("args", {})))
+
+        if isinstance(raw_args, str):
+            args = {}
+            candidate = raw_args.strip()
+
+            # Some providers double-escape function arguments as a JSON string
+            # inside another JSON string. Decode in a short bounded loop.
+            for _ in range(3):
+                try:
+                    decoded = json.loads(candidate)
+                except Exception:
+                    break
+
+                if isinstance(decoded, dict):
+                    args = decoded
+                    break
+                if isinstance(decoded, str):
+                    candidate = decoded.strip()
+                    continue
+                break
+
+            # Fallback: unescape common backslash-escaped quote form.
+            if not args and isinstance(candidate, str):
+                unescaped = candidate.replace('\\"', '"')
+                try:
+                    decoded = json.loads(unescaped)
+                    if isinstance(decoded, dict):
+                        args = decoded
+                except Exception:
+                    pass
+        elif isinstance(raw_args, dict):
+            args = raw_args
+        else:
+            args = {}
+
+        if not name:
+            return None
+        return {"id": call_id, "name": name, "arguments": args}
+
     for cand in candidates:
         try:
             payload = json.loads(cand)
         except Exception:
             continue
 
-        raw_calls = payload.get("tool_calls") if isinstance(payload, dict) else None
-        if not isinstance(raw_calls, list):
-            continue
-
         parsed: list[dict] = []
-        for item in raw_calls:
-            if not isinstance(item, dict):
-                continue
-
-            call_id = str(item.get("id") or f"call_{uuid.uuid4().hex[:8]}")
-            fn_block = item.get("function") if isinstance(item.get("function"), dict) else {}
-            name = str(fn_block.get("name") or item.get("name") or "")
-            raw_args = fn_block.get("arguments", item.get("arguments", {}))
-
-            if isinstance(raw_args, str):
-                args = {}
-                candidate = raw_args.strip()
-
-                # Some providers double-escape function arguments as a JSON string
-                # inside another JSON string. Decode in a short bounded loop.
-                for _ in range(3):
-                    try:
-                        decoded = json.loads(candidate)
-                    except Exception:
-                        break
-
-                    if isinstance(decoded, dict):
-                        args = decoded
-                        break
-                    if isinstance(decoded, str):
-                        candidate = decoded.strip()
-                        continue
-                    break
-
-                # Fallback: unescape common backslash-escaped quote form.
-                if not args and isinstance(candidate, str):
-                    unescaped = candidate.replace('\\"', '"')
-                    try:
-                        decoded = json.loads(unescaped)
-                        if isinstance(decoded, dict):
-                            args = decoded
-                    except Exception:
-                        pass
-            elif isinstance(raw_args, dict):
-                args = raw_args
+        if isinstance(payload, dict):
+            raw_calls = payload.get("tool_calls")
+            if isinstance(raw_calls, list):
+                for item in raw_calls:
+                    parsed_item = _parse_call_item(item)
+                    if parsed_item:
+                        parsed.append(parsed_item)
             else:
-                args = {}
-
-            if not name:
-                continue
-            parsed.append({"id": call_id, "name": name, "arguments": args})
+                parsed_item = _parse_call_item(payload)
+                if parsed_item:
+                    parsed.append(parsed_item)
+        elif isinstance(payload, list):
+            for item in payload:
+                parsed_item = _parse_call_item(item)
+                if parsed_item:
+                    parsed.append(parsed_item)
 
         if parsed:
             return parsed
@@ -328,7 +530,12 @@ def _tool_message_content(result: dict) -> str:
             payload["output"] = str(payload["output"])
 
     content = json.dumps(payload)
-    max_chars = 120_000
+    raw_max = (os.getenv("DEVFORGEAI_TOOL_RESULT_MAX_CHARS", "60000") or "60000").strip()
+    try:
+        max_chars = int(raw_max)
+    except Exception:
+        max_chars = 60_000
+    max_chars = max(8_000, min(max_chars, 120_000))
     if len(content) > max_chars:
         content = content[:max_chars] + "\n\n[...tool content truncated...]"
     return content
@@ -641,6 +848,46 @@ async def chat_completions(
                     }
                 }
                 raise HTTPException(status_code=503, detail=detail)
+
+    # 1c. Guard local models against VRAM OOM risk and force cloud fallback.
+    primary_vram_ok, primary_vram_reason = _evaluate_vram_fitness(primary_model, primary_provider)
+    fallback_vram_ok, _fallback_vram_reason = _evaluate_vram_fitness(fallback_model, fallback_provider)
+
+    if not primary_vram_ok:
+        requested_name = primary_model.model_id if primary_model else "(none)"
+        excluded = {str(primary_model.id)} if primary_model else set()
+
+        # Prefer explicit persona fallback only when it is cloud + connected.
+        if fallback_ok and fallback_vram_ok and fallback_model and fallback_provider and _is_cloud_model(fallback_model, fallback_provider):
+            primary_model = fallback_model
+            primary_provider = fallback_provider
+            fallback_model = None
+            recovery_notice = (
+                f"Requested local model '{requested_name}' skipped: {primary_vram_reason} "
+                f"Switched to cloud fallback '{primary_model.model_id}' to avoid local OOM."
+            )
+        else:
+            recovery_model, recovery_provider = await _find_cloud_recovery_model(db, excluded_model_ids=excluded)
+            if recovery_model and recovery_provider:
+                primary_model = recovery_model
+                primary_provider = recovery_provider
+                fallback_model = None
+                recovery_notice = (
+                    f"Requested local model '{requested_name}' skipped: {primary_vram_reason} "
+                    f"Switched to cloud model '{primary_model.model_id}' to avoid local OOM."
+                )
+            else:
+                detail = {
+                    "error": {
+                        "type": "model_error",
+                        "message": (
+                            "Local model skipped due to VRAM safety guard and no usable cloud fallback is available. "
+                            f"Reason: {primary_vram_reason}"
+                        ),
+                        "code": "no_cloud_fallback_for_vram_guard",
+                    }
+                }
+                raise HTTPException(status_code=503, detail=detail)
     
     # 2. Handle conversation ID
     conversation_id = conv_id
@@ -758,7 +1005,11 @@ async def _stream_response(
                     loop_messages = list(msg_dicts)
                     workspace_root = Path(__file__).resolve().parents[3]
                     max_tool_rounds = _tool_loop_max_rounds()
-                    call_timeout = _tool_loop_timeout_seconds()
+                    call_timeout = _adaptive_model_timeout_seconds(
+                        primary_model,
+                        provider,
+                        base=_tool_loop_timeout_seconds(),
+                    )
                     last_successful_tool_output = ""
 
                     for _ in range(max_tool_rounds):
@@ -1036,7 +1287,11 @@ async def _sync_response(
                 loop_messages = list(msg_dicts)
                 workspace_root = Path(__file__).resolve().parents[3]
                 max_tool_rounds = _tool_loop_max_rounds()
-                call_timeout = _tool_loop_timeout_seconds()
+                call_timeout = _adaptive_model_timeout_seconds(
+                    primary_model,
+                    provider,
+                    base=_tool_loop_timeout_seconds(),
+                )
                 last_successful_tool_output = ""
 
                 for _ in range(max_tool_rounds):
@@ -1150,6 +1405,12 @@ async def _sync_response(
         # Fallback: previous single-call behavior
         if not tool_loop_used and not llm_timeout_fallback:
             try:
+                provider = await router_service._get_provider(primary_model.provider_id) if primary_model else None
+                single_call_timeout = _adaptive_model_timeout_seconds(
+                    primary_model,
+                    provider,
+                    base=_chat_completion_timeout_seconds(),
+                )
                 response = await asyncio.wait_for(
                     router_service.route_request(
                         persona, primary_model, fallback_model,
@@ -1157,7 +1418,7 @@ async def _sync_response(
                         temperature=request.temperature,
                         max_tokens=request.max_tokens
                     ),
-                    timeout=45,
+                    timeout=single_call_timeout,
                 )
             except asyncio.TimeoutError:
                 llm_timeout_fallback = True
@@ -1204,6 +1465,11 @@ async def _sync_response(
                     if provider:
                         loop_messages = list(msg_dicts)
                         workspace_root = Path(__file__).resolve().parents[3]
+                        recovery_timeout = _adaptive_model_timeout_seconds(
+                            primary_model,
+                            provider,
+                            base=_chat_completion_timeout_seconds(),
+                        )
 
                         assistant_tool_calls = []
                         for tc in canonical_calls:
@@ -1258,7 +1524,7 @@ async def _sync_response(
                                 temperature=request.temperature,
                                 max_tokens=request.max_tokens,
                             ),
-                            timeout=45,
+                            timeout=recovery_timeout,
                         )
                         if final_text:
                             logger.info("Recovered text-mode tool_calls in fallback path for conversation %s", conversation_id)

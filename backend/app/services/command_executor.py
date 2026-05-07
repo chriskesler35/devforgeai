@@ -475,7 +475,7 @@ def format_command_for_context(result: dict) -> str:
 # are rejected to prevent accidental writes to system directories.
 
 _MAX_FILE_READ_BYTES = 200 * 1024  # 200 KB cap for read_file
-_MAX_LOCAL_FILE_READ_BYTES = 512 * 1024  # 512 KB cap for read_local_file
+_MAX_LOCAL_FILE_READ_BYTES = 192 * 1024  # 192 KB cap for read_local_file
 _MAX_LOCAL_FILE_WRITE_BYTES = 2 * 1024 * 1024  # 2 MB cap for write_local_file
 
 _VIDEO_EXTENSIONS = {
@@ -688,7 +688,7 @@ async def tool_read_local_file(filepath: str) -> dict:
     except Exception as exc:
         return {"success": False, "output": f"Read error: {exc}"}
 
-    note = "\n\n[…file truncated at 512 KB…]" if truncated else ""
+    note = "\n\n[…file truncated at 192 KB…]" if truncated else ""
     return {
         "success": True,
         "output": text + note,
