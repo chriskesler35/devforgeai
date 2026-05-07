@@ -107,6 +107,15 @@ LITELLM_MODEL_PREFIXES: dict[str, str] = {
     "github-copilot": "openai/",
 }
 
+# Curated Ollama Cloud model catalog always exposed for selection.
+# These remain available even if not currently listed by local /api/tags.
+OLLAMA_CLOUD_DEFAULT_MODELS: list[dict[str, Any]] = [
+    {"model_id": "glm-5:cloud", "display_name": "GLM-5 Cloud", "ctx": 128000, "caps": {"chat": True, "completion": True, "streaming": True}},
+    {"model_id": "glm-5.1:cloud", "display_name": "GLM-5.1 Cloud", "ctx": 128000, "caps": {"chat": True, "completion": True, "streaming": True}},
+    {"model_id": "minimax-m2.7:cloud", "display_name": "MiniMax M2.7 Cloud", "ctx": 128000, "caps": {"chat": True, "completion": True, "streaming": True}},
+    {"model_id": "nemotron-3-super:cloud", "display_name": "Nemotron 3 Super Cloud", "ctx": 128000, "caps": {"chat": True, "completion": True, "streaming": True}},
+]
+
 NON_VIABLE_CATALOG_TOKENS = (
     "deprecated",
     "retired",
@@ -342,7 +351,13 @@ def _infer_model_capabilities(model_id: str, supported_methods: Optional[list[st
     if any(token in normalized for token in ("imagen", "dall-e", "flux", "stable-diffusion", "sdxl", "gpt-image", "chatgpt-image")):
         return {"image_generation": True}
 
-    capabilities: dict[str, bool] = {"chat": True, "streaming": True}
+    capabilities: dict[str, bool] = {
+        "chat": True,
+        "streaming": True,
+        # DevForgeAI exposes the same environment tools to all chat-capable models.
+        "tools": True,
+        "function_calling": True,
+    }
     if any(token in normalized for token in ("codex", "coder", "copilot", "code", "starcoder")):
         capabilities["code"] = True
     if "vision" in normalized or "image" in modality_text or "vision" in modality_text:
@@ -643,6 +658,21 @@ def infer_capabilities(model_name: str) -> dict:
     return caps
 
 
+def _merge_capabilities(existing_caps: Optional[dict], discovered_caps: Optional[dict]) -> dict:
+    """Merge capabilities while preserving/enforcing tool access on chat models."""
+    merged: dict[str, Any] = dict(existing_caps or {})
+    for key, value in (discovered_caps or {}).items():
+        if key in merged and isinstance(merged[key], bool) and isinstance(value, bool):
+            merged[key] = merged[key] or value
+        elif key not in merged or merged[key] in (None, ""):
+            merged[key] = value
+
+    if merged.get("chat") or merged.get("completion"):
+        merged["tools"] = True
+        merged["function_calling"] = True
+    return merged
+
+
 def nice_display_name(model_id: str) -> str:
     """Turn 'llama3.2:3b' into 'Llama 3.2 3B'."""
     base = model_id.split(":")[0]
@@ -841,7 +871,7 @@ async def run_model_sync(db: AsyncSession, *, deduplicate_existing: bool = True)
             current.cost_per_1m_input = current.cost_per_1m_input if current.cost_per_1m_input is not None else cost_in
             current.cost_per_1m_output = current.cost_per_1m_output if current.cost_per_1m_output is not None else cost_out
             current.context_window = current.context_window or ctx
-            current.capabilities = current.capabilities or caps
+            current.capabilities = _merge_capabilities(current.capabilities, caps)
             if validation_status == "validated":
                 current.validation_status = "validated"
                 current.validated_at = datetime.utcnow()
@@ -861,7 +891,7 @@ async def run_model_sync(db: AsyncSession, *, deduplicate_existing: bool = True)
             cost_per_1m_input=cost_in,
             cost_per_1m_output=cost_out,
             context_window=ctx,
-            capabilities=caps,
+            capabilities=_merge_capabilities({}, caps),
             is_active=True,
             validation_status=validation_status,
             validated_at=datetime.utcnow() if validation_status == "validated" else None,
@@ -877,12 +907,14 @@ async def run_model_sync(db: AsyncSession, *, deduplicate_existing: bool = True)
     # ── 1. Ollama ─────────────────────────────────────────────────────────────
     ollama_url = settings.ollama_base_url or "http://localhost:11434"
     ollama_raw = await fetch_ollama_models(ollama_url)
+    discovered_ollama_ids: set[str] = set()
 
     if ollama_raw:
         for entry in ollama_raw:
             model_id = entry.get("name", "")
             if not model_id:
                 continue
+            discovered_ollama_ids.add(model_id)
             # Fetch details for context window
             info = await fetch_ollama_model_info(model_id, ollama_url)
             model_info_block = info.get("model_info", info.get("details", {}))
@@ -902,6 +934,49 @@ async def run_model_sync(db: AsyncSession, *, deduplicate_existing: bool = True)
         logger.info(f"Ollama sync: {len(ollama_raw)} models found")
     else:
         logger.info("Ollama not reachable — skipping local model sync")
+
+    # Always expose curated Ollama Cloud models, even when local /api/tags does
+    # not list them in this environment snapshot.
+    for cloud_entry in OLLAMA_CLOUD_DEFAULT_MODELS:
+        model_id = cloud_entry["model_id"]
+        discovered_ollama_ids.add(model_id)
+        caps = infer_capabilities(model_id)
+        caps = _merge_capabilities(caps, cloud_entry.get("caps") or {})
+        if upsert_model(
+            ollama_provider,
+            model_id,
+            cloud_entry["display_name"],
+            0.0,
+            0.0,
+            cloud_entry.get("ctx"),
+            caps,
+            validation_status="validated",
+            validation_source="ollama_cloud_catalog",
+            validation_warning=(
+                "Available in Ollama Cloud catalog. Not currently listed by local /api/tags snapshot."
+            ),
+        ):
+            added.append(f"ollama/{model_id}")
+        else:
+            skipped.append(f"ollama/{model_id}")
+
+    # Reactivate any previously known Ollama Cloud rows so they remain selectable.
+    for (provider_id, existing_model_id), current in existing.items():
+        if provider_id != str(ollama_provider.id):
+            continue
+        if not str(existing_model_id).endswith(":cloud"):
+            continue
+        current.is_active = True
+        current.validation_source = "ollama_cloud_catalog"
+        current.validation_status = "validated"
+        current.validated_at = datetime.utcnow()
+        current.validation_warning = (
+            "Available in Ollama Cloud catalog. Not currently listed by local /api/tags snapshot."
+            if existing_model_id not in discovered_ollama_ids
+            else current.validation_warning
+        )
+        current.validation_error = None
+        current.capabilities = _merge_capabilities(current.capabilities, infer_capabilities(existing_model_id))
 
     # ── 2. Paid providers (key-gated) ─────────────────────────────────────────
     for provider_name in PROVIDER_DEFAULT_MODELS:
@@ -1069,6 +1144,10 @@ async def run_model_sync(db: AsyncSession, *, deduplicate_existing: bool = True)
             "deactivated": deactivated_missing,
             "deleted_stale": deleted_stale,
         }
+
+    # Normalize legacy rows so chat/completion models always advertise tool access.
+    for model in existing.values():
+        model.capabilities = _merge_capabilities(model.capabilities, {})
 
     await db.commit()
 

@@ -18,6 +18,41 @@ from app.services.provider_credentials import get_provider_api_key
 logger = logging.getLogger(__name__)
 
 
+def _is_ollama_cloud_model(model_id: str) -> bool:
+    return (model_id or "").strip().lower().endswith(":cloud")
+
+
+def _resolve_ollama_transport(model: Model, provider: Provider) -> tuple[str, Optional[str], bool]:
+    """Resolve Ollama endpoint and optional key for local vs cloud model IDs.
+
+    Returns: (api_base, api_key, is_cloud_route)
+    """
+    local_base = (
+        (os.environ.get("OLLAMA_BASE_URL") or "").strip()
+        or (provider.api_base_url or "").strip()
+        or "http://localhost:11434"
+    )
+    local_key = (os.environ.get("OLLAMA_API_KEY") or "").strip() or None
+
+    is_cloud_model = _is_ollama_cloud_model(model.model_id or "")
+    if not is_cloud_model:
+        return local_base, local_key, False
+
+    cloud_base = (os.environ.get("OLLAMA_CLOUD_BASE_URL") or "").strip()
+    cloud_key = (
+        (os.environ.get("OLLAMA_CLOUD_API_KEY") or "").strip()
+        or (os.environ.get("OLLAMA_API_KEY") or "").strip()
+        or None
+    )
+
+    # Default behavior: use the same Ollama endpoint for both local and :cloud models.
+    # If a dedicated cloud endpoint is configured, prefer it for :cloud model IDs.
+    if not cloud_base:
+        return local_base, (local_key or cloud_key), True
+
+    return cloud_base, cloud_key, True
+
+
 # Real model IDs that the Copilot/Codex API exposes directly.
 # These must NOT be remapped — they are distinct live models, not aliases.
 _REAL_VERSIONED_MODEL_IDS: frozenset[str] = frozenset({
@@ -129,9 +164,16 @@ class ModelClient:
 
         # Add provider-specific config
         if provider_name == "ollama":
-            # Use environment variable for Ollama URL (works in Docker)
-            ollama_base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+            ollama_base, ollama_key, is_cloud_route = _resolve_ollama_transport(model, provider)
             kwargs["api_base"] = ollama_base
+            if ollama_key:
+                kwargs["api_key"] = ollama_key
+            logger.info(
+                "Ollama routing: model=%s route=%s api_base=%s",
+                raw_model_id,
+                "cloud" if is_cloud_route else "local",
+                ollama_base,
+            )
         elif provider_name == "google":
             # DO NOT set api_base for Google/Gemini — litellm handles the URL
             # automatically when api_key is provided. Setting api_base causes
@@ -204,8 +246,6 @@ class ModelClient:
             )
 
         # Debug logging
-        import logging
-        logger = logging.getLogger(__name__)
         _key_hint = kwargs.get('api_key', '')[:8] if kwargs.get('api_key') else 'MISSING'
         if raw_model_id != effective_model_id:
             logger.info(f"Codex model alias normalized: {raw_model_id} -> {effective_model_id}")

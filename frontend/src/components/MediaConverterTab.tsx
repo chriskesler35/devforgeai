@@ -22,7 +22,10 @@ const MAX_FILE_BYTES = MAX_FILE_MB * 1024 * 1024
 const VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v', 'wmv', 'flv'])
 const IMAGE_EXTENSIONS = new Set(['heic', 'heif', 'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tiff', 'tif', 'gif'])
 
-const ACCEPTED_EXTENSIONS = [...VIDEO_EXTENSIONS, ...IMAGE_EXTENSIONS]
+const ACCEPTED_EXTENSIONS = [
+  ...Array.from(VIDEO_EXTENSIONS),
+  ...Array.from(IMAGE_EXTENSIONS),
+]
 const ACCEPT_ATTR = [
   ...Array.from(VIDEO_EXTENSIONS).map(e => `.${e}`),
   ...Array.from(IMAGE_EXTENSIONS).map(e => `.${e}`),

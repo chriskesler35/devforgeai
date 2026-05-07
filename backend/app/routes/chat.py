@@ -759,6 +759,7 @@ async def _stream_response(
                     workspace_root = Path(__file__).resolve().parents[3]
                     max_tool_rounds = _tool_loop_max_rounds()
                     call_timeout = _tool_loop_timeout_seconds()
+                    last_successful_tool_output = ""
 
                     for _ in range(max_tool_rounds):
                         resp_text, tool_calls, in_tok, out_tok = await asyncio.wait_for(
@@ -824,6 +825,10 @@ async def _stream_response(
                                 tc.get("arguments", {}) or {},
                                 workspace_root,
                             )
+                            if result.get("success"):
+                                tool_out = str(result.get("output", "")).strip()
+                                if tool_out:
+                                    last_successful_tool_output = tool_out
                             logger.info(
                                 "Streaming tool executed id=%s name=%s success=%s out_len=%d conv=%s",
                                 tc.get("id", ""),
@@ -842,7 +847,7 @@ async def _stream_response(
                             )
 
                     if tool_loop_used and not full_content:
-                        full_content = (
+                        full_content = last_successful_tool_output or (
                             "I executed tool calls but reached this request's tool-loop safety limit before producing "
                             "a final response. I can continue automatically on your next message."
                         )
@@ -1032,6 +1037,7 @@ async def _sync_response(
                 workspace_root = Path(__file__).resolve().parents[3]
                 max_tool_rounds = _tool_loop_max_rounds()
                 call_timeout = _tool_loop_timeout_seconds()
+                last_successful_tool_output = ""
 
                 for _ in range(max_tool_rounds):
                     resp_text, tool_calls, in_tok, out_tok = await asyncio.wait_for(
@@ -1097,6 +1103,10 @@ async def _sync_response(
                             tc.get("arguments", {}) or {},
                             workspace_root,
                         )
+                        if result.get("success"):
+                            tool_out = str(result.get("output", "")).strip()
+                            if tool_out:
+                                last_successful_tool_output = tool_out
                         logger.info(
                             "Sync tool executed id=%s name=%s success=%s out_len=%d conv=%s",
                             tc.get("id", ""),
@@ -1115,7 +1125,7 @@ async def _sync_response(
                         )
 
                 if tool_loop_used and not full_content:
-                    full_content = (
+                    full_content = last_successful_tool_output or (
                         "I executed tool calls but reached this request's tool-loop safety limit before producing "
                         "a final response. I can continue automatically on your next message."
                     )

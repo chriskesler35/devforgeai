@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     app_env: str = "development"
     modelmesh_api_key: str = "modelmesh_local_dev_key"
     ollama_base_url: str = "http://localhost:11434"
+    ollama_cloud_base_url: Optional[str] = None
+    ollama_cloud_api_key: Optional[str] = None
     model_routing_auto_enabled: bool = False
 
     # JWT auth (multi-user collaboration)

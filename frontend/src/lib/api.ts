@@ -85,6 +85,11 @@ class ApiClient {
     return this.request(`/v1/stats/usage?days=${days}`)
   }
 
+  async getUpdateStatus(force = false): Promise<import('./types').UpdateStatus> {
+    const q = force ? '?force=true' : ''
+    return this.request(`/v1/system/update-status${q}`)
+  }
+
   // Chat
   async chat(messages: Array<{ role: string; content: string }>, persona: string): Promise<string> {
     const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {

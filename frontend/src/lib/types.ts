@@ -146,3 +146,17 @@ export interface ConvertMediaResponse {
   source_path?: string;
   output_path?: string;
 }
+
+export interface UpdateStatus {
+  status: 'ok' | 'degraded' | 'unavailable';
+  checked_at: string;
+  update_available: boolean;
+  current_commit: string | null;
+  latest_commit: string | null;
+  branch: string | null;
+  remote: string | null;
+  compare_url: string | null;
+  error: string | null;
+  app_version?: string;
+  cached: boolean;
+}

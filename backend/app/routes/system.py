@@ -4,9 +4,10 @@ import os
 import sys
 import asyncio
 import time
+import subprocess
 from pathlib import Path
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from app.middleware.auth import verify_api_key
 from app.services.self_healing import self_healing
@@ -18,6 +19,9 @@ router = APIRouter(prefix="/v1/system", tags=["system"], dependencies=[Depends(v
 
 # Track startup time for uptime calculation
 _START_TIME = time.time()
+_UPDATE_STATUS_CACHE: dict | None = None
+_UPDATE_STATUS_CACHE_TS: float = 0.0
+_UPDATE_STATUS_CACHE_TTL_SECONDS = 300
 
 
 @router.get("/health")
@@ -52,6 +56,93 @@ async def rollback_to_snapshot(snapshot_name: str):
 
 def _root_dir() -> Path:
     return Path(__file__).parent.parent.parent.parent
+
+
+def _run_git(args: list[str]) -> tuple[int, str, str]:
+    """Run git command from repo root with short timeout."""
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(_root_dir()),
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        return proc.returncode, (proc.stdout or "").strip(), (proc.stderr or "").strip()
+    except Exception as exc:
+        return 1, "", str(exc)
+
+
+def _remote_web_url() -> str | None:
+    code, out, _err = _run_git(["config", "--get", "remote.origin.url"])
+    if code != 0 or not out:
+        return None
+    url = out.strip()
+    if url.startswith("git@github.com:"):
+        url = "https://github.com/" + url.split(":", 1)[1]
+    if url.endswith(".git"):
+        url = url[:-4]
+    return url if url.startswith("http") else None
+
+
+def _collect_update_status() -> dict:
+    code, current_commit, err = _run_git(["rev-parse", "HEAD"])
+    if code != 0 or not current_commit:
+        return {
+            "status": "unavailable",
+            "error": err or "Unable to determine current commit.",
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "update_available": False,
+            "current_commit": None,
+            "latest_commit": None,
+            "branch": None,
+            "remote": None,
+            "compare_url": None,
+        }
+
+    code, branch, _err = _run_git(["rev-parse", "--abbrev-ref", "HEAD"])
+    if code != 0 or not branch:
+        branch = "main"
+
+    latest_commit = None
+    for candidate in [branch, "main", "master"]:
+        code, out, _err = _run_git(["ls-remote", "--heads", "origin", candidate])
+        if code == 0 and out:
+            latest_commit = out.split()[0]
+            break
+
+    remote = _remote_web_url()
+    compare_url = None
+    if remote and latest_commit and current_commit and latest_commit != current_commit:
+        compare_url = f"{remote}/compare/{current_commit[:12]}...{latest_commit[:12]}"
+
+    return {
+        "status": "ok" if latest_commit else "degraded",
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "update_available": bool(latest_commit and latest_commit != current_commit),
+        "current_commit": current_commit,
+        "latest_commit": latest_commit,
+        "branch": branch,
+        "remote": remote,
+        "compare_url": compare_url,
+        "error": None if latest_commit else "Unable to read remote HEAD from origin.",
+        "app_version": "0.2.0",
+    }
+
+
+@router.get("/update-status")
+async def update_status(force: bool = False):
+    """Report whether a newer commit exists on origin for this branch."""
+    global _UPDATE_STATUS_CACHE, _UPDATE_STATUS_CACHE_TS
+
+    now = time.time()
+    if not force and _UPDATE_STATUS_CACHE and (now - _UPDATE_STATUS_CACHE_TS) < _UPDATE_STATUS_CACHE_TTL_SECONDS:
+        return {**_UPDATE_STATUS_CACHE, "cached": True}
+
+    status = _collect_update_status()
+    _UPDATE_STATUS_CACHE = status
+    _UPDATE_STATUS_CACHE_TS = now
+    return {**status, "cached": False}
 
 
 def _backend_port() -> int:

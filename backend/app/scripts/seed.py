@@ -189,6 +189,13 @@ async def seed():
                     is_active=True
                 ),
             ]
+
+            for model in models:
+                caps = dict(model.capabilities or {})
+                if caps.get("chat") or caps.get("completion") or caps.get("streaming"):
+                    caps.setdefault("tools", True)
+                    caps.setdefault("function_calling", True)
+                    model.capabilities = caps
             
             session.add_all(models)
             await session.commit()

@@ -1363,6 +1363,32 @@ export default function SettingsPage() {
     ollama: false,
     cloud: false,
   })
+  const [updateStatus, setUpdateStatus] = useState<import('@/lib/types').UpdateStatus | null>(null)
+  const [checkingUpdates, setCheckingUpdates] = useState(false)
+
+  const checkForUpdates = useCallback(async (force = false) => {
+    try {
+      setCheckingUpdates(true)
+      const status = await api.getUpdateStatus(force)
+      setUpdateStatus(status)
+    } catch (e) {
+      console.error('Failed to check update status:', e)
+      setUpdateStatus({
+        status: 'unavailable',
+        checked_at: new Date().toISOString(),
+        update_available: false,
+        current_commit: null,
+        latest_commit: null,
+        branch: null,
+        remote: null,
+        compare_url: null,
+        error: 'Could not check for updates.',
+        cached: false,
+      })
+    } finally {
+      setCheckingUpdates(false)
+    }
+  }, [])
 
   const saveProfile = async () => {
     if (!profile) return
@@ -1444,7 +1470,8 @@ export default function SettingsPage() {
       }
     }
     fetchData()
-  }, [])
+    checkForUpdates(false)
+  }, [checkForUpdates])
 
   const createMemoryFile = async (name: string) => {
     try {
@@ -1545,6 +1572,53 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
+
+      {updateStatus && (
+        <div className={`mb-6 rounded-lg border px-4 py-3 text-sm ${
+          updateStatus.update_available
+            ? 'border-amber-300 bg-amber-50 text-amber-900'
+            : updateStatus.status === 'ok'
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+            : 'border-gray-300 bg-gray-50 text-gray-700'
+        }`}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="font-semibold">
+                {updateStatus.update_available ? 'Update available' : 'You are up to date'}
+              </p>
+              <p className="text-xs mt-0.5 opacity-90">
+                {updateStatus.current_commit ? `Current: ${updateStatus.current_commit.slice(0, 12)}` : 'Current: unknown'}
+                {' · '}
+                {updateStatus.latest_commit ? `Latest: ${updateStatus.latest_commit.slice(0, 12)}` : 'Latest: unavailable'}
+                {updateStatus.branch ? ` · Branch: ${updateStatus.branch}` : ''}
+                {updateStatus.cached ? ' · cached' : ''}
+              </p>
+              {updateStatus.error && (
+                <p className="text-xs mt-1 opacity-90">{updateStatus.error}</p>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {updateStatus.compare_url && (
+                <a
+                  href={updateStatus.compare_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs px-2.5 py-1 rounded border border-current/30 hover:bg-white/40"
+                >
+                  View changes
+                </a>
+              )}
+              <button
+                onClick={() => checkForUpdates(true)}
+                disabled={checkingUpdates}
+                className="text-xs px-2.5 py-1 rounded border border-current/30 hover:bg-white/40 disabled:opacity-50"
+              >
+                {checkingUpdates ? 'Checking...' : 'Check now'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="border-b border-gray-200 mb-6">

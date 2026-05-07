@@ -86,7 +86,11 @@ async def seed_database(db: AsyncSession):
 
     model_map = {}
     for m in DEFAULT_MODELS:
-        model = Model(id=uuid.uuid4(), provider_id=provider_map[m["provider_id"]], model_id=m["model_id"], display_name=m["display_name"], cost_per_1m_input=m["cost_per_1m_input"], cost_per_1m_output=m["cost_per_1m_output"], context_window=m["context_window"], capabilities=m["capabilities"], is_active=True)
+        caps = dict(m.get("capabilities") or {})
+        if caps.get("chat") or caps.get("completion"):
+            caps.setdefault("tools", True)
+            caps.setdefault("function_calling", True)
+        model = Model(id=uuid.uuid4(), provider_id=provider_map[m["provider_id"]], model_id=m["model_id"], display_name=m["display_name"], cost_per_1m_input=m["cost_per_1m_input"], cost_per_1m_output=m["cost_per_1m_output"], context_window=m["context_window"], capabilities=caps, is_active=True)
         db.add(model)
         model_map[m["model_id"]] = model.id
 
