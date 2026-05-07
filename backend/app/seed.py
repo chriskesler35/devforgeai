@@ -23,12 +23,13 @@ DEFAULT_PROVIDERS = [
 ]
 
 DEFAULT_MODELS = [
-    # Ollama
-    {"provider_id": "ollama", "model_id": "llama3.1:8b", "display_name": "Llama 3.1 8B", "cost_per_1m_input": 0, "cost_per_1m_output": 0, "context_window": 128000, "capabilities": {"chat": True, "completion": True, "streaming": True}},
-    {"provider_id": "ollama", "model_id": "glm-5:cloud", "display_name": "GLM-5 Cloud", "cost_per_1m_input": 0, "cost_per_1m_output": 0, "context_window": 128000, "capabilities": {"chat": True, "completion": True, "streaming": True}},
-    {"provider_id": "ollama", "model_id": "qwen2.5-coder:14b", "display_name": "Qwen 2.5 Coder 14B", "cost_per_1m_input": 0, "cost_per_1m_output": 0, "context_window": 32768, "capabilities": {"chat": True, "completion": True, "streaming": True, "code": True}},
+    # Ollama models
+    {"provider_id": "ollama", "model_id": "llama3.1:8b", "display_name": "Llama 3.1 8B", "cost_per_1m_input": 0, "cost_per_1m_output": 0, "context_window": 128000, "capabilities": {"chat": True, "completion": True, "streaming": True, "tools": True, "function_calling": True}},
+    {"provider_id": "ollama", "model_id": "glm-5:cloud", "display_name": "GLM-5 Cloud", "cost_per_1m_input": 0, "cost_per_1m_output": 0, "context_window": 128000, "capabilities": {"chat": True, "completion": True, "streaming": True, "tools": True, "function_calling": True}},
+    {"provider_id": "ollama", "model_id": "qwen2.5-coder:14b", "display_name": "Qwen 2.5 Coder 14B", "cost_per_1m_input": 0, "cost_per_1m_output": 0, "context_window": 32768, "capabilities": {"chat": True, "completion": True, "streaming": True, "code": True, "tools": True, "function_calling": True}},
     {"provider_id": "ollama", "model_id": "comfyui-local", "display_name": "ComfyUI Local", "cost_per_1m_input": 0, "cost_per_1m_output": 0, "context_window": None, "capabilities": {"image_generation": True}},
-    # Anthropic
+    
+    # Anthropic models
     {"provider_id": "anthropic", "model_id": "claude-sonnet-4-6", "display_name": "Claude Sonnet 4.6", "cost_per_1m_input": 3.00, "cost_per_1m_output": 15.00, "context_window": 200000, "capabilities": {"chat": True, "completion": True, "streaming": True, "vision": True}},
     {"provider_id": "anthropic", "model_id": "claude-opus-4-6", "display_name": "Claude Opus 4.6", "cost_per_1m_input": 15.00, "cost_per_1m_output": 75.00, "context_window": 200000, "capabilities": {"chat": True, "completion": True, "streaming": True, "vision": True}},
     # Google

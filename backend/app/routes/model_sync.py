@@ -636,6 +636,10 @@ def infer_capabilities(model_name: str) -> dict:
         caps["code"] = True
     if any(x in name for x in ["embed", "nomic-embed", "mxbai-embed", "snowflake-arctic-embed"]):
         caps = {"embedding": True}  # embedding-only
+        return caps
+    # All Ollama models get full tool/function-calling access.
+    caps["tools"] = True
+    caps["function_calling"] = True
     return caps
 
 

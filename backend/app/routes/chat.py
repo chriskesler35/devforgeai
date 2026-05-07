@@ -56,6 +56,11 @@ def _tool_loop_timeout_seconds() -> int:
     return max(15, min(value, 300))
 
 
+def _model_supports_tools(model, provider) -> bool:
+    """All models — cloud and local — have full tool/function-calling access."""
+    return True
+
+
 def _can_connect_to_base_url(base_url: str | None, timeout: float = 0.35) -> bool:
     if not base_url:
         return False
@@ -748,7 +753,7 @@ async def _stream_response(
                 from app.services.command_executor import execute_tool_call
 
                 provider = await router_service._get_provider(primary_model.provider_id) if primary_model else None
-                if primary_model and provider:
+                if primary_model and provider and _model_supports_tools(primary_model, provider):
                     tool_schemas = get_tool_schemas(list(ALL_TOOLS))
                     loop_messages = list(msg_dicts)
                     workspace_root = Path(__file__).resolve().parents[3]
@@ -1021,7 +1026,7 @@ async def _sync_response(
             from app.services.command_executor import execute_tool_call
 
             provider = await router_service._get_provider(primary_model.provider_id) if primary_model else None
-            if primary_model and provider:
+            if primary_model and provider and _model_supports_tools(primary_model, provider):
                 tool_schemas = get_tool_schemas(list(ALL_TOOLS))
                 loop_messages = list(msg_dicts)
                 workspace_root = Path(__file__).resolve().parents[3]
