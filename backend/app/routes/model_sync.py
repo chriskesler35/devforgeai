@@ -637,23 +637,9 @@ def infer_capabilities(model_name: str) -> dict:
     if any(x in name for x in ["embed", "nomic-embed", "mxbai-embed", "snowflake-arctic-embed"]):
         caps = {"embedding": True}  # embedding-only
         return caps
-    # Ollama model families known to reliably support OpenAI-style function/tool calling.
-    # Only flag these — models without this flag skip the tool loop and chat normally.
-    _TOOL_CAPABLE = [
-        "llama3.1", "llama3.2", "llama3.3", "llama-3.1", "llama-3.2", "llama-3.3",
-        "llama4", "llama-4",
-        "qwen2.5", "qwen2-vl", "qwen3",
-        "mistral", "mixtral", "mistral-nemo",
-        "command-r",
-        "firefunction",
-        "hermes",
-        "functionary",
-        "nexusraven",
-        "granite3",
-    ]
-    if any(x in name for x in _TOOL_CAPABLE):
-        caps["tools"] = True
-        caps["function_calling"] = True
+    # All Ollama models get full tool/function-calling access.
+    caps["tools"] = True
+    caps["function_calling"] = True
     return caps
 
 

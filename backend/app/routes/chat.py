@@ -57,22 +57,7 @@ def _tool_loop_timeout_seconds() -> int:
 
 
 def _model_supports_tools(model, provider) -> bool:
-    """Return True only when it is safe to inject tool schemas into a request.
-
-    Cloud providers (Anthropic, OpenAI, Google, OpenRouter, …) support function
-    calling via their APIs, so we always enable the tool loop for them.
-
-    Local providers (Ollama, LM Studio, llama.cpp, …) vary widely.  Most models
-    don't properly handle OpenAI-style tool schemas and will loop endlessly
-    generating tool_calls without ever producing a final text answer.  We only
-    enable the tool loop for local models whose `capabilities` dict explicitly
-    includes ``"tools": True`` — set automatically for known-capable model
-    families during Ollama model sync.
-    """
-    provider_name = (getattr(provider, "name", "") or "").lower().strip()
-    if provider_name in _LOCAL_MODEL_PROVIDERS:
-        caps = getattr(model, "capabilities", None) or {}
-        return bool(caps.get("tools") or caps.get("function_calling"))
+    """All models — cloud and local — have full tool/function-calling access."""
     return True
 
 
