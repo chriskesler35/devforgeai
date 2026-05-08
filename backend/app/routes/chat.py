@@ -968,30 +968,43 @@ async def chat_completions(
             persona_id=persona.id,
             title=auto_title,
             last_message_at=datetime.now(timezone.utc),
-            message_count=len(request.messages),
+            message_count=0,
         )
         db.add(conv)
         await db.commit()
         logger.info(f"Chat created conversation {conversation_id[:8]}… title={auto_title!r}")
 
-    # 3. Route request
+    # 3. Persist latest user message early so it is not lost if the request is
+    # interrupted (tab refresh/new chat/navigation) before model completion.
+    latest_user_text = next((m.content for m in reversed(request.messages) if m.role == "user"), "")
+    user_saved_early = False
+    if latest_user_text:
+        user_saved_early = await _save_user_message_early(db, conversation_id, latest_user_text)
+
+    # 4. Route request
     router_service = Router(db, memory)
     
     if request.stream:
         return await _stream_response(
             router_service, persona, primary_model, fallback_model,
-            request, conversation_id, db, recovery_notice
+            request, conversation_id, db, recovery_notice,
+            latest_user_text=latest_user_text,
+            user_saved_early=user_saved_early,
         )
     else:
         return await _sync_response(
             router_service, persona, primary_model, fallback_model,
-            request, conversation_id, db, recovery_notice
+            request, conversation_id, db, recovery_notice,
+            latest_user_text=latest_user_text,
+            user_saved_early=user_saved_early,
         )
 
 
 async def _stream_response(
     router_service, persona, primary_model, fallback_model,
-    request, conversation_id, db, recovery_notice: str | None = None
+    request, conversation_id, db, recovery_notice: str | None = None,
+    latest_user_text: str = "",
+    user_saved_early: bool = False,
 ):
     """Handle streaming response."""
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
@@ -1060,6 +1073,7 @@ async def _stream_response(
             input_tokens = 0
             output_tokens = 0
 
+            provider = None
             try:
                 from app.services.tool_registry import get_tool_schemas, ALL_TOOLS
                 from app.services.command_executor import execute_tool_call
@@ -1193,7 +1207,7 @@ async def _stream_response(
                         from app.services.chat_commands.compact_conversation import compact_conversation
                         compact_notice = await compact_conversation(
                             conversation_id, db,
-                            model=primary_model, provider=primary_provider,
+                            model=primary_model, provider=provider,
                             force=True,
                         )
                         full_content = (
@@ -1277,14 +1291,25 @@ async def _stream_response(
                               primary_model.provider_id if primary_model else None,
                               input_tokens, output_tokens, latency_ms, True, None,
                               estimated_cost=estimated_cost)
-            await _update_conversation_meta(db, conversation_id)
-            # Persist messages to DB
-            user_text = next((m['content'] for m in reversed(msg_dicts) if m['role'] == 'user'), '')
-            if user_text and full_content:
-                await _save_messages(db, conversation_id, user_text, full_content,
-                                     model_id=primary_model.id if primary_model else None,
-                                     input_tokens=input_tokens, output_tokens=output_tokens,
-                                     latency_ms=latency_ms, estimated_cost=estimated_cost)
+            if full_content:
+                if user_saved_early:
+                    await _save_assistant_message(
+                        db,
+                        conversation_id,
+                        full_content,
+                        model_id=primary_model.id if primary_model else None,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        latency_ms=latency_ms,
+                        estimated_cost=estimated_cost,
+                    )
+                    await _update_conversation_meta(db, conversation_id, added_messages=1)
+                elif latest_user_text:
+                    await _save_messages(db, conversation_id, latest_user_text, full_content,
+                                         model_id=primary_model.id if primary_model else None,
+                                         input_tokens=input_tokens, output_tokens=output_tokens,
+                                         latency_ms=latency_ms, estimated_cost=estimated_cost)
+                    await _update_conversation_meta(db, conversation_id, added_messages=2)
 
         except Exception as e:
             logger.error(f"Streaming error: {e}")
@@ -1309,7 +1334,9 @@ async def _stream_response(
 
 async def _sync_response(
     router_service, persona, primary_model, fallback_model,
-    request, conversation_id, db, recovery_notice: str | None = None
+    request, conversation_id, db, recovery_notice: str | None = None,
+    latest_user_text: str = "",
+    user_saved_early: bool = False,
 ):
     """Handle synchronous response."""
     start_time = time.time()
@@ -1376,6 +1403,7 @@ async def _sync_response(
         tool_loop_used = False
 
         # Tool-execution loop: model -> tool_calls -> execute -> feed results -> model
+        provider = None
         try:
             from app.services.tool_registry import get_tool_schemas, ALL_TOOLS
             from app.services.command_executor import execute_tool_call
@@ -1509,7 +1537,7 @@ async def _sync_response(
                     from app.services.chat_commands.compact_conversation import compact_conversation
                     compact_notice = await compact_conversation(
                         conversation_id, db,
-                        model=primary_model, provider=primary_provider,
+                        model=primary_model, provider=provider,
                         force=True,
                     )
                     full_content = (
@@ -1683,14 +1711,25 @@ async def _sync_response(
                           primary_model.provider_id if primary_model else None,
                           input_tokens, output_tokens, latency_ms, True, None,
                           estimated_cost=estimated_cost)
-        await _update_conversation_meta(db, conversation_id)
-        # Persist messages to DB
-        user_text = next((m['content'] for m in reversed(msg_dicts) if m['role'] == 'user'), '')
-        if user_text and full_content:
-            await _save_messages(db, conversation_id, user_text, full_content,
-                                 model_id=primary_model.id if primary_model else None,
-                                 input_tokens=input_tokens, output_tokens=output_tokens,
-                                 latency_ms=latency_ms, estimated_cost=estimated_cost)
+        if full_content:
+            if user_saved_early:
+                await _save_assistant_message(
+                    db,
+                    conversation_id,
+                    full_content,
+                    model_id=primary_model.id if primary_model else None,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    latency_ms=latency_ms,
+                    estimated_cost=estimated_cost,
+                )
+                await _update_conversation_meta(db, conversation_id, added_messages=1)
+            elif latest_user_text:
+                await _save_messages(db, conversation_id, latest_user_text, full_content,
+                                     model_id=primary_model.id if primary_model else None,
+                                     input_tokens=input_tokens, output_tokens=output_tokens,
+                                     latency_ms=latency_ms, estimated_cost=estimated_cost)
+                await _update_conversation_meta(db, conversation_id, added_messages=2)
 
         return {
             "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
@@ -1854,6 +1893,154 @@ async def _save_messages(db, conversation_id: str, user_content: str, assistant_
 
     except Exception as e:
         logger.error(f"Failed to save messages for conv {conversation_id}: {e}", exc_info=True)
+
+
+async def _save_user_message_early(db, conversation_id: str, user_content: str) -> bool:
+    """Persist the latest user message early to survive interrupted requests."""
+    if not user_content:
+        return False
+    from app.database import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as fresh_db:
+            conv_str = str(conversation_id)
+            user_msg = Message(
+                conversation_id=conv_str,
+                role="user",
+                content=user_content,
+            )
+            fresh_db.add(user_msg)
+
+            conv = await fresh_db.get(Conversation, uuid.UUID(conv_str))
+            if conv:
+                conv.last_message_at = datetime.now(timezone.utc)
+                conv.message_count = (conv.message_count or 0) + 1
+
+            await fresh_db.commit()
+
+            # Check for @mentions and create notifications.
+            try:
+                from app.services.mentions import extract_mentions
+                from app.routes.collaboration import get_user_by_username
+                from app.models.notification import Notification
+                from app.services.ws_manager import manager
+
+                mentioned_usernames = extract_mentions(user_content)
+                for username in mentioned_usernames:
+                    target_user = get_user_by_username(username)
+                    if not target_user:
+                        continue
+                    target_id = target_user.get("id", "")
+                    preview = user_content[:120] + ("…" if len(user_content) > 120 else "")
+                    notif = Notification(
+                        user_id=target_id,
+                        type="mention",
+                        title="You were mentioned in a conversation",
+                        message=preview,
+                        conversation_id=conv_str,
+                        message_id=str(user_msg.id),
+                    )
+                    fresh_db.add(notif)
+                    try:
+                        import asyncio as _ws_asyncio
+                        _ws_asyncio.create_task(manager.send_to_user(target_id, {
+                            "type": "notification",
+                            "payload": notif.to_dict(),
+                        }))
+                    except Exception:
+                        pass
+
+                if mentioned_usernames:
+                    await fresh_db.commit()
+            except Exception as mention_err:
+                logger.warning(f"Mention processing failed (non-fatal): {mention_err}")
+
+            logger.info(f"Saved early user message for conv {conversation_id[:8]}")
+            return True
+    except Exception as e:
+        logger.warning(f"Failed to save early user message for conv {conversation_id}: {e}")
+        return False
+
+
+async def _save_assistant_message(
+    db,
+    conversation_id: str,
+    assistant_content: str,
+    *,
+    model_id=None,
+    input_tokens=0,
+    output_tokens=0,
+    latency_ms=0,
+    estimated_cost=0.0,
+) -> bool:
+    """Persist assistant message when user message was already saved earlier."""
+    if not assistant_content:
+        return False
+    from app.database import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as fresh_db:
+            conv_str = str(conversation_id)
+            model_str = str(model_id) if model_id else None
+            asst_msg = Message(
+                conversation_id=conv_str,
+                role="assistant",
+                content=assistant_content,
+                model_used=model_str,
+                tokens_in=input_tokens,
+                tokens_out=output_tokens,
+                latency_ms=latency_ms,
+                estimated_cost=estimated_cost,
+            )
+            fresh_db.add(asst_msg)
+            await fresh_db.commit()
+
+            # Write context snapshot + periodic distillation/preference detection.
+            try:
+                from sqlalchemy import select as _select
+                from app.models import Message as _Msg, Conversation as _Conv
+                from app.services.context_snapshot import write_snapshot, maybe_distill_memory
+
+                conv = await fresh_db.get(_Conv, uuid.UUID(conv_str))
+                title = conv.title if conv else ""
+
+                all_msgs_result = await fresh_db.execute(
+                    _select(_Msg)
+                    .where(_Msg.conversation_id == conv_str)
+                    .order_by(_Msg.created_at)
+                )
+                all_msgs = all_msgs_result.scalars().all()
+                msg_dicts = [{"role": m.role, "content": m.content} for m in all_msgs]
+
+                model_name = None
+                if model_id:
+                    from app.models import Model as _Model
+                    m_obj = await fresh_db.get(_Model, model_id)
+                    model_name = m_obj.model_id if m_obj else str(model_id)
+
+                write_snapshot(
+                    conversation_id=conv_str,
+                    title=title or "",
+                    messages=msg_dicts,
+                    model_name=model_name or "",
+                )
+
+                import asyncio as _asyncio
+                _asyncio.create_task(maybe_distill_memory(
+                    conversation_id=conv_str,
+                    messages=msg_dicts,
+                    model_name=model_name or "",
+                    message_count=len(all_msgs),
+                ))
+
+                if len(all_msgs) > 0 and len(all_msgs) % 10 == 0:
+                    _asyncio.create_task(_maybe_detect_preferences(msg_dicts[-20:]))
+            except Exception as snap_err:
+                logger.warning(f"Snapshot write failed (non-fatal): {snap_err}")
+
+            logger.info(f"Saved assistant message for conv {conversation_id[:8]}")
+            return True
+    except Exception as e:
+        logger.warning(f"Failed to save assistant message for conv {conversation_id}: {e}")
+        return False
 
 
 async def _maybe_detect_preferences(messages: list[dict]):

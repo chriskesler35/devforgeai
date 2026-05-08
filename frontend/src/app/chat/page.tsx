@@ -158,7 +158,7 @@ function renderMarkdown(text: string): string {
 function Sidebar({
   conversations, activeId, onSelect, onNew, onDelete, onPin, onKeepForever, onRename,
   personas, selectedPersonaId, onPersonaChange, models, selectedModelId, onModelChange,
-  searchQuery, onSearchChange, collapsed, onToggle, width, onWidthChange
+  searchQuery, onSearchChange, collapsed, onToggle, width, onWidthChange, disableNew
 }: {
   conversations: Conversation[]
   activeId: string | null
@@ -180,6 +180,7 @@ function Sidebar({
   onToggle: () => void
   width: number
   onWidthChange: (w: number) => void
+  disableNew: boolean
 }) {
   const [dragging, setDragging] = useState(false)
 
@@ -259,7 +260,9 @@ function Sidebar({
           </Link>
           <button
             onClick={onNew}
-            className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium transition-colors"
+            disabled={disableNew}
+            className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg bg-orange-500 hover:bg-orange-600 disabled:bg-orange-300 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
+            title={disableNew ? 'Please wait for the current reply to finish.' : undefined}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -2331,6 +2334,7 @@ export default function ChatPage() {
 
   // ── New chat ──────────────────────────────────────────────────────────────
   const newChat = () => {
+    if (loading) return
     // Just clear local state — conversation is created on first message, not before
     setActiveConvId(null)
     setMessages([])
@@ -2990,6 +2994,7 @@ export default function ChatPage() {
         onToggle={() => setSidebarCollapsed(p => !p)}
         width={sidebarWidth}
         onWidthChange={setSidebarWidth}
+        disableNew={loading}
       />
 
       {/* Main chat area */}
