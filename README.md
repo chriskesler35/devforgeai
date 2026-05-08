@@ -174,6 +174,12 @@ python devforgeai.py start
 - ✅ Ollama model re-sync (any newly pulled models appear automatically)
 - ✅ Default memory files created if missing
 
+**Ollama-specific update notes:**
+- Update if you use Ollama-routed tool calls. Recent builds fixed cases where some models could return raw tool-call JSON when the response hit a low token cap.
+- Long conversations now auto-compact on context overflow, and `/compact` is available if you want to trim history manually before retrying.
+- VRAM fit checks are stricter now. If a local Ollama model is rejected, that usually means it genuinely does not fit in currently available GPU memory.
+- Remote Ollama is supported too. Set `OLLAMA_BASE_URL` to the remote server's reachable HTTP address and expect some added latency and network sensitivity compared with local Ollama.
+
 **What is never touched by a pull - your data is safe:**
 - ✅ `backend/.env` - your API keys stay intact
 - ✅ `data/` folder - images, snapshots, identity files, database all preserved
@@ -189,6 +195,9 @@ python devforgeai.py start
 | `address already in use :19001` | Old backend still running | Kill the old process then restart |
 | `address already in use :3001` | Old frontend still running | Kill the old process then restart |
 | Blank page or 404 in browser | Stale webpack cache | Restart `npm run dev` (cache auto-clears on start) |
+| Ollama models missing or offline after restart | Ollama is not reachable from the backend | Verify `OLLAMA_BASE_URL`; test `curl http://localhost:11434/api/tags`; if using Docker set `OLLAMA_BASE_URL=http://host.docker.internal:11434` |
+| Raw tool-call JSON appears in chat | Older build hit tool-call truncation on some Ollama-routed models | Run `python devforgeai.py sync`, restart, and retry on the latest build |
+| Local model is rejected before it runs | Model does not fit current free VRAM | Free GPU memory, choose a smaller model, or use a cloud fallback |
 
 > **Self-healing:** The frontend automatically clears stale caches on startup. If a page crashes at runtime, error boundaries catch it and attempt auto-recovery before showing a manual retry UI — you should never see a blank white page.
 
@@ -311,6 +320,16 @@ TELEGRAM_CHAT_IDS=
 ## Remote Access
 
 DevForgeAI automatically works from any device on your network. The frontend detects the backend URL from the browser's hostname — no config needed.
+
+### Remote Ollama
+
+You can also use an Ollama server running on another machine. From DevForgeAI's perspective this still behaves like Ollama, just over the network.
+
+- Set `OLLAMA_BASE_URL` to the remote server, for example `http://192.168.1.50:11434`
+- Prefer a private network path such as LAN, Tailscale, or VPN
+- Test `http://YOUR-OLLAMA-HOST:11434/api/tags` from the machine running DevForgeAI before troubleshooting the UI
+- Expect higher latency and occasional network-related failures compared with local Ollama
+- Any VRAM-related model fit limits are determined by the remote Ollama server's hardware
 
 ### How it works
 

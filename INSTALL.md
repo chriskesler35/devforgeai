@@ -141,6 +141,38 @@ OPENAI_API_KEY=sk-...
 OLLAMA_BASE_URL=http://localhost:11434
 ```
 
+### Ollama gotchas before first launch
+
+- DevForgeAI does not start Ollama for you. Make sure the Ollama app or daemon is already running before starting DevForgeAI.
+- Confirm the endpoint responds before blaming the app:
+  ```bash
+  curl http://localhost:11434/api/tags
+  ```
+- If DevForgeAI is running in Docker or another containerized environment, `localhost` points at the container, not your host machine. In that case set `OLLAMA_BASE_URL=http://host.docker.internal:11434`.
+- If you use Ollama on another machine, point `OLLAMA_BASE_URL` at that server instead, for example `http://192.168.1.50:11434` or a private Tailscale address.
+- Some local models simply will not fit in available VRAM. DevForgeAI now guards against loading models that exceed free memory and may reject them or fall back to another model instead of hanging the request.
+- Very long chats can exceed a model's context window. Current builds auto-compact the conversation and you can also run `/compact` manually.
+- If a tool-using model ever prints raw tool-call JSON instead of actually doing the work, update to the latest build and run `python devforgeai.py sync`. Older builds could truncate large tool-call payloads on some Ollama-routed models.
+
+### Remote Ollama
+
+Remote Ollama works the same at the API level as local Ollama. DevForgeAI can still discover models, send chat requests, and stream responses as long as the remote server exposes the normal Ollama HTTP API.
+
+What changes when you go remote:
+- `OLLAMA_BASE_URL` must point to the remote machine, not `localhost`
+- latency is higher, so streaming and tool-heavy tasks may feel slower
+- failures become network-sensitive, so a dropped connection looks like provider downtime
+- VRAM fit depends on the remote server's GPU, not the client machine running DevForgeAI
+
+Recommended setup:
+- keep the Ollama endpoint on a private network, VPN, or Tailscale instead of exposing it directly to the public internet
+- if you must expose it, put it behind a reverse proxy and access control
+- test reachability from the same machine that runs DevForgeAI:
+  ```bash
+  curl http://YOUR-OLLAMA-HOST:11434/api/tags
+  ```
+- then set `OLLAMA_BASE_URL` to that exact reachable address
+
 **Full `.env` reference:**
 
 | Variable | Default | Description |
@@ -316,6 +348,17 @@ open http://localhost:19000  # API
 ---
 
 ## Troubleshooting
+
+### Ollama connection and model gotchas
+
+| Problem | What it usually means | What to do |
+|---|---|---|
+| Ollama models do not appear in the app | Ollama is not reachable from the backend | Verify `OLLAMA_BASE_URL`, then run `curl http://localhost:11434/api/tags` on the same machine that runs the backend |
+| `connection refused` / `failed to connect to Ollama` | Ollama is not running, wrong port, or wrong host | Start Ollama and confirm it is listening on `11434`; if backend is in Docker use `host.docker.internal` instead of `localhost` |
+| Model shows up but requests fail immediately | The model may not fit into available VRAM/RAM | Pull a smaller model, free GPU memory, or pick a cloud model fallback |
+| Long chat suddenly stops answering or says the context is too long | The conversation exceeded the active model's context window | Use `/compact` or continue after the automatic compaction message; older builds may require starting a new conversation |
+| Model returns raw JSON that looks like a tool call | The tool-call response was truncated before the parser could execute it | Update to the latest DevForgeAI build and run `python devforgeai.py sync`, then restart |
+| Ollama works on host but not from Docker | Container cannot reach the host's `localhost` | Set `OLLAMA_BASE_URL=http://host.docker.internal:11434` |
 
 ### "python: command not found" / "python3: command not found"
 - Install Python 3.11+ from https://www.python.org/downloads/
