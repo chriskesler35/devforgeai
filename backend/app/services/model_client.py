@@ -56,6 +56,8 @@ def _resolve_ollama_transport(model: Model, provider: Provider) -> tuple[str, Op
 # Real model IDs that the Copilot/Codex API exposes directly.
 # These must NOT be remapped — they are distinct live models, not aliases.
 _REAL_VERSIONED_MODEL_IDS: frozenset[str] = frozenset({
+    "gpt-5",
+    "gpt-5-mini",
     "gpt-5.2",
     "gpt-5.2-codex",
     "gpt-5.3-codex",
@@ -63,6 +65,9 @@ _REAL_VERSIONED_MODEL_IDS: frozenset[str] = frozenset({
     "gpt-5.4-mini",
     "gpt-5.5",
     "gpt-5.5-pro",
+    "o3",
+    "o4-mini",
+    "codex-mini-latest",
 })
 
 
@@ -216,6 +221,9 @@ class ModelClient:
             kwargs["api_key"] = copilot_token
             # Add Copilot-specific headers
             kwargs["extra_headers"] = get_copilot_headers()
+            # Reasoning and Codex-family models reject temperature on Copilot too
+            if codex_proxy_rejects_temperature(effective_model_id):
+                kwargs.pop("temperature", None)
         elif provider.api_base_url and provider_name not in ("anthropic",):
             kwargs["api_base"] = provider.api_base_url
 

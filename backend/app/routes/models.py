@@ -673,3 +673,65 @@ async def list_models_by_provider(
     models = result.scalars().all()
     
     return ModelList(data=models, total=len(models), limit=limit, offset=offset, has_more=False)
+
+
+@router.delete("/provider/{provider_name}")
+async def delete_provider(
+    provider_name: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove all models for a provider and mark the provider inactive.
+
+    Persona and agent references to deleted models are set to NULL so
+    existing configurations are not hard-broken — they simply lose the
+    model assignment and can be re-configured by the user.
+    """
+    from sqlalchemy import delete as sa_delete, update as sa_update
+    from app.models import Persona
+    from app.models.agent import Agent
+
+    result = await db.execute(
+        select(Provider).where(Provider.name == provider_name.lower().strip())
+    )
+    provider = result.scalar_one_or_none()
+    if not provider:
+        raise HTTPException(status_code=404, detail=f"Provider '{provider_name}' not found")
+
+    models_result = await db.execute(
+        select(Model.id).where(Model.provider_id == provider.id)
+    )
+    model_ids = [row[0] for row in models_result.all()]
+
+    if model_ids:
+        # Nullify persona model references so personas remain usable
+        await db.execute(
+            sa_update(Persona)
+            .where(Persona.primary_model_id.in_(model_ids))
+            .values(primary_model_id=None)
+        )
+        await db.execute(
+            sa_update(Persona)
+            .where(Persona.fallback_model_id.in_(model_ids))
+            .values(fallback_model_id=None)
+        )
+        # Nullify agent model references
+        await db.execute(
+            sa_update(Agent)
+            .where(Agent.model_id.in_(model_ids))
+            .values(model_id=None)
+        )
+        await db.execute(sa_delete(Model).where(Model.provider_id == provider.id))
+
+    provider.is_active = False
+    await db.commit()
+
+    logger.info(
+        "Provider '%s' removed: %d model(s) deleted, provider marked inactive",
+        provider_name,
+        len(model_ids),
+    )
+    return {
+        "status": "removed",
+        "provider": provider_name,
+        "models_deleted": len(model_ids),
+    }

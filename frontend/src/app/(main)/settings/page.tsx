@@ -770,7 +770,7 @@ function ApiKeysTab() {
             </div>
             {runtimeStatus.github_copilot.has_token && runtimeStatus.github_copilot.has_copilot_scope === false && (
               <div className="mt-3 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
-                <strong>Limited model access:</strong> Your GitHub token is missing the <code>copilot</code> scope, so only basic GPT models are available. Click <strong>Reconnect GitHub OAuth</strong> below to re-authorize and unlock the full catalog (Claude, Gemini, o3, etc.).
+                <strong>Limited model access:</strong> Your GitHub token is missing the <code>copilot</code> scope, so only basic GPT models are currently live-verified. Click <strong>Sign in to Copilot (device flow)</strong> below — that is the only flow that can grant this scope and unlock the full catalog (Claude, Gemini, o3, etc.).
               </div>
             )}
             <div className="mt-3 flex flex-wrap gap-2">

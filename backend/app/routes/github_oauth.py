@@ -377,7 +377,9 @@ async def copilot_device_start():
         r = await client.post(
             GITHUB_DEVICE_CODE_URL,
             headers={"Accept": "application/json"},
-            data={"client_id": COPILOT_OAUTH_CLIENT_ID, "scope": "read:user"},
+            # copilot scope is required for /copilot_internal/v2/token exchange,
+            # which unlocks the full model catalog (Claude, Gemini, o3, etc.).
+            data={"client_id": COPILOT_OAUTH_CLIENT_ID, "scope": "read:user copilot"},
         )
     if r.status_code != 200:
         raise HTTPException(status_code=502, detail=f"GitHub device-code request failed: {r.status_code} {r.text[:200]}")
@@ -417,6 +419,13 @@ async def copilot_device_poll(body: DevicePollBody):
         raise HTTPException(status_code=502, detail=f"Unexpected device-flow response: {r.text[:200]}")
     # Reuse the existing storage path; this is a real GitHub user OAuth token.
     result = await github_vscode_token(VscodeTokenBody(access_token=access_token))
+    result = await github_vscode_token(VscodeTokenBody(access_token=access_token))
+    # Invalidate the Copilot session token cache so the next request immediately
+    # tries to exchange the new token rather than reusing a stale entry.
+    from app.services.github_copilot import _SESSION_TOKEN_CACHE
+    _SESSION_TOKEN_CACHE.clear()
+    from app.services.github_copilot import _TOKEN_CACHE
+    _TOKEN_CACHE.clear()
     return {"status": "ok", "user": result.get("user")}
 
 
@@ -500,6 +509,24 @@ async def github_vscode_token(body: VscodeTokenBody):
 
     safe_user = {k: v for k, v in user.items() if k not in ("password_hash", "github_token")}
     return {"ok": True, "user": safe_user}
+
+
+@router.post("/vscode-token")
+async def github_vscode_token_route(body: VscodeTokenBody):
+    """Accept a GitHub token from the VS Code extension or any external caller.
+
+    VS Code's built-in GitHub Auth provider issues tokens that already carry
+    the ``github.copilot`` scope, which is required for the full Copilot model
+    catalog.  This route lets the VS Code extension bridge that token into the
+    backend without going through the web OAuth flow.
+    """
+    result = await github_vscode_token(body)
+    # Invalidate stale session token cache so the new token is used immediately.
+    from app.services.github_copilot import _SESSION_TOKEN_CACHE
+    _SESSION_TOKEN_CACHE.clear()
+    from app.services.github_copilot import _TOKEN_CACHE
+    _TOKEN_CACHE.clear()
+    return result
 
 
 def _now_iso() -> str:

@@ -186,6 +186,8 @@ export default function ModelsPage() {
   const [catalogValidating, setCatalogValidating] = useState(false)
   const [catalogValidationResult, setCatalogValidationResult] = useState<CatalogValidationResult | null>(null)
   const [showReviewSection, setShowReviewSection] = useState(false)
+  const [confirmRemoveProvider, setConfirmRemoveProvider] = useState<string | null>(null)
+  const [removingProvider, setRemovingProvider] = useState(false)
   const [expandedValidatedProviders, setExpandedValidatedProviders] = useState<Record<string, boolean>>({})
   const [expandedReviewProviders, setExpandedReviewProviders] = useState<Record<string, boolean>>({})
   const [formData, setFormData] = useState<{
@@ -599,6 +601,30 @@ export default function ModelsPage() {
     }
   }
 
+  const handleRemoveProvider = async (providerName: string) => {
+    setRemovingProvider(true)
+    try {
+      const res = await fetch(`${API_BASE}/v1/models/provider/${encodeURIComponent(providerName)}`, {
+        method: 'DELETE',
+        headers: AUTH_HEADERS,
+      })
+      if (res.ok) {
+        setConfirmRemoveProvider(null)
+        await fetchModels()
+        await fetchSyncStatus()
+        await fetchRuntimeStatus()
+      } else {
+        const data = await res.json().catch(() => ({}))
+        alert(data.detail || 'Failed to remove provider')
+      }
+    } catch (e) {
+      console.error('Failed to remove provider:', e)
+      alert('Failed to remove provider')
+    } finally {
+      setRemovingProvider(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[50vh]">
@@ -651,13 +677,13 @@ export default function ModelsPage() {
 
           return (
             <div key={provider} className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
-              <button
-                type="button"
-                onClick={() => setExpandedProviders((prev) => ({ ...prev, [provider]: !isExpanded }))}
-                aria-expanded={isExpanded}
-                className="flex w-full items-center justify-between gap-4 px-4 py-4 text-left hover:bg-gray-50 dark:hover:bg-gray-700 sm:px-6"
-              >
-                <div className="flex items-center gap-3">
+              <div className="flex w-full items-center gap-2 px-4 py-4 hover:bg-gray-50 dark:hover:bg-gray-700 sm:px-6">
+                <button
+                  type="button"
+                  onClick={() => setExpandedProviders((prev) => ({ ...prev, [provider]: !isExpanded }))}
+                  aria-expanded={isExpanded}
+                  className="flex flex-1 items-center gap-3 text-left"
+                >
                   <span className="text-sm text-gray-500 dark:text-gray-400">{isExpanded ? '▾' : '▸'}</span>
                   <div>
                     <h2 className="text-lg font-medium text-gray-900 dark:text-white capitalize">{provider}</h2>
@@ -665,11 +691,41 @@ export default function ModelsPage() {
                       {providerModels.length} {providerModels.length === 1 ? 'model' : 'models'}
                     </p>
                   </div>
+                  <span className="ml-4 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                    {isExpanded ? 'Collapse' : 'Expand'}
+                  </span>
+                </button>
+                <div className="flex shrink-0 items-center gap-2 ml-2">
+                  {confirmRemoveProvider === provider ? (
+                    <>
+                      <span className="text-xs text-red-600 dark:text-red-400 whitespace-nowrap">
+                        Remove {providerModels.length} model{providerModels.length !== 1 ? 's' : ''}?
+                      </span>
+                      <button
+                        onClick={() => handleRemoveProvider(provider)}
+                        disabled={removingProvider}
+                        className="rounded px-2 py-1 text-xs font-medium bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+                      >
+                        {removingProvider ? 'Removing…' : 'Confirm'}
+                      </button>
+                      <button
+                        onClick={() => setConfirmRemoveProvider(null)}
+                        disabled={removingProvider}
+                        className="rounded px-2 py-1 text-xs font-medium border border-gray-300 text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700 disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={() => setConfirmRemoveProvider(provider)}
+                      className="rounded px-2 py-1 text-xs font-medium text-red-500 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20"
+                    >
+                      Remove
+                    </button>
+                  )}
                 </div>
-                <span className="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
-                  {isExpanded ? 'Collapse' : 'Expand'}
-                </span>
-              </button>
+              </div>
 
               {isExpanded && (
                 <div className="border-t border-gray-200 dark:border-gray-700">

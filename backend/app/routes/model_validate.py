@@ -207,7 +207,11 @@ async def validate_model_config(model_id: str, provider: str) -> dict:
             if catalog_model:
                 is_viable, viability_warning, _ = get_catalog_model_viability(catalog_model)
                 if is_viable:
-                    if catalog_source in {"provider_api", "codex_proxy"}:
+                    # A model tagged _from_static_catalog was appended from our curated
+                    # fallback list during a live-API merge; treat it as catalog-matched
+                    # rather than fully live-verified so the inference probe still runs.
+                    is_static_appendage = catalog_model.get("_from_static_catalog", False)
+                    if catalog_source in {"provider_api", "codex_proxy"} and not is_static_appendage:
                         probe_valid = True
                         source = "catalog_probe"
                         warning = None
@@ -267,7 +271,18 @@ async def validate_model_config(model_id: str, provider: str) -> dict:
                     kwargs["api_base"] = get_codex_proxy_base_url()
                     kwargs["api_key"] = get_codex_proxy_api_key()
                 elif api_key:
-                    kwargs["api_key"] = api_key
+                    # Codex-specific model IDs (gpt-5, codex-mini-latest, o4-mini, etc.)
+                    # do not exist on the regular OpenAI API — a direct call will 404,
+                    # which would incorrectly mark the model as invalid. Skip the live
+                    # probe and let catalog/DB validation stand instead.
+                    if not warning:
+                        warning = (
+                            "Codex OAuth proxy is not running. "
+                            "This model is valid and credentials are configured, "
+                            "but live inference requires the Codex OAuth proxy."
+                        )
+                    # Intentionally omit api_key from kwargs so the generic probe
+                    # gate below skips the litellm call.
                 else:
                     warning = (
                         get_codex_proxy_configuration_issue()
@@ -282,10 +297,32 @@ async def validate_model_config(model_id: str, provider: str) -> dict:
                         probe_valid = True
                         source = "api_probe"
                     else:
-                        probe_valid = False
-                        warning = (
-                            "This model is not exposed by the live GitHub Copilot catalog for the current token."
-                        )
+                        # Model list membership can miss valid models when the
+                        # token lacks the full copilot scope, or when the stored
+                        # model ID differs slightly from the live catalog ID.
+                        # Confirm with a real minimal inference call before
+                        # declaring the model invalid.
+                        try:
+                            await litellm.acompletion(
+                                model=f"openai/{model_id}",
+                                messages=[{"role": "user", "content": "Hi"}],
+                                max_tokens=1,
+                                stream=False,
+                                api_base=COPILOT_API_BASE,
+                                api_key=copilot_token,
+                                extra_headers=get_copilot_headers(),
+                            )
+                            probe_valid = True
+                            source = "api_probe"
+                        except litellm.exceptions.NotFoundError:
+                            probe_valid = False
+                            warning = (
+                                "This model is not exposed by the live GitHub Copilot catalog for the current token."
+                            )
+                        except Exception:
+                            # Any other error (rate limit, auth) — leave probe_valid
+                            # as None so catalog/DB result drives validity.
+                            warning = "GitHub Copilot model could not be live-verified; valid based on catalog."
                 else:
                     warning = "GitHub Copilot is not connected — cannot live-verify"
             elif provider == "openrouter":

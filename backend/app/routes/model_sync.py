@@ -77,17 +77,58 @@ PROVIDER_DEFAULT_MODELS: dict[str, list[dict]] = {
         {"model_id": "openrouter/auto",              "display_name": "OpenRouter Auto",       "input":  0,    "output":  0,    "ctx": 200000, "caps": {"chat": True, "streaming": True}},
     ],
     "openai-codex": [
-        {"model_id": "gpt-5",               "display_name": "GPT-5 (Codex OAuth)",         "input":  1.25, "output": 10.00, "ctx": 400000, "caps": {"chat": True, "streaming": True, "code": True}},
-        {"model_id": "gpt-5-mini",          "display_name": "GPT-5 Mini (Codex OAuth)",    "input":  0.25, "output":  2.00, "ctx": 400000, "caps": {"chat": True, "streaming": True, "code": True}},
-        {"model_id": "gpt-4.1",             "display_name": "GPT-4.1 (Codex OAuth)",       "input":  2.00, "output":  8.00, "ctx": 128000, "caps": {"chat": True, "vision": True, "streaming": True, "code": True}},
-        {"model_id": "o4-mini",             "display_name": "o4 Mini (Codex OAuth)",       "input":  1.10, "output":  4.40, "ctx": 200000, "caps": {"chat": True, "streaming": True, "code": True}},
-        {"model_id": "codex-mini-latest",   "display_name": "Codex Mini Latest",            "input":  1.50, "output":  6.00, "ctx": 200000, "caps": {"chat": True, "streaming": True, "code": True}},
+        # GPT-5 family (versioned IDs exposed directly by the Codex / OpenAI API)
+        {"model_id": "gpt-5",               "display_name": "GPT-5",                       "input":  1.25, "output": 10.00, "ctx": 400000, "caps": {"chat": True, "streaming": True, "code": True}},
+        {"model_id": "gpt-5-mini",          "display_name": "GPT-5 Mini",                  "input":  0.25, "output":  2.00, "ctx": 400000, "caps": {"chat": True, "streaming": True, "code": True}},
+        {"model_id": "gpt-5.2",             "display_name": "GPT-5.2",                     "input":  1.25, "output": 10.00, "ctx": 400000, "caps": {"chat": True, "streaming": True, "code": True}},
+        {"model_id": "gpt-5.2-codex",       "display_name": "GPT-5.2 Codex",              "input":  1.50, "output":  6.00, "ctx": 200000, "caps": {"chat": True, "streaming": True, "code": True}},
+        {"model_id": "gpt-5.3-codex",       "display_name": "GPT-5.3 Codex",              "input":  1.50, "output":  6.00, "ctx": 200000, "caps": {"chat": True, "streaming": True, "code": True}},
+        {"model_id": "gpt-5.4",             "display_name": "GPT-5.4",                     "input":  2.00, "output":  8.00, "ctx": 400000, "caps": {"chat": True, "streaming": True, "code": True}},
+        {"model_id": "gpt-5.4-mini",        "display_name": "GPT-5.4 Mini",               "input":  0.40, "output":  1.60, "ctx": 400000, "caps": {"chat": True, "streaming": True, "code": True}},
+        {"model_id": "gpt-5.5",             "display_name": "GPT-5.5",                     "input":  2.50, "output": 10.00, "ctx": 400000, "caps": {"chat": True, "vision": True, "streaming": True, "code": True}},
+        {"model_id": "gpt-5.5-pro",         "display_name": "GPT-5.5 Pro",                "input":  5.00, "output": 20.00, "ctx": 400000, "caps": {"chat": True, "vision": True, "streaming": True, "code": True}},
+        # GPT-4.x
+        {"model_id": "gpt-4.1",             "display_name": "GPT-4.1",                     "input":  2.00, "output":  8.00, "ctx": 128000, "caps": {"chat": True, "vision": True, "streaming": True, "code": True}},
+        {"model_id": "gpt-4.1-mini",        "display_name": "GPT-4.1 Mini",               "input":  0.40, "output":  1.60, "ctx": 128000, "caps": {"chat": True, "streaming": True, "code": True}},
+        {"model_id": "gpt-4o",              "display_name": "GPT-4o",                      "input":  2.50, "output": 10.00, "ctx": 128000, "caps": {"chat": True, "vision": True, "streaming": True}},
+        # Reasoning / o-series
+        {"model_id": "o4-mini",             "display_name": "o4 Mini",                     "input":  1.10, "output":  4.40, "ctx": 200000, "caps": {"chat": True, "streaming": True, "code": True}},
+        {"model_id": "o3",                  "display_name": "o3",                          "input": 10.00, "output": 40.00, "ctx": 200000, "caps": {"chat": True, "streaming": True, "code": True}},
+        {"model_id": "o3-mini",             "display_name": "o3 Mini",                     "input":  1.10, "output":  4.40, "ctx": 200000, "caps": {"chat": True, "streaming": True}},
+        # Codex-specific
+        {"model_id": "codex-mini-latest",   "display_name": "Codex Mini Latest",           "input":  1.50, "output":  6.00, "ctx": 200000, "caps": {"chat": True, "streaming": True, "code": True}},
     ],
     "github-copilot": [
-        {"model_id": "gpt-4o",                 "display_name": "GPT-4o (GitHub Copilot)",        "input": 0.0, "output": 0.0, "ctx": 128000, "caps": {"chat": True, "vision": True, "streaming": True, "code": True}},
-        {"model_id": "gpt-4.1",                "display_name": "GPT-4.1 (GitHub Copilot)",       "input": 0.0, "output": 0.0, "ctx": 128000, "caps": {"chat": True, "streaming": True, "code": True}},
-        {"model_id": "claude-3.5-sonnet",      "display_name": "Claude 3.5 Sonnet (Copilot)",    "input": 0.0, "output": 0.0, "ctx": 200000, "caps": {"chat": True, "vision": True, "streaming": True, "code": True}},
-        {"model_id": "gemini-2.0-flash-001",   "display_name": "Gemini 2.0 Flash (Copilot)",     "input": 0.0, "output": 0.0, "ctx": 1000000, "caps": {"chat": True, "vision": True, "streaming": True, "code": True}},
+        # GPT-5 family
+        {"model_id": "gpt-5",                   "display_name": "GPT-5 (Copilot)",                  "input": 0.0, "output": 0.0, "ctx": 400000, "caps": {"chat": True, "streaming": True, "code": True}},
+        {"model_id": "gpt-5-mini",               "display_name": "GPT-5 Mini (Copilot)",             "input": 0.0, "output": 0.0, "ctx": 400000, "caps": {"chat": True, "streaming": True, "code": True}},
+        {"model_id": "gpt-5.2",                  "display_name": "GPT-5.2 (Copilot)",               "input": 0.0, "output": 0.0, "ctx": 400000, "caps": {"chat": True, "streaming": True, "code": True}},
+        {"model_id": "gpt-5.2-codex",            "display_name": "GPT-5.2 Codex (Copilot)",         "input": 0.0, "output": 0.0, "ctx": 200000, "caps": {"chat": True, "streaming": True, "code": True}},
+        {"model_id": "gpt-5.3-codex",            "display_name": "GPT-5.3 Codex (Copilot)",         "input": 0.0, "output": 0.0, "ctx": 200000, "caps": {"chat": True, "streaming": True, "code": True}},
+        {"model_id": "gpt-5.4",                  "display_name": "GPT-5.4 (Copilot)",               "input": 0.0, "output": 0.0, "ctx": 400000, "caps": {"chat": True, "streaming": True, "code": True}},
+        {"model_id": "gpt-5.4-mini",             "display_name": "GPT-5.4 Mini (Copilot)",          "input": 0.0, "output": 0.0, "ctx": 400000, "caps": {"chat": True, "streaming": True, "code": True}},
+        {"model_id": "gpt-5.5",                  "display_name": "GPT-5.5 (Copilot)",               "input": 0.0, "output": 0.0, "ctx": 400000, "caps": {"chat": True, "vision": True, "streaming": True, "code": True}},
+        {"model_id": "gpt-5.5-pro",              "display_name": "GPT-5.5 Pro (Copilot)",           "input": 0.0, "output": 0.0, "ctx": 400000, "caps": {"chat": True, "vision": True, "streaming": True, "code": True}},
+        # GPT-4.x
+        {"model_id": "gpt-4o",                   "display_name": "GPT-4o (Copilot)",                 "input": 0.0, "output": 0.0, "ctx": 128000, "caps": {"chat": True, "vision": True, "streaming": True, "code": True}},
+        {"model_id": "gpt-4o-mini",              "display_name": "GPT-4o Mini (Copilot)",            "input": 0.0, "output": 0.0, "ctx": 128000, "caps": {"chat": True, "vision": True, "streaming": True}},
+        {"model_id": "gpt-4.1",                  "display_name": "GPT-4.1 (Copilot)",               "input": 0.0, "output": 0.0, "ctx": 128000, "caps": {"chat": True, "streaming": True, "code": True}},
+        {"model_id": "gpt-4.1-mini",             "display_name": "GPT-4.1 Mini (Copilot)",          "input": 0.0, "output": 0.0, "ctx": 128000, "caps": {"chat": True, "streaming": True, "code": True}},
+        # Reasoning / o-series
+        {"model_id": "o4-mini",                  "display_name": "o4 Mini (Copilot)",                "input": 0.0, "output": 0.0, "ctx": 200000, "caps": {"chat": True, "streaming": True, "code": True}},
+        {"model_id": "o3",                       "display_name": "o3 (Copilot)",                     "input": 0.0, "output": 0.0, "ctx": 200000, "caps": {"chat": True, "streaming": True, "code": True}},
+        {"model_id": "o3-mini",                  "display_name": "o3 Mini (Copilot)",                "input": 0.0, "output": 0.0, "ctx": 200000, "caps": {"chat": True, "streaming": True}},
+        # Claude (Anthropic via Copilot subscription)
+        {"model_id": "claude-opus-4-5",          "display_name": "Claude Opus 4.5 (Copilot)",        "input": 0.0, "output": 0.0, "ctx": 200000, "caps": {"chat": True, "vision": True, "streaming": True, "code": True}},
+        {"model_id": "claude-sonnet-4-5",        "display_name": "Claude Sonnet 4.5 (Copilot)",      "input": 0.0, "output": 0.0, "ctx": 200000, "caps": {"chat": True, "vision": True, "streaming": True, "code": True}},
+        {"model_id": "claude-3.7-sonnet",        "display_name": "Claude 3.7 Sonnet (Copilot)",      "input": 0.0, "output": 0.0, "ctx": 200000, "caps": {"chat": True, "vision": True, "streaming": True, "code": True}},
+        {"model_id": "claude-3.5-sonnet",        "display_name": "Claude 3.5 Sonnet (Copilot)",      "input": 0.0, "output": 0.0, "ctx": 200000, "caps": {"chat": True, "vision": True, "streaming": True, "code": True}},
+        {"model_id": "claude-3.5-haiku",         "display_name": "Claude 3.5 Haiku (Copilot)",       "input": 0.0, "output": 0.0, "ctx": 200000, "caps": {"chat": True, "streaming": True, "code": True}},
+        # Gemini (Google via Copilot subscription)
+        {"model_id": "gemini-2.5-pro",           "display_name": "Gemini 2.5 Pro (Copilot)",         "input": 0.0, "output": 0.0, "ctx": 1000000, "caps": {"chat": True, "vision": True, "streaming": True}},
+        {"model_id": "gemini-2.5-flash",         "display_name": "Gemini 2.5 Flash (Copilot)",       "input": 0.0, "output": 0.0, "ctx": 1000000, "caps": {"chat": True, "vision": True, "streaming": True}},
+        {"model_id": "gemini-2.0-flash",         "display_name": "Gemini 2.0 Flash (Copilot)",       "input": 0.0, "output": 0.0, "ctx": 1000000, "caps": {"chat": True, "vision": True, "streaming": True}},
+        {"model_id": "gemini-2.0-flash-001",     "display_name": "Gemini 2.0 Flash 001 (Copilot)",   "input": 0.0, "output": 0.0, "ctx": 1000000, "caps": {"chat": True, "vision": True, "streaming": True}},
     ],
 }
 
@@ -466,6 +507,13 @@ async def _fetch_openai_compatible_models(base_url: str, api_key: str, provider_
         ):
             logger.warning("GitHub Copilot model discovery rejected unsupported token type")
             return []
+        if response.status_code in (401, 403):
+            # Some OpenAI-compatible credentials are valid for inference but are
+            # not allowed to list the full model catalog. Treat this as an
+            # expected catalog-discovery limitation so sync can fall back.
+            raise PermissionError(
+                f"{provider_name} catalog access denied ({response.status_code}) at {base_url.rstrip('/')}/models"
+            )
         response.raise_for_status()
         payload = response.json()
 
@@ -590,19 +638,56 @@ async def discover_provider_models(provider_name: str) -> tuple[list[dict[str, A
         api_key = get_provider_api_key("openai-codex")
         if should_use_codex_oauth_proxy("openai-codex", api_key=api_key):
             return await _fetch_openai_compatible_models(get_codex_proxy_base_url(), get_codex_proxy_api_key(), "openai-codex"), "codex_proxy"
-        if api_key:
-            return await _fetch_openai_compatible_models("https://api.openai.com/v1", api_key, "openai-codex"), "provider_api"
+        # Without Codex proxy mode, keep the curated Codex catalog rather than
+        # probing OpenAI /models directly. This avoids duplicate 403 noise when
+        # OPENAI_API_KEY is present but lacks catalog-list permissions.
+        fallback_models = [dict(model) for model in PROVIDER_DEFAULT_MODELS.get(normalized, [])]
+        enriched_fallback = [_enrich_with_litellm_metadata(normalized, entry) for entry in fallback_models]
+        return enriched_fallback, "static_catalog"
 
     if normalized == "github-copilot":
         github_token = (get_copilot_auth_token() or "").strip()
+        static_fallback = [
+            _enrich_with_litellm_metadata(normalized, dict(m))
+            for m in PROVIDER_DEFAULT_MODELS.get(normalized, [])
+        ]
         if github_token:
             # Exchange for a Copilot session token to get the full model catalog
-            # (includes Claude, Gemini, o3, etc. when copilot OAuth scope is present).
+            # (includes Claude, Gemini, o3, etc. when the token has copilot scope).
             # Falls back to the raw OAuth token if exchange fails.
             from app.services.github_copilot import exchange_for_copilot_token
             session_token = await exchange_for_copilot_token(github_token)
             api_token = session_token or github_token
-            return await _fetch_openai_compatible_models(COPILOT_API_BASE, api_token, "github-copilot", extra_headers=get_copilot_headers()), "provider_api"
+            try:
+                live_models = await _fetch_openai_compatible_models(
+                    COPILOT_API_BASE, api_token, "github-copilot", extra_headers=get_copilot_headers()
+                )
+            except Exception as exc:
+                logger.warning("GitHub Copilot live discovery failed (%s); using static catalog", exc)
+                live_models = []
+
+            if live_models:
+                # Merge: static catalog models not already returned by the live API
+                # are appended so the user always sees the full curated model list.
+                # Live-discovered models take priority (they carry real context/limits).
+                live_ids = {m["model_id"] for m in live_models}
+                extras = [
+                    {**m, "_from_static_catalog": True}
+                    for m in static_fallback
+                    if m["model_id"] not in live_ids
+                ]
+                if extras:
+                    logger.info(
+                        "GitHub Copilot: live API returned %d models; appending %d "
+                        "static-catalog models not in live list (token may lack full copilot scope)",
+                        len(live_models), len(extras),
+                    )
+                return live_models + extras, "provider_api"
+            else:
+                logger.info(
+                    "GitHub Copilot live discovery returned no models; using static catalog fallback"
+                )
+        return static_fallback, "static_catalog"
 
     fallback_models = [dict(model) for model in PROVIDER_DEFAULT_MODELS.get(normalized, [])]
     enriched_fallback = [_enrich_with_litellm_metadata(normalized, entry) for entry in fallback_models]
@@ -703,10 +788,13 @@ def _qualified_model_ref(provider_name: str, model_id: str) -> str:
 # Core sync logic (shared by endpoint + startup)
 # ---------------------------------------------------------------------------
 
-async def run_model_sync(db: AsyncSession, *, deduplicate_existing: bool = True) -> dict:
+async def run_model_sync(db: AsyncSession, *, deduplicate_existing: bool = True, provider_filter: Optional[str] = None) -> dict:
     """
     Sync Ollama models + enabled paid providers into the DB.
     Returns a summary dict.
+
+    If ``provider_filter`` is set (e.g. ``"ollama"`` or ``"github-copilot"``),
+    only that one provider is synced and all others are skipped.
     """
     added = []
     skipped = []
@@ -917,7 +1005,9 @@ async def run_model_sync(db: AsyncSession, *, deduplicate_existing: bool = True)
 
     # ── 1. Ollama ─────────────────────────────────────────────────────────────
     ollama_url = settings.ollama_base_url or "http://localhost:11434"
-    ollama_raw = await fetch_ollama_models(ollama_url)
+    ollama_raw: list[dict] = []
+    if not provider_filter or provider_filter == "ollama":
+        ollama_raw = await fetch_ollama_models(ollama_url)
     discovered_ollama_ids: set[str] = set()
 
     if ollama_raw:
@@ -991,6 +1081,8 @@ async def run_model_sync(db: AsyncSession, *, deduplicate_existing: bool = True)
 
     # ── 2. Paid providers (key-gated) ─────────────────────────────────────────
     for provider_name in PROVIDER_DEFAULT_MODELS:
+        if provider_filter and provider_filter != provider_name:
+            continue
         if not has_provider_api_key(provider_name):
             logger.debug(f"Skipping {provider_name} — no API key set")
             deactivated_missing = 0
@@ -1025,7 +1117,13 @@ async def run_model_sync(db: AsyncSession, *, deduplicate_existing: bool = True)
             models_list, source = await discover_provider_models(provider_name)
         except Exception as exc:
             logger.warning("Live model discovery failed for provider %s: %s", provider_name, exc)
-            errors.append(f"{provider_name}: {type(exc).__name__}: {exc}")
+            if isinstance(exc, PermissionError):
+                logger.info(
+                    "Provider %s catalog discovery lacks permission; using static fallback catalog",
+                    provider_name,
+                )
+            else:
+                errors.append(f"{provider_name}: {type(exc).__name__}: {exc}")
             models_list = [_enrich_with_litellm_metadata(provider_name, dict(model)) for model in PROVIDER_DEFAULT_MODELS[provider_name]]
 
         if source in {"provider_api", "codex_proxy"}:
@@ -1072,17 +1170,32 @@ async def run_model_sync(db: AsyncSession, *, deduplicate_existing: bool = True)
                 deprecated_skipped += 1
                 continue
 
+            is_static_appendage = bool(m.get("_from_static_catalog"))
+            if source in {"provider_api", "codex_proxy"} and not is_static_appendage:
+                # Model was returned directly by the live provider catalog —
+                # we already know it exists, so mark it validated immediately.
+                upsert_validation_status = "validated"
+                upsert_validation_warning = None
+            elif source in {"provider_api", "codex_proxy"} and is_static_appendage:
+                # Model is in our curated static list but was NOT returned by the
+                # live API this session (token may lack full copilot scope, etc.).
+                # Keep unverified so the user can validate it explicitly.
+                upsert_validation_status = "unverified"
+                upsert_validation_warning = (
+                    "Model was found in provider catalog fallback; live verification is currently unavailable."
+                )
+            else:
+                upsert_validation_status = "unverified"
+                upsert_validation_warning = (
+                    "Provider is configured, but this model has not been live-validated in the interface yet."
+                )
             viable_discovered_ids.add(m["model_id"])
             if upsert_model(
                 provider, m["model_id"], m["display_name"],
                 m.get("input") or 0.0, m.get("output") or 0.0, m.get("ctx"), m.get("caps") or {"chat": True, "streaming": True},
-                validation_status="unverified",
+                validation_status=upsert_validation_status,
                 validation_source=f"provider_sync:{source}",
-                validation_warning=(
-                    "Provider is configured, but this model has not been live-validated in the interface yet."
-                    if source != "provider_api" else
-                    "Discovered from the provider catalog, but not yet live-validated in the interface."
-                ),
+                validation_warning=upsert_validation_warning,
             ):
                 added.append(f"{provider_name}/{m['model_id']}")
                 provider_added += 1
@@ -1198,6 +1311,26 @@ async def sync_models(db: AsyncSession = Depends(get_db)):
     return {
         "ok": True,
         "message": f"Sync complete. {len(result['added'])} new models added.",
+        **result,
+    }
+
+
+@router.post("/sync/provider/{provider_name}")
+async def sync_provider(provider_name: str, db: AsyncSession = Depends(get_db)):
+    """Sync a single provider by name (e.g. ``ollama``, ``github-copilot``)."""
+    normalized = provider_name.lower().strip()
+    valid_providers = set(PROVIDER_DEFAULT_MODELS.keys()) | {"ollama"}
+    if normalized not in valid_providers:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown provider '{provider_name}'. Valid options: {sorted(valid_providers)}",
+        )
+    result = await run_model_sync(db, provider_filter=normalized)
+    added_count = len([a for a in result.get("added", []) if a.startswith(f"{normalized}/")])
+    return {
+        "ok": True,
+        "message": f"Sync complete for {normalized}. {added_count} new models added.",
         **result,
     }
 
