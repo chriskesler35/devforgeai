@@ -1188,10 +1188,25 @@ async def _stream_response(
                         "Request exceeded the model context window. Trim history or use a larger-context model.",
                         f"err={err_str[:200]}",
                     )
-                    full_content = (
-                        "Your conversation history is too long for this model's context window. "
-                        "Please start a new conversation or ask me to summarize and continue."
-                    )
+                    # Auto-compact: summarise and trim conversation so the next message fits.
+                    try:
+                        from app.services.chat_commands.compact_conversation import compact_conversation
+                        compact_notice = await compact_conversation(
+                            conversation_id, db,
+                            model=primary_model, provider=primary_provider,
+                            force=True,
+                        )
+                        full_content = (
+                            "**Context window exceeded — conversation automatically compacted.**\n\n"
+                            + compact_notice
+                            + "\n\nYour original message was not processed. Please re-send it now."
+                        )
+                    except Exception as _compact_err:
+                        logger.warning("Auto-compact failed: %s", _compact_err)
+                        full_content = (
+                            "Your conversation history is too long for this model's context window. "
+                            "Type `/compact` to summarise and trim it, then re-send your message."
+                        )
                     llm_timeout_fallback = True
                 else:
                     tool_loop_used = False
@@ -1489,10 +1504,25 @@ async def _sync_response(
                     "Request exceeded the model context window. Trim history or use a larger-context model.",
                     f"err={err_str[:200]}",
                 )
-                full_content = (
-                    "Your conversation history is too long for this model's context window. "
-                    "Please start a new conversation or ask me to summarize and continue."
-                )
+                # Auto-compact: summarise and trim conversation so the next message fits.
+                try:
+                    from app.services.chat_commands.compact_conversation import compact_conversation
+                    compact_notice = await compact_conversation(
+                        conversation_id, db,
+                        model=primary_model, provider=primary_provider,
+                        force=True,
+                    )
+                    full_content = (
+                        "**Context window exceeded — conversation automatically compacted.**\n\n"
+                        + compact_notice
+                        + "\n\nYour original message was not processed. Please re-send it now."
+                    )
+                except Exception as _compact_err:
+                    logger.warning("Auto-compact failed: %s", _compact_err)
+                    full_content = (
+                        "Your conversation history is too long for this model's context window. "
+                        "Type `/compact` to summarise and trim it, then re-send your message."
+                    )
                 llm_timeout_fallback = True
             else:
                 tool_loop_used = False

@@ -152,6 +152,18 @@ _sp(r"^/?help$", "help", lambda m: {})
 _sp(r"^/?status$", "status", lambda m: {})
 
 
+# ── Conversation command patterns ──────────────────────────────────────────────
+_CONVERSATION_PATTERNS: list[tuple[re.Pattern, str, callable]] = []
+
+
+def _cp(pattern: str, action: str, extractor):
+    """Register a conversation command pattern."""
+    _CONVERSATION_PATTERNS.append((re.compile(pattern, re.IGNORECASE), action, extractor))
+
+
+_cp(r"^/?compact(?:\s+(?P<force>force|--force))?$", "compact", lambda m: {"force": bool(m.group("force"))})
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def parse_chat_command(message: str) -> Optional[dict]:
@@ -194,6 +206,13 @@ def parse_chat_command(message: str) -> Optional[dict]:
             params = extractor(match)
             return {"action": action, "entity_type": "system", "params": params}
 
+    # Try conversation patterns
+    for pattern, action, extractor in _CONVERSATION_PATTERNS:
+        match = pattern.match(text)
+        if match:
+            params = extractor(match)
+            return {"action": action, "entity_type": "conversation", "params": params}
+
     return None
 
 
@@ -217,6 +236,12 @@ def format_command_help() -> str:
 | `switch to persona <name>` | Activate persona for conversation |
 | `show persona <name>` | Display persona config |
 | `list personas` | Show all personas |
+
+**Conversation:**
+| Command | Description |
+|---------|-------------|
+| `/compact` | Summarise and trim conversation history to free context window |
+| `/compact force` | Force compact even if conversation is short |
 
 **System:**
 | Command | Description |

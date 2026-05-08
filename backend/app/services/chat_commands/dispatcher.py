@@ -50,6 +50,14 @@ async def dispatch_command(
             command.get("params", {}), db, conversation_id=conversation_id
         )
 
+    elif entity_type == "conversation":
+        from app.services.chat_commands.compact_conversation import compact_conversation
+        return await compact_conversation(
+            conversation_id,
+            db,
+            force=command.get("params", {}).get("force", False),
+        )
+
     elif entity_type == "system":
         return await _handle_system_command(command)
 
