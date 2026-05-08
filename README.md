@@ -255,8 +255,11 @@ python devforgeai.py start
 ### Settings
 - **Identity** - Edit SOUL.md, USER.md, IDENTITY.md; reset onboarding
 - **API Keys** - Set/update/clear provider keys; hot-reloaded instantly (no restart needed)
+  - **Provider setup guide**: Settings now shows each provider's supported connection methods, recommended path, and live blocking status in one place
   - **Auto-sync**: Adding a provider key instantly syncs that provider's models into your Models list — no manual action needed
   - **OpenRouter OAuth**: Click "Connect with OAuth" to authorize via PKCE flow (no copy/paste)
+  - **OpenAI / Codex**: Use either `OPENAI_API_KEY` or a local Codex OAuth session; custom OpenAI-compatible proxy URLs are optional
+  - **GitHub Copilot**: Use the built-in device flow for best results; GitHub OAuth and GitHub CLI import are also available
   - **Safe key removal**: Clearing a key shows an impact report with all affected personas/agents and lets you reassign them to replacement models before the key is cleared
 - **Memory Files** - USER.md, CONTEXT.md, PREFERENCES.md injected into every chat
 - **Preferences** - View, toggle, add, delete learned preferences; detect from chat
@@ -268,8 +271,14 @@ python devforgeai.py start
 
 ### Providers & Models
 - On first startup: auto-discovers all locally installed Ollama models
-- Only adds paid provider models (Anthropic, Google, OpenRouter, OpenAI) when API keys are set
-- Add/update keys anytime in Settings → API Keys — models sync automatically
+- Only adds paid provider models when a usable connection exists
+- Supported connection methods:
+  - Anthropic: API key
+  - Google / Gemini: API key
+  - OpenRouter: OAuth or API key
+  - OpenAI / Codex: API key or Codex OAuth session
+  - GitHub Copilot: Copilot device flow, GitHub OAuth, or GitHub CLI import
+- Add/update connections anytime in Settings → API Keys — models sync automatically
 - **Remove a key**: affected personas and agents get a replacement picker before the key is cleared (no orphaned references)
 - Manual sync: `POST /v1/models/sync`
 

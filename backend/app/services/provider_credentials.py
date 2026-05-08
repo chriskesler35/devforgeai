@@ -14,6 +14,7 @@ from typing import Optional
 
 from app.config import settings
 from app.services.codex_oauth import (
+    get_codex_oauth_tokens,
     has_codex_cli_auth,
     provider_supports_codex_oauth,
 )
@@ -78,6 +79,8 @@ def _read_env_key_from_files(env_var: str) -> Optional[str]:
 
 def get_provider_api_key(provider_name: str) -> Optional[str]:
     """Return the active live credential for a provider, if any."""
+    normalized = (provider_name or "").lower().strip()
+
     for env_var in get_provider_env_vars(provider_name):
         value = os.environ.get(env_var)
         if value:
@@ -92,6 +95,11 @@ def get_provider_api_key(provider_name: str) -> Optional[str]:
         value = _read_env_key_from_files(env_var)
         if value:
             return value
+
+    if provider_supports_codex_oauth(normalized):
+        codex_access_token = (get_codex_oauth_tokens().get("access_token") or "").strip()
+        if codex_access_token:
+            return codex_access_token
 
     return None
 

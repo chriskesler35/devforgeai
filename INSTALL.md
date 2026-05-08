@@ -27,8 +27,15 @@
 | **Node.js** | 18 or newer | https://nodejs.org/ |
 | **Git** | Any recent | https://git-scm.com/ |
 
-> **One AI provider API key is required** to chat. Ollama works locally with no key at all.
-> Add keys for any of: Anthropic, Google Gemini, OpenRouter, or OpenAI.
+> **At least one provider connection is required** to chat. Ollama works locally with no cloud credential at all.
+> The easiest way to connect providers is Settings → API Keys, which now shows each provider's supported methods and live status.
+
+Supported connection methods:
+- Anthropic: API key
+- Google / Gemini: API key
+- OpenRouter: OAuth or API key
+- OpenAI / Codex: API key or local Codex OAuth session
+- GitHub Copilot: Copilot device flow, GitHub OAuth, or GitHub CLI import
 
 ### Installing Prerequisites
 
@@ -88,6 +95,8 @@ That's it. Bootstrap will:
 - Generate platform-specific start scripts (`start.bat` or `start.sh`)
 
 After it finishes, start the app and open http://localhost:3001.
+
+Then open Settings → API Keys and connect the providers you want to use. The page shows a per-provider setup card so you can see which method is supported and what is still missing.
 
 ---
 

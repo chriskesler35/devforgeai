@@ -82,14 +82,17 @@ function getCodexRuntimeBadge(status: RuntimeCredentialStatus['openai_oauth']): 
   if (status.has_openai_api_key) {
     return { label: 'API key ready', className: 'bg-emerald-100 text-emerald-800' }
   }
+  if (status.usable && status.has_access_token && !status.proxy_reachable) {
+    return { label: 'OAuth ready', className: 'bg-emerald-100 text-emerald-800' }
+  }
   if (status.usable) {
-    return { label: 'Proxy ready', className: 'bg-emerald-100 text-emerald-800' }
+    return { label: 'OAuth proxy ready', className: 'bg-emerald-100 text-emerald-800' }
   }
   if (status.codex_cli_logged_in) {
-    return { label: 'CLI only (needs API key)', className: 'bg-amber-100 text-amber-800' }
+    return { label: 'CLI connected', className: 'bg-blue-100 text-blue-800' }
   }
   if (status.auth_ready) {
-    return { label: 'Auth present', className: 'bg-blue-100 text-blue-800' }
+    return { label: 'OAuth detected', className: 'bg-blue-100 text-blue-800' }
   }
   return { label: 'Needs setup', className: 'bg-amber-100 text-amber-800' }
 }
@@ -430,22 +433,115 @@ function ApiKeysTab() {
   if (loading) return <div className="text-sm text-gray-500 py-8 text-center">Loading keys…</div>
 
   const codexRuntimeBadge = runtimeStatus ? getCodexRuntimeBadge(runtimeStatus.openai_oauth) : null
+  const keyByProvider = Object.fromEntries(keys.map((key) => [key.provider, key])) as Record<string, KeyStatus>
+  const anthropicReady = Boolean(keyByProvider.anthropic?.is_set)
+  const googleReady = Boolean(keyByProvider.google?.is_set || keyByProvider.gemini?.is_set)
+  const openRouterReady = Boolean(keyByProvider.openrouter?.is_set)
+  const openAiReady = Boolean(keyByProvider.openai?.is_set || runtimeStatus?.openai_oauth.usable)
+  const githubReady = Boolean(runtimeStatus?.github_copilot.usable || keyByProvider['github-copilot']?.is_set)
 
   return (
     <div className="space-y-4">
-      <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">
-        <strong>🔑 API Keys</strong> are stored in <code className="font-mono bg-amber-100 px-1 rounded">.env</code> and
-        loaded into the backend at runtime. Keys are never exposed in full — only the first/last 4 chars are shown.
-        Changes take effect immediately (no restart needed).
-      </div>
-      <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 text-sm text-purple-800">
-        <strong>🔗 OpenRouter OAuth</strong> — Click "Connect with OAuth" to authorize via your OpenRouter account
-        (no copy/paste needed). OpenRouter proxies GPT-4, Claude, Llama, and many more models through one connection.
-      </div>
       <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 text-sm text-slate-700">
-        <strong>OAuth-backed providers</strong> — GitHub Copilot uses a GitHub OAuth or PAT token.
-        The <em>OpenAI Codex OAuth</em> row shows the Codex CLI status (for the standalone <code className="font-mono">codex</code> agent tool).
-        To route OpenAI/Codex models through DevForgeAI, set an <code className="font-mono">OPENAI_API_KEY</code> in the <strong>OpenAI</strong> row above — the ChatGPT OAuth token used by the CLI is a separate credential that cannot be used as an OpenAI API key.
+        <strong>Provider setup lives here.</strong> Each card below shows the supported connection methods for that provider,
+        which method is recommended, and what is currently blocking it. Changes are hot-reloaded, so you do not need to restart the app after connecting a provider.
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <div className={`rounded-xl border p-4 ${anthropicReady ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-white'}`}>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-900">Anthropic</p>
+              <p className="mt-1 text-xs text-slate-600">Claude models connect through an API key.</p>
+            </div>
+            <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${anthropicReady ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+              {anthropicReady ? 'Connected' : 'Needs API key'}
+            </span>
+          </div>
+          <p className="mt-3 text-xs text-slate-700"><strong>Methods:</strong> API key</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" className="text-xs px-2 py-1 rounded border border-orange-300 hover:bg-orange-50 text-orange-700 font-medium">Get key ↗</a>
+            <button onClick={() => setEditing((current) => ({ ...current, anthropic: current.anthropic ?? '' }))} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">{anthropicReady ? 'Update key' : 'Set key'}</button>
+          </div>
+        </div>
+
+        <div className={`rounded-xl border p-4 ${googleReady ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-white'}`}>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-900">Google / Gemini</p>
+              <p className="mt-1 text-xs text-slate-600">Gemini models connect through a Google AI Studio API key.</p>
+            </div>
+            <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${googleReady ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+              {googleReady ? 'Connected' : 'Needs API key'}
+            </span>
+          </div>
+          <p className="mt-3 text-xs text-slate-700"><strong>Methods:</strong> API key</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-xs px-2 py-1 rounded border border-blue-300 hover:bg-blue-50 text-blue-700 font-medium">Get key ↗</a>
+            <button onClick={() => setEditing((current) => ({ ...current, google: current.google ?? '' }))} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">{googleReady ? 'Update key' : 'Set key'}</button>
+          </div>
+        </div>
+
+        <div className={`rounded-xl border p-4 ${openRouterReady ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-white'}`}>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-900">OpenRouter</p>
+              <p className="mt-1 text-xs text-slate-600">Use one OpenRouter connection to access many upstream providers.</p>
+            </div>
+            <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${openRouterReady ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+              {openRouterReady ? 'Connected' : 'Needs connection'}
+            </span>
+          </div>
+          <p className="mt-3 text-xs text-slate-700"><strong>Methods:</strong> OpenRouter OAuth (recommended), API key</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button onClick={connectOpenRouter} className="text-xs px-2 py-1 rounded border border-purple-300 hover:bg-purple-50 text-purple-700 font-medium">{openRouterReady ? 'Reconnect with OAuth' : 'Connect with OAuth'}</button>
+            <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">Use API key instead ↗</a>
+          </div>
+        </div>
+
+        <div className={`rounded-xl border p-4 ${openAiReady ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-white'}`}>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-900">OpenAI / Codex</p>
+              <p className="mt-1 text-xs text-slate-600">OpenAI models can use a standard API key or a Codex OAuth session when one is available on this machine.</p>
+            </div>
+            <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${openAiReady ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+              {openAiReady ? 'Connected' : 'Needs connection'}
+            </span>
+          </div>
+          <p className="mt-3 text-xs text-slate-700"><strong>Methods:</strong> OpenAI API key, Codex CLI OAuth, optional custom HTTP proxy</p>
+          <div className="mt-2 text-xs text-slate-600">
+            {runtimeStatus?.openai_oauth.usability_summary || 'No OpenAI credential is connected yet.'}
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button onClick={() => setEditing((current) => ({ ...current, openai: current.openai ?? '' }))} className="text-xs px-2 py-1 rounded border border-green-300 hover:bg-green-50 text-green-700 font-medium">{keyByProvider.openai?.is_set ? 'Update API key' : 'Set API key'}</button>
+            <button onClick={launchCodexCliLogin} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">{runtimeStatus?.openai_oauth.auth_ready ? 'Reconnect Codex OAuth' : 'Connect Codex OAuth'}</button>
+            <button onClick={() => setEditing((current) => ({ ...current, ['codex-proxy']: current['codex-proxy'] ?? '' }))} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">Set custom proxy</button>
+          </div>
+        </div>
+
+        <div className={`rounded-xl border p-4 ${githubReady ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-white'} xl:col-span-2`}>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-900">GitHub Copilot</p>
+              <p className="mt-1 text-xs text-slate-600">Use the Copilot device flow for the most reliable model catalog. GitHub OAuth and CLI import are available as alternate paths.</p>
+            </div>
+            <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${githubReady ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+              {githubReady ? 'Connected' : 'Needs connection'}
+            </span>
+          </div>
+          <p className="mt-3 text-xs text-slate-700"><strong>Methods:</strong> Copilot device flow (recommended), GitHub OAuth, GitHub CLI import</p>
+          <div className="mt-2 text-xs text-slate-600">
+            {runtimeStatus?.github_copilot.usable
+              ? 'The current token passed a live Copilot probe.'
+              : runtimeStatus?.github_copilot.validation_error || 'No live Copilot token is connected yet.'}
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button onClick={startCopilotDeviceFlow} className="text-xs px-2 py-1 rounded border border-emerald-400 hover:bg-emerald-50 text-emerald-800 font-semibold">Sign in to Copilot</button>
+            <button onClick={connectGitHubOAuth} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">GitHub OAuth</button>
+            <button onClick={importGitHubFromCli} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">Import from GitHub CLI</button>
+          </div>
+        </div>
       </div>
 
       {runtimeStatus?.github_copilot.has_token && !runtimeStatus.github_copilot.usable && (
@@ -454,11 +550,9 @@ function ApiKeysTab() {
         </div>
       )}
 
-      {runtimeStatus?.openai_oauth.auth_ready && !runtimeStatus.openai_oauth.has_openai_api_key && !runtimeStatus.openai_oauth.proxy_reachable && (
+      {runtimeStatus?.openai_oauth.auth_ready && !runtimeStatus.openai_oauth.usable && (
         <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          <strong>OpenAI models not available:</strong> Codex CLI is authenticated in ChatGPT mode, but that token cannot be used as an OpenAI API key.
-          To enable OpenAI/Codex models in DevForgeAI, add a real <code className="font-mono bg-amber-100 px-1 rounded">OPENAI_API_KEY</code> (sk-…) to the <strong>OpenAI</strong> provider below, or get one at{' '}
-          <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" className="underline font-medium">platform.openai.com/api-keys ↗</a>.
+          <strong>OpenAI / Codex still needs one more step:</strong> {runtimeStatus.openai_oauth.recommended_action || runtimeStatus.openai_oauth.usability_summary}
         </div>
       )}
 
@@ -470,15 +564,18 @@ function ApiKeysTab() {
                 <p className="font-semibold">OpenAI / Codex Runtime</p>
                 <p className={`mt-1 text-sm ${runtimeStatus.openai_oauth.has_openai_api_key ? 'text-emerald-800/80' : 'text-slate-600'}`}>
                   {runtimeStatus.openai_oauth.usability_summary}
-                </p>
+                {runtimeStatus.openai_oauth.has_openai_api_key ? '✓' : '✗'} OpenAI API key (OPENAI_API_KEY):
               </div>
+              <div><span className={runtimeStatus.openai_oauth.has_access_token ? 'text-emerald-700 font-medium' : 'text-slate-500 font-medium'}>
+                {runtimeStatus.openai_oauth.has_access_token ? '✓' : '•'} Codex OAuth access token:
+              </span> {runtimeStatus.openai_oauth.has_access_token ? (runtimeStatus.openai_oauth.masked_access_token || 'present') : 'missing'}</div>
               <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${codexRuntimeBadge?.className || 'bg-amber-100 text-amber-800'}`}>
                 {codexRuntimeBadge?.label || 'Needs setup'}
-              </span>
+                  ? <span className="text-blue-700">installed and logged in</span>
             </div>
             <div className="mt-3 space-y-1 text-xs text-slate-700">
-              <div><span className={runtimeStatus.openai_oauth.has_openai_api_key ? 'text-emerald-700 font-medium' : 'text-red-600 font-medium'}>
-                {runtimeStatus.openai_oauth.has_openai_api_key ? '✓' : '✗'} OpenAI API key (OPENAI_API_KEY):
+              {runtimeStatus.openai_oauth.usable && runtimeStatus.openai_oauth.has_access_token && !runtimeStatus.openai_oauth.has_openai_api_key && (
+                <div className="text-emerald-700 font-medium">✓ OAuth routing is available even without an OpenAI API key.</div>
               </span> {runtimeStatus.openai_oauth.has_openai_api_key ? 'set — model routing enabled' : 'not set — OpenAI models unavailable'}</div>
               <div>Codex CLI: {runtimeStatus.openai_oauth.codex_cli_installed
                 ? (runtimeStatus.openai_oauth.codex_cli_logged_in
@@ -508,7 +605,12 @@ function ApiKeysTab() {
               <button
                 onClick={launchCodexCliLogin}
                 className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-100 text-slate-700">
-                {runtimeStatus.openai_oauth.codex_cli_logged_in ? 'Reconnect Codex CLI (standalone)' : 'Codex CLI Login (standalone tool)'}
+                {runtimeStatus.openai_oauth.codex_cli_logged_in ? 'Reconnect Codex OAuth' : 'Connect Codex OAuth'}
+              </button>
+              <button
+                onClick={fetchRuntimeStatus}
+                className="text-xs px-2 py-1 rounded border border-slate-200 hover:bg-slate-100 text-slate-600">
+                Refresh status
               </button>
             </div>
           </div>
