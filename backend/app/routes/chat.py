@@ -201,6 +201,34 @@ def _chat_completion_timeout_seconds() -> int:
     return max(20, min(value, 600))
 
 
+def _tool_loop_max_tokens(requested: int | None) -> int:
+    """Return the max_tokens to use during tool-loop calls.
+
+    Text-mode models (e.g. GLM, Ollama cloud variants) must emit the entire
+    tool-call JSON — including large file contents — inside the response body.
+    If max_tokens is too low the JSON gets truncated mid-write and the parser
+    fails, returning raw JSON to the user instead of executing the call.
+
+    We enforce a minimum of DEVFORGEAI_TOOL_LOOP_MIN_TOKENS (default 16384).
+    The user's requested max_tokens is respected when it is higher than the
+    minimum, and the absolute ceiling is capped at DEVFORGEAI_TOOL_LOOP_MAX_TOKENS
+    (default 65536) to avoid runaway cost on paid providers.
+    """
+    raw_min = (os.getenv("DEVFORGEAI_TOOL_LOOP_MIN_TOKENS", "16384") or "16384").strip()
+    raw_max = (os.getenv("DEVFORGEAI_TOOL_LOOP_MAX_TOKENS", "65536") or "65536").strip()
+    try:
+        floor = int(raw_min)
+    except Exception:
+        floor = 16384
+    try:
+        ceiling = int(raw_max)
+    except Exception:
+        ceiling = 65536
+    floor = max(4096, min(floor, ceiling))
+    user_val = requested if isinstance(requested, int) and requested > 0 else floor
+    return max(floor, min(user_val, ceiling))
+
+
 def _adaptive_model_timeout_seconds(model: Model | None, provider: Provider | None, *, base: int) -> int:
     """Raise timeout ceiling for local/Ollama workloads that may run longer."""
     if not model or not provider:
@@ -1057,7 +1085,7 @@ async def _stream_response(
                                 messages=loop_messages,
                                 tools=tool_schemas,
                                 temperature=request.temperature,
-                                max_tokens=request.max_tokens,
+                                max_tokens=_tool_loop_max_tokens(request.max_tokens),
                             ),
                             timeout=call_timeout,
                         )
@@ -1358,7 +1386,7 @@ async def _sync_response(
                             messages=loop_messages,
                             tools=tool_schemas,
                             temperature=request.temperature,
-                            max_tokens=request.max_tokens,
+                            max_tokens=_tool_loop_max_tokens(request.max_tokens),
                         ),
                         timeout=call_timeout,
                     )
@@ -1597,7 +1625,7 @@ async def _sync_response(
                                 messages=loop_messages,
                                 tools=get_tool_schemas(list(ALL_TOOLS)),
                                 temperature=request.temperature,
-                                max_tokens=request.max_tokens,
+                                max_tokens=_tool_loop_max_tokens(request.max_tokens),
                             ),
                             timeout=recovery_timeout,
                         )
