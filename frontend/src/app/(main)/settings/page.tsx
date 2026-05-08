@@ -117,6 +117,7 @@ function ApiKeysTab() {
   const [clearImpact, setClearImpact] = useState<ClearImpact | null>(null)
   const [replacements, setReplacements] = useState<Record<string, string>>({})
   const [clearing, setClearing] = useState(false)
+  const [providerActionBusy, setProviderActionBusy] = useState<Record<string, boolean>>({})
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeCredentialStatus | null>(null)
   const [providerInventory, setProviderInventory] = useState<Record<string, ProviderInventory>>({})
   const [copilotDevice, setCopilotDevice] = useState<{ user_code: string; verification_uri: string; device_code: string; status: 'pending' | 'ok' | 'error'; error?: string } | null>(null)
@@ -440,6 +441,114 @@ function ApiKeysTab() {
   const openAiReady = Boolean(keyByProvider.openai?.is_set || runtimeStatus?.openai_oauth.usable)
   const githubReady = Boolean(runtimeStatus?.github_copilot.usable || keyByProvider['github-copilot']?.is_set)
 
+  const openProviderEditor = (provider: string) => {
+    setEditing((current) => ({ ...current, [provider]: current[provider] ?? '' }))
+  }
+
+  const describeProvider = (provider: string) => {
+    const inventory = providerInventory[provider]
+    const activeModels = inventory?.active_model_count ?? 0
+
+    if (provider === 'openai') {
+      const status = runtimeStatus?.openai_oauth
+      if (!status) {
+        return 'OpenAI runtime status is still loading.'
+      }
+      return [
+        status.usability_summary,
+        activeModels > 0 ? `${activeModels} active models are already available.` : 'No active OpenAI models are synced yet.',
+        status.recommended_action || 'Use Test to sync the live OpenAI/Codex catalog now.',
+      ].join(' ')
+    }
+
+    if (provider === 'github-copilot') {
+      const status = runtimeStatus?.github_copilot
+      if (!status) {
+        return 'GitHub Copilot runtime status is still loading.'
+      }
+      return [
+        status.usable
+          ? 'GitHub Copilot is live-verified and ready.'
+          : status.validation_error || 'GitHub Copilot is not fully connected yet.',
+        activeModels > 0 ? `${activeModels} Copilot models are active.` : 'No Copilot models are synced yet.',
+        status.has_copilot_scope === false
+          ? 'Reconnect using the Copilot device flow to restore the copilot scope.'
+          : 'Use Test to sync the live Copilot catalog now.',
+      ].join(' ')
+    }
+
+    const envVar = keyByProvider[provider]?.env_var || 'credential'
+    const isReady = provider === 'anthropic'
+      ? anthropicReady
+      : provider === 'google'
+      ? googleReady
+      : provider === 'openrouter'
+      ? openRouterReady
+      : false
+
+    return isReady
+      ? `${PROVIDER_META[provider]?.label || provider} is connected. ${activeModels > 0 ? `${activeModels} active models are already synced.` : 'No models are synced yet.'} Use Test to refresh the live catalog.`
+      : `${PROVIDER_META[provider]?.label || provider} is not connected yet. Add ${envVar} first, then use Test to verify the provider catalog.`
+  }
+
+  const diagnoseProvider = (provider: string) => {
+    const ready = provider === 'openai'
+      ? openAiReady
+      : provider === 'github-copilot'
+      ? githubReady
+      : provider === 'anthropic'
+      ? anthropicReady
+      : provider === 'google'
+      ? googleReady
+      : openRouterReady
+
+    addToast({
+      type: ready ? 'info' : 'error',
+      title: `${PROVIDER_META[provider]?.label || provider} diagnosis`,
+      message: describeProvider(provider),
+      autoClose: 8000,
+    })
+  }
+
+  const testProviderConnection = async (actionKey: string, providerNames: string[], title: string) => {
+    setProviderActionBusy((current) => ({ ...current, [actionKey]: true }))
+    try {
+      const results: Array<{ provider: string; message: string; added: number }> = []
+      for (const providerName of providerNames) {
+        const res = await fetch(`${API_BASE}/v1/models/sync/provider/${providerName}`, {
+          method: 'POST',
+          headers: AUTH_HEADERS,
+        })
+        const payload = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          throw new Error(payload?.detail || payload?.message || `Sync failed for ${providerName}`)
+        }
+        results.push({
+          provider: providerName,
+          message: payload?.message || `${providerName} sync completed`,
+          added: Array.isArray(payload?.added) ? payload.added.length : Number(payload?.added_count || 0),
+        })
+      }
+      await fetchProviderInventory()
+      await fetchRuntimeStatus()
+      addToast({
+        type: 'success',
+        title: `${title} test completed`,
+        message: results.map((result) => `${result.provider}: ${result.message}`).join(' '),
+        autoClose: 7000,
+      })
+    } catch (e: any) {
+      addToast({
+        type: 'error',
+        title: `${title} test failed`,
+        message: e.message || 'Provider sync failed.',
+        autoClose: 7000,
+      })
+    } finally {
+      setProviderActionBusy((current) => ({ ...current, [actionKey]: false }))
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 text-sm text-slate-700">
@@ -461,7 +570,9 @@ function ApiKeysTab() {
           <p className="mt-3 text-xs text-slate-700"><strong>Methods:</strong> API key</p>
           <div className="mt-3 flex flex-wrap gap-2">
             <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" className="text-xs px-2 py-1 rounded border border-orange-300 hover:bg-orange-50 text-orange-700 font-medium">Get key ↗</a>
-            <button onClick={() => setEditing((current) => ({ ...current, anthropic: current.anthropic ?? '' }))} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">{anthropicReady ? 'Update key' : 'Set key'}</button>
+            <button onClick={() => openProviderEditor('anthropic')} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">{anthropicReady ? 'Connect' : 'Set key'}</button>
+            <button onClick={() => diagnoseProvider('anthropic')} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">Diagnose</button>
+            <button disabled={providerActionBusy.anthropic} onClick={() => testProviderConnection('anthropic', ['anthropic'], 'Anthropic')} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700 disabled:opacity-50">{providerActionBusy.anthropic ? 'Testing…' : 'Test'}</button>
           </div>
         </div>
 
@@ -478,7 +589,9 @@ function ApiKeysTab() {
           <p className="mt-3 text-xs text-slate-700"><strong>Methods:</strong> API key</p>
           <div className="mt-3 flex flex-wrap gap-2">
             <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-xs px-2 py-1 rounded border border-blue-300 hover:bg-blue-50 text-blue-700 font-medium">Get key ↗</a>
-            <button onClick={() => setEditing((current) => ({ ...current, google: current.google ?? '' }))} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">{googleReady ? 'Update key' : 'Set key'}</button>
+            <button onClick={() => openProviderEditor('google')} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">{googleReady ? 'Connect' : 'Set key'}</button>
+            <button onClick={() => diagnoseProvider('google')} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">Diagnose</button>
+            <button disabled={providerActionBusy.google} onClick={() => testProviderConnection('google', ['google'], 'Google / Gemini')} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700 disabled:opacity-50">{providerActionBusy.google ? 'Testing…' : 'Test'}</button>
           </div>
         </div>
 
@@ -496,6 +609,8 @@ function ApiKeysTab() {
           <div className="mt-3 flex flex-wrap gap-2">
             <button onClick={connectOpenRouter} className="text-xs px-2 py-1 rounded border border-purple-300 hover:bg-purple-50 text-purple-700 font-medium">{openRouterReady ? 'Reconnect with OAuth' : 'Connect with OAuth'}</button>
             <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">Use API key instead ↗</a>
+            <button onClick={() => diagnoseProvider('openrouter')} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">Diagnose</button>
+            <button disabled={providerActionBusy.openrouter} onClick={() => testProviderConnection('openrouter', ['openrouter'], 'OpenRouter')} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700 disabled:opacity-50">{providerActionBusy.openrouter ? 'Testing…' : 'Test'}</button>
           </div>
         </div>
 
@@ -514,9 +629,11 @@ function ApiKeysTab() {
             {runtimeStatus?.openai_oauth.usability_summary || 'No OpenAI credential is connected yet.'}
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
-            <button onClick={() => setEditing((current) => ({ ...current, openai: current.openai ?? '' }))} className="text-xs px-2 py-1 rounded border border-green-300 hover:bg-green-50 text-green-700 font-medium">{keyByProvider.openai?.is_set ? 'Update API key' : 'Set API key'}</button>
+            <button onClick={() => openProviderEditor('openai')} className="text-xs px-2 py-1 rounded border border-green-300 hover:bg-green-50 text-green-700 font-medium">{keyByProvider.openai?.is_set ? 'Connect' : 'Set API key'}</button>
             <button onClick={launchCodexCliLogin} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">{runtimeStatus?.openai_oauth.auth_ready ? 'Reconnect Codex OAuth' : 'Connect Codex OAuth'}</button>
-            <button onClick={() => setEditing((current) => ({ ...current, ['codex-proxy']: current['codex-proxy'] ?? '' }))} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">Set custom proxy</button>
+            <button onClick={() => openProviderEditor('codex-proxy')} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">Set custom proxy</button>
+            <button onClick={() => diagnoseProvider('openai')} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">Diagnose</button>
+            <button disabled={providerActionBusy.openai} onClick={() => testProviderConnection('openai', ['openai', 'openai-codex'], 'OpenAI / Codex')} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700 disabled:opacity-50">{providerActionBusy.openai ? 'Testing…' : 'Test'}</button>
           </div>
         </div>
 
@@ -540,6 +657,8 @@ function ApiKeysTab() {
             <button onClick={startCopilotDeviceFlow} className="text-xs px-2 py-1 rounded border border-emerald-400 hover:bg-emerald-50 text-emerald-800 font-semibold">Sign in to Copilot</button>
             <button onClick={connectGitHubOAuth} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">GitHub OAuth</button>
             <button onClick={importGitHubFromCli} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">Import from GitHub CLI</button>
+            <button onClick={() => diagnoseProvider('github-copilot')} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700">Diagnose</button>
+            <button disabled={providerActionBusy['github-copilot']} onClick={() => testProviderConnection('github-copilot', ['github-copilot'], 'GitHub Copilot')} className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-700 disabled:opacity-50">{providerActionBusy['github-copilot'] ? 'Testing…' : 'Test'}</button>
           </div>
         </div>
       </div>
@@ -564,26 +683,26 @@ function ApiKeysTab() {
                 <p className="font-semibold">OpenAI / Codex Runtime</p>
                 <p className={`mt-1 text-sm ${runtimeStatus.openai_oauth.has_openai_api_key ? 'text-emerald-800/80' : 'text-slate-600'}`}>
                   {runtimeStatus.openai_oauth.usability_summary}
-                {runtimeStatus.openai_oauth.has_openai_api_key ? '✓' : '✗'} OpenAI API key (OPENAI_API_KEY):
+                </p>
               </div>
+              <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${codexRuntimeBadge?.className || 'bg-amber-100 text-amber-800'}`}>
+                {codexRuntimeBadge?.label || 'Needs setup'}
+              </span>
+            </div>
+            <div className="mt-3 space-y-1 text-xs text-slate-700">
+              <div><span className={runtimeStatus.openai_oauth.has_openai_api_key ? 'text-emerald-700 font-medium' : 'text-red-600 font-medium'}>
+                {runtimeStatus.openai_oauth.has_openai_api_key ? '✓' : '✗'} OpenAI API key (OPENAI_API_KEY):
+              </span> {runtimeStatus.openai_oauth.has_openai_api_key ? 'set — model routing enabled' : 'not set — OAuth can still be used if a Codex session is available'}</div>
               <div><span className={runtimeStatus.openai_oauth.has_access_token ? 'text-emerald-700 font-medium' : 'text-slate-500 font-medium'}>
                 {runtimeStatus.openai_oauth.has_access_token ? '✓' : '•'} Codex OAuth access token:
               </span> {runtimeStatus.openai_oauth.has_access_token ? (runtimeStatus.openai_oauth.masked_access_token || 'present') : 'missing'}</div>
-              <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${codexRuntimeBadge?.className || 'bg-amber-100 text-amber-800'}`}>
-                {codexRuntimeBadge?.label || 'Needs setup'}
-                  ? <span className="text-blue-700">installed and logged in</span>
-            </div>
-            <div className="mt-3 space-y-1 text-xs text-slate-700">
-              {runtimeStatus.openai_oauth.usable && runtimeStatus.openai_oauth.has_access_token && !runtimeStatus.openai_oauth.has_openai_api_key && (
-                <div className="text-emerald-700 font-medium">✓ OAuth routing is available even without an OpenAI API key.</div>
-              </span> {runtimeStatus.openai_oauth.has_openai_api_key ? 'set — model routing enabled' : 'not set — OpenAI models unavailable'}</div>
               <div>Codex CLI: {runtimeStatus.openai_oauth.codex_cli_installed
                 ? (runtimeStatus.openai_oauth.codex_cli_logged_in
-                  ? <span className="text-blue-700">installed and logged in <span className="text-slate-500 font-normal">(ChatGPT mode — for standalone codex agent only)</span></span>
+                  ? <span className="text-blue-700">installed and logged in</span>
                   : 'installed but not logged in')
                 : 'not installed'}</div>
-              {runtimeStatus.openai_oauth.codex_cli_logged_in && !runtimeStatus.openai_oauth.has_openai_api_key && (
-                <div className="text-amber-700 font-medium">⚠ ChatGPT OAuth token ≠ OpenAI API key. Set OPENAI_API_KEY separately for DevForgeAI.</div>
+              {runtimeStatus.openai_oauth.usable && runtimeStatus.openai_oauth.has_access_token && !runtimeStatus.openai_oauth.has_openai_api_key && (
+                <div className="text-emerald-700 font-medium">✓ OAuth routing is available even without an OpenAI API key.</div>
               )}
               {runtimeStatus.openai_oauth.proxy_env_override && (
                 <div>Proxy: {runtimeStatus.openai_oauth.proxy_reachable ? `online at ${runtimeStatus.openai_oauth.proxy_base_url}` : `offline at ${runtimeStatus.openai_oauth.proxy_base_url}`}</div>
