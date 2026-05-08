@@ -336,6 +336,22 @@ class ModelClient:
 
         try:
             choice = response.choices[0]
+            finish_reason = getattr(choice, "finish_reason", None) or ""
+            if finish_reason == "length":
+                # Model hit max_tokens and stopped mid-response — output is truncated.
+                # This is the #1 cause of JSON tool-calls being cut off mid-write.
+                _issues_log = logging.getLogger("llm.issues")
+                _issues_log.warning(
+                    "[FINISH_REASON_LENGTH] model=%s | Response truncated at token limit. "
+                    "Tool-call JSON may be incomplete. Increase max_tokens or reduce prompt size.",
+                    getattr(model, "model_id", "unknown"),
+                )
+            elif finish_reason == "content_filter":
+                _issues_log = logging.getLogger("llm.issues")
+                _issues_log.warning(
+                    "[CONTENT_FILTER] model=%s | Response blocked by content filter.",
+                    getattr(model, "model_id", "unknown"),
+                )
             msg = choice.message
             response_text = msg.content or ""
 
@@ -381,6 +397,12 @@ class ModelClient:
                     )
         except Exception as exc:
             logger.warning("Failed to parse tool-call response: %s", exc)
+            _issues_log = logging.getLogger("llm.issues")
+            _issues_log.warning(
+                "[TOOL_PARSE_FAIL] model=%s | Failed to parse tool-call response: %s",
+                getattr(model, "model_id", "unknown"),
+                exc,
+            )
 
         try:
             if hasattr(response, "usage") and response.usage:

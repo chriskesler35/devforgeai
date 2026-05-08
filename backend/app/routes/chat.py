@@ -28,6 +28,18 @@ from app.middleware.rate_limit import check_rate_limit
 import logging
 
 logger = logging.getLogger(__name__)
+# Dedicated issues logger — also writes to logs/llm-issues.log
+_issues_log = logging.getLogger("llm.issues")
+
+
+def _log_llm_issue(issue_type: str, model_id: str, conv_id: str, detail: str, extra: str = "") -> None:
+    """Emit a structured WARNING to both the main logger and llm-issues.log."""
+    msg = f"[{issue_type}] model={model_id} conv={conv_id[:8] if conv_id else '?'} | {detail}"
+    if extra:
+        msg += f" | {extra}"
+    logger.warning(msg)
+    _issues_log.warning(msg)
+
 
 router = APIRouter(prefix="/v1", tags=["chat"], dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
 
@@ -479,14 +491,39 @@ def _extract_text_tool_calls(response_text: str) -> list[dict]:
     return []
 
 
-def _normalize_tool_calls(response_text: str, tool_calls: list[dict] | None) -> list[dict]:
+_KNOWN_TOOL_NAMES = {
+    "read_file", "read_local_file", "write_local_file", "write_file",
+    "list_dir", "run_shell", "install_package", "web_fetch", "convert_media",
+}
+
+
+def _normalize_tool_calls(response_text: str, tool_calls: list[dict] | None, conv_id: str = "", model_id: str = "") -> list[dict]:
     """Return native tool_calls, or fallback parsed calls from assistant text."""
     if tool_calls:
         return tool_calls
     parsed = _extract_text_tool_calls(response_text)
     if parsed:
         logger.info("Recovered %d text-mode tool call(s) from assistant response", len(parsed))
-    return parsed
+        return parsed
+
+    # Parser-miss heuristic: response contains tool-call-shaped text but parsing failed.
+    # Common cause: model returned truncated JSON (hit max_tokens mid-write), or embedded
+    # the tool call in prose with surrounding text the JSON parser couldn't isolate.
+    text = response_text or ""
+    if text and any(f'"name": "{t}"' in text or f'"name":"{t}"' in text for t in _KNOWN_TOOL_NAMES):
+        # Detect likely truncation: response ends before closing braces
+        likely_truncated = text.rstrip()[-1:] not in ("}", "]")
+        _log_llm_issue(
+            "TOOL_PARSE_MISS",
+            model_id or "unknown",
+            conv_id,
+            "Response contained a known tool name but the call was not parsed/executed. "
+            + ("Response appears TRUNCATED (may have hit max_tokens — increase limit or reduce prompt size)."
+               if likely_truncated else
+               "Response was not truncated; model may have formatted the call incorrectly."),
+            f"resp_len={len(text)} ends_with={repr(text.rstrip()[-20:])}",
+        )
+    return []
 
 
 def _canonicalize_tool_calls(tool_calls: list[dict]) -> list[dict]:
@@ -1027,7 +1064,7 @@ async def _stream_response(
                         input_tokens += in_tok
                         output_tokens += out_tok
 
-                        tool_calls = _normalize_tool_calls(resp_text, tool_calls)
+                        tool_calls = _normalize_tool_calls(resp_text, tool_calls, conv_id=conversation_id, model_id=primary_model.model_id if primary_model else "")
                         canonical_calls = _canonicalize_tool_calls(tool_calls)
 
                         if canonical_calls:
@@ -1110,13 +1147,32 @@ async def _stream_response(
                     "Please try again, or break the request into smaller steps."
                 )
             except Exception as tool_loop_error:
-                tool_loop_used = False
-                logger.error(
-                    "Streaming tool-loop failed (raw passthrough blocked) conv=%s err=%s",
-                    conversation_id,
-                    tool_loop_error,
-                    exc_info=True,
-                )
+                err_str = str(tool_loop_error)
+                err_type = type(tool_loop_error).__name__
+                if ("ContextWindowExceededError" in err_type
+                        or "context_length_exceeded" in err_str
+                        or "maximum context length" in err_str.lower()
+                        or "context window" in err_str.lower()):
+                    _log_llm_issue(
+                        "CONTEXT_OVERFLOW",
+                        primary_model.model_id if primary_model else "unknown",
+                        conversation_id,
+                        "Request exceeded the model context window. Trim history or use a larger-context model.",
+                        f"err={err_str[:200]}",
+                    )
+                    full_content = (
+                        "Your conversation history is too long for this model's context window. "
+                        "Please start a new conversation or ask me to summarize and continue."
+                    )
+                    llm_timeout_fallback = True
+                else:
+                    tool_loop_used = False
+                    logger.error(
+                        "Streaming tool-loop failed (raw passthrough blocked) conv=%s err=%s",
+                        conversation_id,
+                        tool_loop_error,
+                        exc_info=True,
+                    )
                 # Degrade gracefully to legacy non-tool streaming path below.
                 full_content = ""
 
@@ -1309,7 +1365,7 @@ async def _sync_response(
                     input_tokens += in_tok
                     output_tokens += out_tok
 
-                    tool_calls = _normalize_tool_calls(resp_text, tool_calls)
+                    tool_calls = _normalize_tool_calls(resp_text, tool_calls, conv_id=conversation_id, model_id=primary_model.model_id if primary_model else "")
                     canonical_calls = _canonicalize_tool_calls(tool_calls)
 
                     if canonical_calls:
@@ -1392,13 +1448,32 @@ async def _sync_response(
                 "Please try again, or break the request into smaller steps."
             )
         except Exception as tool_loop_error:
-            tool_loop_used = False
-            logger.error(
-                "Sync tool-loop failed (raw passthrough blocked) conv=%s err=%s",
-                conversation_id,
-                tool_loop_error,
-                exc_info=True,
-            )
+            err_str = str(tool_loop_error)
+            err_type = type(tool_loop_error).__name__
+            if ("ContextWindowExceededError" in err_type
+                    or "context_length_exceeded" in err_str
+                    or "maximum context length" in err_str.lower()
+                    or "context window" in err_str.lower()):
+                _log_llm_issue(
+                    "CONTEXT_OVERFLOW",
+                    primary_model.model_id if primary_model else "unknown",
+                    conversation_id,
+                    "Request exceeded the model context window. Trim history or use a larger-context model.",
+                    f"err={err_str[:200]}",
+                )
+                full_content = (
+                    "Your conversation history is too long for this model's context window. "
+                    "Please start a new conversation or ask me to summarize and continue."
+                )
+                llm_timeout_fallback = True
+            else:
+                tool_loop_used = False
+                logger.error(
+                    "Sync tool-loop failed (raw passthrough blocked) conv=%s err=%s",
+                    conversation_id,
+                    tool_loop_error,
+                    exc_info=True,
+                )
             # Degrade gracefully to legacy non-tool single-call path below.
             full_content = ""
 

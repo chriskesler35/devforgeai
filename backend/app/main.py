@@ -33,6 +33,17 @@ _err_handler = logging.FileHandler(_LOG_DIR / "backend-error.log", encoding="utf
 _err_handler.setLevel(logging.WARNING)
 _err_handler.setFormatter(_log_fmt)
 
+# File handler — llm-issues.log (WARNING+, scoped to chat/model routes)
+# Captures: context overflow, finish_reason=length, tool-call parser misses,
+# truncated responses, and any other LLM-layer problems.
+_issues_handler = logging.FileHandler(_LOG_DIR / "llm-issues.log", encoding="utf-8")
+_issues_handler.setLevel(logging.WARNING)
+_issues_handler.setFormatter(_log_fmt)
+_issues_logger = logging.getLogger("llm.issues")
+_issues_logger.setLevel(logging.WARNING)
+_issues_logger.addHandler(_issues_handler)
+_issues_logger.propagate = True  # also appears in backend-error.log
+
 # Apply to root logger so every module's getLogger(__name__) inherits these
 _root = logging.getLogger()
 _root.setLevel(logging.INFO)
