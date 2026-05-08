@@ -2112,6 +2112,11 @@ export default function ChatPage() {
     return all.filter((m) => {
       const key = `${m.provider_name || 'unknown'}::${m.model_id || ''}`
       if (!m.model_id || seen.has(key)) return false
+      const caps = m.capabilities || {}
+      const normalized = (m.model_id || '').toLowerCase()
+      if (caps.video_generation || normalized.includes('veo') || normalized.includes('video-generate')) {
+        return false
+      }
       seen.add(key)
       return true
     })

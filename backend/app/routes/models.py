@@ -152,6 +152,23 @@ def _provider_is_usable(provider_name: str | None, provider_base_url: str | None
     return has_provider_api_key(normalized)
 
 
+def _is_chat_capable_model(model_id: str | None, capabilities: dict | None) -> bool:
+    caps = capabilities or {}
+    normalized = (model_id or "").lower().strip()
+
+    # Defensive fallback for stale synced rows that were incorrectly marked as
+    # chat models before Veo/video capability detection existed.
+    if caps.get("video_generation"):
+        return False
+    if any(token in normalized for token in ("veo", "video-generate", "video_generate")):
+        return False
+
+    if caps.get("image_generation") or caps.get("embedding") or caps.get("audio_or_moderation") or caps.get("legacy_completion"):
+        return False
+
+    return caps.get("chat") is not False
+
+
 @router.get("", response_model=ModelList)
 async def list_models(
     limit: int = 50,
@@ -194,7 +211,7 @@ async def list_models(
             continue
         if validated_only and (model.validation_status or "unverified") == "failed":
             continue
-        if chat_only and (capabilities.get("chat") is False or capabilities.get("image_generation")):
+        if chat_only and not _is_chat_capable_model(model.model_id, capabilities):
             continue
 
         model_dict = {

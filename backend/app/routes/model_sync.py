@@ -339,6 +339,16 @@ def _infer_model_capabilities(model_id: str, supported_methods: Optional[list[st
     modality_text = " ".join(modalities) if isinstance(modalities, list) else str(modalities or "")
     modality_text = modality_text.lower()
 
+    # Video generation models such as Gemini Veo are not chat-capable through
+    # the standard generateContent chat path used elsewhere in the app.
+    if (
+        "veo" in normalized
+        or "video" in normalized
+        or "video" in modality_text
+        or any(token in methods for token in ("generatevideos", "generatevideo", "predictlongrunning"))
+    ):
+        return {"video_generation": True}
+
     if "embed" in normalized or "embedcontent" in methods:
         return {"embedding": True}
 
@@ -376,6 +386,7 @@ def _is_catalog_usable(model_id: str, capabilities: dict[str, Any]) -> bool:
     return bool(
         capabilities.get("chat")
         or capabilities.get("image_generation")
+        or capabilities.get("video_generation")
         or capabilities.get("vision")
         or capabilities.get("code")
     )
