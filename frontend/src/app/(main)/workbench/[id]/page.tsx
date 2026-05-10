@@ -495,6 +495,7 @@ export default function WorkbenchSessionPage() {
   const [showCommandLog, setShowCommandLog] = useState(false)
   const [rightPanelTab, setRightPanelTab] = useState<'files' | 'agent'>('files')
   const [selectedMonitorEvent, setSelectedMonitorEvent] = useState<number | null>(null)
+  const [monitorView, setMonitorView] = useState<'timeline' | 'transcript'>('timeline')
   const [monitorSearch, setMonitorSearch] = useState('')
   const [monitorStateFilter, setMonitorStateFilter] = useState('all')
   const [monitorTypeFilter, setMonitorTypeFilter] = useState('all')
@@ -674,9 +675,13 @@ export default function WorkbenchSessionPage() {
     const params = new URLSearchParams(window.location.search)
     const deepLinkEvent = Number(params.get('ae'))
     const panel = params.get('panel')
+    const monitorViewParam = params.get('av')
 
     if (panel === 'agent' || panel === 'files') {
       setRightPanelTab(panel)
+    }
+    if (monitorViewParam === 'timeline' || monitorViewParam === 'transcript') {
+      setMonitorView(monitorViewParam)
     }
     if (Number.isInteger(deepLinkEvent) && deepLinkEvent >= 0) {
       setSelectedMonitorEvent(deepLinkEvent)
@@ -914,6 +919,40 @@ export default function WorkbenchSessionPage() {
     })
   }, [agentTimeline, monitorSearch, monitorStateFilter, monitorTypeFilter])
 
+  const mergedTurns = useMemo(() => {
+    const eventTurns = buildTurns(events, session?.task || null)
+    const historyTurns = session?.messages ? buildTurnsFromHistory(session.messages, session?.task || null) : []
+    const eventTurnCount = eventTurns.length
+    const historyOnly = historyTurns.slice(0, Math.max(0, historyTurns.length - eventTurnCount))
+    return [...historyOnly, ...eventTurns]
+  }, [events, session?.messages, session?.task])
+
+  const transcriptRows = useMemo(() => {
+    return mergedTurns
+      .map((turn, index) => {
+        const agentText = turn.agentReply || turn.agentActivities.join(' | ') || turn.error || '(no agent reply yet)'
+        return {
+          index,
+          userText: turn.userMessage || '(empty user turn)',
+          agentText,
+          role: turn.role || 'agent',
+          status: turn.turnStatus,
+          filesTouched: turn.filesTouched,
+        }
+      })
+      .filter((row) => {
+        const needle = monitorSearch.trim().toLowerCase()
+        if (!needle) return true
+        return (
+          row.userText.toLowerCase().includes(needle) ||
+          row.agentText.toLowerCase().includes(needle) ||
+          row.role.toLowerCase().includes(needle) ||
+          row.status.toLowerCase().includes(needle) ||
+          row.filesTouched.join(' ').toLowerCase().includes(needle)
+        )
+      })
+  }, [mergedTurns, monitorSearch])
+
   const currentAgentState = useMemo(() => {
     if (agentTimeline.length === 0) {
       if (status === 'running') return 'EXECUTING'
@@ -951,8 +990,92 @@ export default function WorkbenchSessionPage() {
     } else {
       url.searchParams.delete('ae')
     }
+    if (rightPanelTab === 'agent') {
+      url.searchParams.set('av', monitorView)
+    } else {
+      url.searchParams.delete('av')
+    }
     window.history.replaceState({}, '', url.toString())
-  }, [rightPanelTab, selectedMonitorEvent])
+  }, [rightPanelTab, selectedMonitorEvent, monitorView])
+
+  const downloadTextFile = useCallback((filename: string, content: string, mimeType: string) => {
+    if (typeof window === 'undefined') return
+    const blob = new Blob([content], { type: mimeType })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  }, [])
+
+  const exportMonitorJson = useCallback(() => {
+    const payload = {
+      session_id: id,
+      status,
+      exported_at: new Date().toISOString(),
+      timeline_events: filteredAgentTimeline.map((item) => item.evt),
+      transcript: transcriptRows,
+    }
+    downloadTextFile(
+      `workbench-${id}-monitor.json`,
+      `${JSON.stringify(payload, null, 2)}\n`,
+      'application/json;charset=utf-8',
+    )
+  }, [downloadTextFile, filteredAgentTimeline, id, status, transcriptRows])
+
+  const exportMonitorMarkdown = useCallback(() => {
+    const lines: string[] = [
+      '# Workbench Agent Transcript',
+      '',
+      `- Session: ${id}`,
+      `- Status: ${status}`,
+      `- Exported: ${new Date().toISOString()}`,
+      '',
+      '## Transcript',
+      '',
+    ]
+
+    if (transcriptRows.length === 0) {
+      lines.push('_No transcript rows match current filters._', '')
+    } else {
+      transcriptRows.forEach((row) => {
+        lines.push(`### Turn ${row.index + 1}`)
+        lines.push(`- Role: ${row.role}`)
+        lines.push(`- Status: ${row.status}`)
+        if (row.filesTouched.length > 0) {
+          lines.push(`- Files: ${row.filesTouched.join(', ')}`)
+        }
+        lines.push('')
+        lines.push('**User**')
+        lines.push('')
+        lines.push(row.userText)
+        lines.push('')
+        lines.push('**Agent**')
+        lines.push('')
+        lines.push(row.agentText)
+        lines.push('')
+      })
+    }
+
+    lines.push('## Timeline (Filtered)', '')
+    if (filteredAgentTimeline.length === 0) {
+      lines.push('_No timeline events match current filters._', '')
+    } else {
+      filteredAgentTimeline.forEach((item) => {
+        lines.push(`- ${item.evt.ts} | ${item.state} | ${item.eventType} | ${item.summary}`)
+      })
+      lines.push('')
+    }
+
+    downloadTextFile(
+      `workbench-${id}-monitor.md`,
+      `${lines.join('\n')}\n`,
+      'text/markdown;charset=utf-8',
+    )
+  }, [downloadTextFile, filteredAgentTimeline, id, status, transcriptRows])
 
   return (
     <div className="flex flex-col h-full -m-6 lg:-m-10">
@@ -1115,14 +1238,7 @@ export default function WorkbenchSessionPage() {
             {(() => {
               // Build turns from live events. If events_log was truncated (rolling
               // buffer), also pull older turns from session.messages (complete history).
-              const eventTurns = buildTurns(events, session?.task || null)
-              const historyTurns = session?.messages ? buildTurnsFromHistory(session.messages, session?.task || null) : []
-              // Merge: show history turns that aren't covered by event turns.
-              // History turns are simpler (no agent_thought) but fill in older context.
-              const eventTurnCount = eventTurns.length
-              const historyOnly = historyTurns.slice(0, Math.max(0, historyTurns.length - eventTurnCount))
-              const turns = [...historyOnly, ...eventTurns]
-              if (turns.length === 0) {
+              if (mergedTurns.length === 0) {
                 return (
                   <div className="flex items-center justify-center h-full">
                     <div className="text-center text-gray-400">
@@ -1132,7 +1248,7 @@ export default function WorkbenchSessionPage() {
                   </div>
                 )
               }
-              return turns.map((turn, i) => (
+              return mergedTurns.map((turn, i) => (
                 <TurnBubble
                   key={i}
                   turn={turn}
@@ -1364,11 +1480,51 @@ export default function WorkbenchSessionPage() {
                   <div className="text-xs text-gray-700 dark:text-gray-300 space-y-1">
                     <div>Session: <span className="font-mono">{id}</span></div>
                     <div>Status: <span className="font-semibold">{status}</span></div>
-                    <div>Turns: <span className="font-semibold">{events.filter(e => getEventType(e) === 'user_message').length + (session?.task ? 1 : 0)}</span></div>
+                    <div>Turns: <span className="font-semibold">{mergedTurns.length}</span></div>
                     <div>Events: <span className="font-semibold">{agentTimeline.length}</span></div>
                   </div>
                 </div>
 
+                <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-2 space-y-2">
+                  <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-100 dark:bg-gray-800 p-1">
+                    <button
+                      onClick={() => setMonitorView('timeline')}
+                      className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
+                        monitorView === 'timeline'
+                          ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                          : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                      }`}
+                    >
+                      Timeline
+                    </button>
+                    <button
+                      onClick={() => setMonitorView('transcript')}
+                      className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
+                        monitorView === 'transcript'
+                          ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                          : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                      }`}
+                    >
+                      Transcript
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={exportMonitorJson}
+                      className="flex-1 px-2 py-1 text-[10px] rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                    >
+                      Export JSON
+                    </button>
+                    <button
+                      onClick={exportMonitorMarkdown}
+                      className="flex-1 px-2 py-1 text-[10px] rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                    >
+                      Export Markdown
+                    </button>
+                  </div>
+                </div>
+
+                {monitorView === 'timeline' ? (
                 <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
                   <div className="px-2 py-1.5 bg-gray-50 dark:bg-gray-800/50 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                     Lifecycle Timeline
@@ -1446,6 +1602,43 @@ export default function WorkbenchSessionPage() {
                     )}
                   </div>
                 </div>
+                ) : (
+                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+                    <div className="px-2 py-1.5 bg-gray-50 dark:bg-gray-800/50 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                      Transcript
+                    </div>
+                    <div className="p-2 border-y border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900">
+                      <input
+                        value={monitorSearch}
+                        onChange={(e) => setMonitorSearch(e.target.value)}
+                        placeholder="Search turns by user text, agent text, files, role"
+                        className="w-full rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-xs px-2 py-1 text-gray-700 dark:text-gray-200"
+                      />
+                    </div>
+                    <div className="max-h-80 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
+                      {transcriptRows.length === 0 ? (
+                        <div className="px-2 py-3 text-xs text-gray-400">No transcript rows match current filters.</div>
+                      ) : (
+                        transcriptRows.map((row) => (
+                          <div key={row.index} className="px-2 py-2 space-y-1.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Turn {row.index + 1}</span>
+                              <span className={`px-1.5 py-0.5 rounded border text-[9px] font-semibold ${row.status === 'error' ? AGENT_STATE_STYLE.ERROR : AGENT_STATE_STYLE.YIELDED}`}>
+                                {row.status}
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-indigo-700 dark:text-indigo-300">Role: {row.role}</div>
+                            <div className="text-[11px] text-gray-700 dark:text-gray-200 whitespace-pre-wrap">{row.userText}</div>
+                            <div className="text-[11px] text-gray-600 dark:text-gray-300 whitespace-pre-wrap border-l-2 border-gray-200 dark:border-gray-700 pl-2">{row.agentText}</div>
+                            {row.filesTouched.length > 0 && (
+                              <div className="text-[10px] text-gray-500">Files: {row.filesTouched.join(', ')}</div>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {selectedAgentEvent && (
                   <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
