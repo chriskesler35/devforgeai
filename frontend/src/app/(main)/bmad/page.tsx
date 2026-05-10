@@ -58,12 +58,12 @@ function getApiErrorMessage(payload: any, status: number) {
 
 export default function BmadPage() {
   const router = useRouter()
-  const apiBase = getApiBase()
-  const authHeaders = getAuthHeaders()
+  const apiBase = useMemo(() => getApiBase(), [])
+  const authHeader = useMemo(() => getAuthHeaders().Authorization, [])
   const requestHeaders = useMemo(() => ({
-    Authorization: authHeaders.Authorization,
+    Authorization: authHeader,
     'Content-Type': 'application/json',
-  }), [authHeaders.Authorization])
+  }), [authHeader])
 
   const [task, setTask] = useState('')
   const [launching, setLaunching] = useState(false)
@@ -77,7 +77,7 @@ export default function BmadPage() {
   const fetchPipelines = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetch(`${apiBase}/v1/workbench/pipelines`, { headers: authHeaders })
+      const res = await fetch(`${apiBase}/v1/workbench/pipelines`, { headers: { Authorization: authHeader } })
       const payload = await readApiPayload(res)
       if (!res.ok) throw new Error(getApiErrorMessage(payload, res.status))
       const rows = Array.isArray(payload?.data) ? payload.data : []
@@ -92,19 +92,19 @@ export default function BmadPage() {
     } finally {
       setLoading(false)
     }
-  }, [apiBase, authHeaders, selectedPipelineId])
+  }, [apiBase, authHeader, selectedPipelineId])
 
   const fetchPipelineDetail = useCallback(async (id: string) => {
     if (!id) return
     try {
-      const res = await fetch(`${apiBase}/v1/workbench/pipelines/${id}`, { headers: authHeaders })
+      const res = await fetch(`${apiBase}/v1/workbench/pipelines/${id}`, { headers: { Authorization: authHeader } })
       const payload = await readApiPayload(res)
       if (!res.ok) throw new Error(getApiErrorMessage(payload, res.status))
       setPipelineDetail(payload as PipelineDetail)
     } catch (e: any) {
       setError(e.message || 'Failed to load BMAD pipeline detail')
     }
-  }, [apiBase, authHeaders])
+  }, [apiBase, authHeader])
 
   useEffect(() => { fetchPipelines() }, [fetchPipelines])
   useEffect(() => { if (selectedPipelineId) fetchPipelineDetail(selectedPipelineId) }, [selectedPipelineId, fetchPipelineDetail])
