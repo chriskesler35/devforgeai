@@ -31,7 +31,7 @@ Scope source: REQUIREMENTS.md (Pattern 1, Pattern 2, Pattern 3 acceptance criter
 17. PARTIAL - Schema enforcement returns clear error messages (some paths do, not uniformly)
 18. MISSING - Marketplace models require verification + capability declaration before listing
 19. PARTIAL - Backend source -> frontend TTL cache protocol implemented; webhook-driven refresh still pending
-20. MISSING - Provider webhook triggers catalog update
+20. PARTIAL - Provider webhook endpoint now triggers backend catalog refresh; external provider integrations pending
 
 ### Pattern 3 Remaining Work Packs
 

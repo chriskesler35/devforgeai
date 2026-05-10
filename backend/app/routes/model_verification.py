@@ -117,6 +117,11 @@ class ModelCatalogDTO(BaseModel):
     models: list[ModelCatalogModelDTO]
 
 
+class CatalogWebhookRequest(BaseModel):
+    provider: Optional[str] = None
+    reason: Optional[str] = None
+
+
 # ============================================================================
 # Model Verification Endpoints
 # ============================================================================
@@ -381,6 +386,32 @@ async def get_model_capability_catalog(
         count=len(models),
         models=models,
     )
+
+
+@router.post("/models/catalog/webhook")
+async def refresh_catalog_from_webhook(
+    body: CatalogWebhookRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Webhook trigger for provider catalog updates -> refresh backend model catalog."""
+    from app.routes.model_sync import run_model_sync
+
+    provider_filter = (body.provider or "").strip().lower() or None
+    sync_result = await run_model_sync(
+        db,
+        deduplicate_existing=False,
+        provider_filter=provider_filter,
+    )
+
+    return {
+        "ok": True,
+        "provider": provider_filter,
+        "reason": body.reason,
+        "added": len(sync_result.get("added", [])),
+        "updated": len(sync_result.get("updated", [])),
+        "deactivated": len(sync_result.get("deactivated", [])),
+        "ollama_available": bool(sync_result.get("ollama_available")),
+    }
 
 
 @router.post("/models/{model_id}/pin-session/{session_id}")
