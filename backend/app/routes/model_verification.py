@@ -2,13 +2,13 @@
 
 from typing import Optional
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 import json
 import hmac
 from time import time
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from pydantic import BaseModel
@@ -149,6 +149,12 @@ class ModelHealthDashboardDTO(BaseModel):
     degraded: int
     by_provider: dict
     models: list[dict]
+
+
+class DiagnosisSuiteDTO(BaseModel):
+    generated_at: datetime
+    summary: dict
+    root_causes: list[dict]
 
 
 class ModelSelectionLogDTO(BaseModel):
@@ -306,6 +312,91 @@ async def get_model_verification(
     )
 
 
+@router.get("/models/{model_id}/verification/report")
+async def download_model_verification_report(
+    model_id: UUID,
+    format: str = Query(default="markdown"),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Download a per-model verification report in markdown (default) or JSON."""
+    model = (await db.execute(select(Model).where(Model.id == model_id))).scalars().first()
+    if not model:
+        raise HTTPException(status_code=404, detail="Model not found")
+
+    provider = (await db.execute(select(Provider).where(Provider.id == model.provider_id))).scalars().first()
+    verification = (await db.execute(select(ModelVerification).where(ModelVerification.model_id == model_id))).scalars().first()
+
+    payload = {
+        "generated_at": datetime.utcnow().isoformat(),
+        "model": {
+            "id": str(model.id),
+            "model_id": model.model_id,
+            "display_name": model.display_name or model.model_id,
+            "provider": provider.name if provider else "unknown",
+            "is_active": bool(model.is_active),
+            "context_window": model.context_window,
+            "validation_status": model.validation_status or "unverified",
+            "validation_source": model.validation_source,
+            "validated_at": model.validated_at.isoformat() if model.validated_at else None,
+            "validation_warning": model.validation_warning,
+            "validation_error": model.validation_error,
+        },
+        "verification": {
+            "status": verification.verification_status if verification else "unverified",
+            "verified_at": verification.verified_at.isoformat() if verification and verification.verified_at else None,
+            "capabilities": verification.capabilities if verification else (model.capabilities or {}),
+            "test_results": verification.test_results if verification else {},
+            "notes": verification.notes if verification else None,
+            "fallback_recommendations": verification.fallback_recommendations if verification else None,
+        },
+    }
+
+    file_stem = f"verification-report-{(provider.name if provider else 'unknown')}-{model.model_id}".replace("/", "-")
+    if format.lower() == "json":
+        body = json.dumps(payload, indent=2)
+        return Response(
+            content=body,
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{file_stem}.json"'},
+        )
+
+    lines = [
+        f"# Verification Report: {payload['model']['display_name']}",
+        "",
+        f"Generated: {payload['generated_at']}",
+        "",
+        "## Model",
+        f"- Provider: {payload['model']['provider']}",
+        f"- Model ID: {payload['model']['model_id']}",
+        f"- Active: {payload['model']['is_active']}",
+        f"- Context Window: {payload['model']['context_window']}",
+        f"- Validation Status: {payload['model']['validation_status']}",
+        f"- Validated At: {payload['model']['validated_at']}",
+        "",
+        "## Verification",
+        f"- Verification Status: {payload['verification']['status']}",
+        f"- Verified At: {payload['verification']['verified_at']}",
+        f"- Notes: {payload['verification']['notes']}",
+        f"- Fallback Recommendations: {payload['verification']['fallback_recommendations']}",
+        "",
+        "## Capabilities",
+        "```json",
+        json.dumps(payload["verification"]["capabilities"], indent=2),
+        "```",
+        "",
+        "## Test Results",
+        "```json",
+        json.dumps(payload["verification"]["test_results"], indent=2),
+        "```",
+    ]
+    body = "\n".join(lines)
+    return Response(
+        content=body,
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="{file_stem}.md"'},
+    )
+
+
 @router.post("/models/{model_id}/verify")
 async def verify_model(
     model_id: UUID,
@@ -365,6 +456,112 @@ async def verify_all_models(
     }
     
     return summary
+
+
+@router.get("/models/diagnosis-suite")
+async def get_model_diagnosis_suite(
+    lookback_hours: int = Query(default=24, ge=1, le=168),
+    db: AsyncSession = Depends(get_db),
+) -> DiagnosisSuiteDTO:
+    """Aggregate likely root causes for runtime model reliability issues."""
+    cutoff = datetime.utcnow() - timedelta(hours=lookback_hours)
+
+    verification_rows = (await db.execute(select(ModelVerification.verification_status))).all()
+    verification_counts: dict[str, int] = {}
+    for (status,) in verification_rows:
+        key = status or "unverified"
+        verification_counts[key] = verification_counts.get(key, 0) + 1
+
+    provider_health_rows = (
+        await db.execute(
+            select(Provider.name, ProviderHealth.health_status, ProviderHealth.credential_status, ProviderHealth.connectivity_status)
+            .join(ProviderHealth, ProviderHealth.provider_id == Provider.id)
+        )
+    ).all()
+    degraded_providers = [
+        {
+            "provider": name,
+            "health_status": health_status,
+            "credential_status": credential_status,
+            "connectivity_status": connectivity_status,
+        }
+        for name, health_status, credential_status, connectivity_status in provider_health_rows
+        if (health_status in {"degraded", "failed"} or credential_status == "invalid" or connectivity_status == "error")
+    ]
+
+    selection_rows = (
+        await db.execute(
+            select(ModelSelectionLog.reason_code, func.count(ModelSelectionLog.id))
+            .where(ModelSelectionLog.created_at >= cutoff)
+            .where(ModelSelectionLog.result != "resolved")
+            .group_by(ModelSelectionLog.reason_code)
+        )
+    ).all()
+    selection_failures = [{"reason_code": reason or "unknown", "count": count} for reason, count in selection_rows]
+
+    root_causes: list[dict] = []
+
+    failed_or_degraded = verification_counts.get("failed", 0) + verification_counts.get("degraded", 0)
+    if failed_or_degraded > 0:
+        root_causes.append(
+            {
+                "code": "verification_failures",
+                "severity": "high" if verification_counts.get("failed", 0) > 0 else "medium",
+                "count": failed_or_degraded,
+                "message": (
+                    f"{verification_counts.get('failed', 0)} failed and "
+                    f"{verification_counts.get('degraded', 0)} degraded model verifications detected."
+                ),
+                "details": verification_counts,
+            }
+        )
+
+    if degraded_providers:
+        root_causes.append(
+            {
+                "code": "provider_health_degraded",
+                "severity": "high",
+                "count": len(degraded_providers),
+                "message": "One or more providers report degraded/failed health or invalid credentials.",
+                "details": degraded_providers,
+            }
+        )
+
+    if selection_failures:
+        top = sorted(selection_failures, key=lambda x: x["count"], reverse=True)[:5]
+        root_causes.append(
+            {
+                "code": "selection_failures",
+                "severity": "medium",
+                "count": sum(item["count"] for item in selection_failures),
+                "message": f"Model selection logged non-resolved outcomes in the last {lookback_hours}h.",
+                "details": top,
+            }
+        )
+
+    if not root_causes:
+        root_causes.append(
+            {
+                "code": "no_major_issues_detected",
+                "severity": "low",
+                "count": 0,
+                "message": "No high-signal reliability root causes detected in current verification/health/log windows.",
+                "details": {},
+            }
+        )
+
+    summary = {
+        "lookback_hours": lookback_hours,
+        "verification_counts": verification_counts,
+        "degraded_provider_count": len(degraded_providers),
+        "selection_failure_count": sum(item["count"] for item in selection_failures),
+    }
+
+    return DiagnosisSuiteDTO(
+        generated_at=datetime.utcnow(),
+        summary=summary,
+        root_causes=root_causes,
+    )
 
 
 @router.get("/models/health-dashboard")

@@ -12,10 +12,10 @@ Scope source: REQUIREMENTS.md (Pattern 1, Pattern 2, Pattern 3 acceptance criter
 
 ## Pattern 3: Deterministic Model Reliability
 
-1. PARTIAL - Diagnosis suite identifies root cause of hit-or-miss behavior
+1. DONE - Diagnosis suite endpoint + frontend dashboard now surface root-cause signals from verification status, provider health, and selection failures
 2. DONE - Verification test suite covers chat, streaming, vision, embeddings, functions, error handling
 3. DONE - Verification state stored in DB with status, capabilities, test results
-4. MISSING - Verification report downloadable per model
+4. DONE - Verification report is downloadable per model (markdown/json) and exposed in Models diagnose modal
 5. DONE - Runtime selection logic prioritizes verified models
 6. PARTIAL - Fallback chain is ordered and user-configurable (ordered yes, user-config no)
 7. DONE - Session-level model pinning now includes Workbench Pin/Unpin UI wiring with live pin status

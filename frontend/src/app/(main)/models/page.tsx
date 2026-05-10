@@ -149,6 +149,23 @@ interface ProviderHealthSummary {
   connectivity_status: 'ok' | 'error' | 'unchecked' | string
   last_checked_at?: string | null
 }
+
+interface DiagnosisSuite {
+  generated_at: string
+  summary: {
+    lookback_hours?: number
+    verification_counts?: Record<string, number>
+    degraded_provider_count?: number
+    selection_failure_count?: number
+  }
+  root_causes: Array<{
+    code: string
+    severity: 'low' | 'medium' | 'high' | string
+    count: number
+    message: string
+    details?: Record<string, unknown>
+  }>
+}
 function formatSyncMode(mode?: string): string {
   if (!mode) return 'Catalog sync'
   return mode.replace(/_/g, ' ')
@@ -212,6 +229,7 @@ export default function ModelsPage() {
   const [healthDashboard, setHealthDashboard] = useState<ModelHealthDashboard | null>(null)
   const [selectionLog, setSelectionLog] = useState<SelectionLogEntry[]>([])
   const [providerHealth, setProviderHealth] = useState<ProviderHealthSummary[]>([])
+  const [diagnosisSuite, setDiagnosisSuite] = useState<DiagnosisSuite | null>(null)
   const [dashboardRefreshing, setDashboardRefreshing] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [syncingProvider, setSyncingProvider] = useState(false)
@@ -339,10 +357,22 @@ export default function ModelsPage() {
     }
   }
 
+  const fetchDiagnosisSuite = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/v1/models/diagnosis-suite?lookback_hours=24`, { headers: AUTH_HEADERS })
+      if (res.ok) {
+        const data: DiagnosisSuite = await res.json()
+        setDiagnosisSuite(data)
+      }
+    } catch {
+      // Non-fatal diagnostics
+    }
+  }
+
   const refreshReliabilityDashboard = async () => {
     setDashboardRefreshing(true)
     try {
-      await Promise.all([fetchHealthDashboard(), fetchSelectionLog(), fetchProviderHealth()])
+      await Promise.all([fetchHealthDashboard(), fetchSelectionLog(), fetchProviderHealth(), fetchDiagnosisSuite()])
     } finally {
       setDashboardRefreshing(false)
     }
@@ -358,10 +388,6 @@ export default function ModelsPage() {
       await fetchModels()
       await fetchSyncStatus()
       await fetchRuntimeStatus()
-      await refreshReliabilityDashboard()
-      await refreshReliabilityDashboard()
-      await refreshReliabilityDashboard()
-      await refreshReliabilityDashboard()
       await refreshReliabilityDashboard()
     } catch (e: any) {
       setSyncResult({ ok: false, message: 'Sync failed — check backend logs' })
@@ -381,6 +407,7 @@ export default function ModelsPage() {
       setSyncResult(data)
       await fetchModels()
       await fetchSyncStatus()
+      await refreshReliabilityDashboard()
     } catch (_e: any) {
       setSyncResult({ ok: false, message: `Provider sync failed for ${selectedProviderSync} — check backend logs` })
     } finally {
@@ -402,6 +429,7 @@ export default function ModelsPage() {
       await fetchModels()
       await fetchSyncStatus()
       await fetchRuntimeStatus()
+      await refreshReliabilityDashboard()
       if ((data.needs_review || 0) > 0 || (data.failed || 0) > 0) {
         setShowReviewSection(true)
       }
@@ -430,6 +458,7 @@ export default function ModelsPage() {
           fetchHealthDashboard(),
           fetchSelectionLog(),
           fetchProviderHealth(),
+          fetchDiagnosisSuite(),
         ])
       } catch (e) {
         console.error('Failed to fetch:', e)
@@ -711,6 +740,32 @@ export default function ModelsPage() {
       console.error('Failed to diagnose model:', e)
     } finally {
       setDiagnosingId(null)
+    }
+  }
+
+  const handleDownloadVerificationReport = async (modelId: string, reportFormat: 'markdown' | 'json' = 'markdown') => {
+    try {
+      const res = await fetch(`${API_BASE}/v1/models/${modelId}/verification/report?format=${reportFormat}`, {
+        headers: AUTH_HEADERS,
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        alert(data.detail || 'Failed to download verification report')
+        return
+      }
+
+      const blob = await res.blob()
+      const url = window.URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `verification-report-${modelId}.${reportFormat === 'json' ? 'json' : 'md'}`
+      document.body.appendChild(anchor)
+      anchor.click()
+      document.body.removeChild(anchor)
+      window.URL.revokeObjectURL(url)
+    } catch (e) {
+      console.error('Failed to download report:', e)
+      alert('Failed to download verification report')
     }
   }
 
@@ -1017,6 +1072,27 @@ export default function ModelsPage() {
             <div className="text-lg font-semibold text-rose-800 dark:text-rose-200">{healthDashboard?.failed ?? 0}</div>
           </div>
         </div>
+
+        {diagnosisSuite && (
+          <div className="mt-3 rounded border border-indigo-200 bg-white p-3 dark:border-indigo-800 dark:bg-gray-900">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-indigo-700 dark:text-indigo-300">
+              Diagnosis Suite (Last {diagnosisSuite.summary?.lookback_hours || 24}h)
+            </div>
+            <div className="space-y-2">
+              {diagnosisSuite.root_causes?.map((cause) => (
+                <div key={cause.code} className="rounded border border-gray-200 px-2 py-1.5 text-xs dark:border-gray-700">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-gray-800 dark:text-gray-200">{cause.code}</span>
+                    <span className={`rounded px-1.5 py-0.5 ${cause.severity === 'high' ? 'bg-rose-100 text-rose-800' : cause.severity === 'medium' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700'}`}>
+                      {cause.severity}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-gray-600 dark:text-gray-300">{cause.message}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {degradedProviders.length > 0 && (
           <div className="mt-3 rounded border border-amber-300 bg-amber-100/70 px-3 py-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200">
@@ -1376,7 +1452,13 @@ export default function ModelsPage() {
               )}
             </div>
 
-            <div className="mt-4 flex justify-end">
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => diagnoseResult?.model?.id && handleDownloadVerificationReport(diagnoseResult.model.id, 'markdown')}
+                className="px-4 py-2 text-sm border border-indigo-300 text-indigo-700 rounded-md hover:bg-indigo-50"
+              >
+                Download Report
+              </button>
               <button
                 onClick={() => setDiagnoseResult(null)}
                 className="px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700"
