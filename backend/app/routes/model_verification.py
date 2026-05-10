@@ -4,13 +4,13 @@ from typing import Optional
 from uuid import UUID
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from pydantic import BaseModel
 
 from app.database import get_db
-from app.models import Model, Provider, ModelVerification, ProviderHealth
+from app.models import Model, Provider, ModelSelectionLog, ModelVerification, ProviderHealth
 from app.middleware.auth import verify_api_key
 from app.services.model_verification import ModelVerificationService
 from app.services.provider_health import ProviderHealthService
@@ -67,6 +67,19 @@ class ModelHealthDashboardDTO(BaseModel):
     degraded: int
     by_provider: dict
     models: list[dict]
+
+
+class ModelSelectionLogDTO(BaseModel):
+    id: UUID
+    created_at: datetime
+    feature: str
+    intent: Optional[str] = None
+    requested_model_ref: Optional[str] = None
+    candidates: list[str] = []
+    selected_model_ref: Optional[str] = None
+    result: str
+    reason_code: Optional[str] = None
+    details: dict = {}
 
 
 # ============================================================================
@@ -232,6 +245,38 @@ async def get_model_health_dashboard(
         by_provider=by_provider,
         models=[]  # TODO: Add detailed model list
     )
+
+
+@router.get("/models/selection-log")
+async def get_model_selection_log(
+    limit: int = Query(default=100, ge=1, le=1000),
+    feature: Optional[str] = Query(default=None),
+    result: Optional[str] = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> list[ModelSelectionLogDTO]:
+    """Return durable runtime model selection decisions for debugging and audits."""
+    stmt = select(ModelSelectionLog).order_by(ModelSelectionLog.created_at.desc()).limit(limit)
+    if feature:
+        stmt = stmt.where(ModelSelectionLog.feature == feature)
+    if result:
+        stmt = stmt.where(ModelSelectionLog.result == result)
+
+    rows = (await db.execute(stmt)).scalars().all()
+    return [
+        ModelSelectionLogDTO(
+            id=row.id,
+            created_at=row.created_at,
+            feature=row.feature,
+            intent=row.intent,
+            requested_model_ref=row.requested_model_ref,
+            candidates=list(row.candidates or []),
+            selected_model_ref=row.selected_model_ref,
+            result=row.result,
+            reason_code=row.reason_code,
+            details=dict(row.details or {}),
+        )
+        for row in rows
+    ]
 
 
 # ============================================================================

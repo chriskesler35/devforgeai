@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Model, ModelVerification, Provider
+from app.models import Model, ModelSelectionLog, ModelVerification, Provider
 from app.services.github_copilot import get_copilot_auth_token, resolve_supported_copilot_model
 from app.services.provider_credentials import has_provider_api_key
 
@@ -809,6 +809,8 @@ async def resolve_with_verification(
                 await log_selection_decision(
                     db,
                     feature=normalized_feature,
+                    requested_model_ref=model_ref,
+                    intent=intent,
                     candidates=[exact.model.model_id],
                     selected=exact.model,
                     result="success"
@@ -824,6 +826,8 @@ async def resolve_with_verification(
         await log_selection_decision(
             db,
             feature=normalized_feature,
+            requested_model_ref=model_ref,
+            intent=intent,
             candidates=[m[0].model_id for m in verified_models],
             selected=model,
             result="success"
@@ -837,6 +841,18 @@ async def resolve_with_verification(
         )
     
     # No verified models; return error
+    await log_selection_decision(
+        db,
+        feature=normalized_feature,
+        requested_model_ref=model_ref,
+        intent=intent,
+        candidates=[m[0].model_id for m in verified_models],
+        selected=None,
+        result="failure",
+        reason_code="no_verified_models",
+        details={"message": "No verified model matched requested feature"},
+    )
+
     return Unreachable(
         reason_code="no_verified_models",
         user_message=f"No verified models support feature '{normalized_feature}'. "
@@ -897,9 +913,13 @@ async def get_model_verification(db: AsyncSession, model_id: UUID) -> Optional[M
 async def log_selection_decision(
     db: AsyncSession,
     feature: str,
+    requested_model_ref: str | None,
+    intent: ResolveIntent | None,
     candidates: list[str],
-    selected: Model,
-    result: str
+    selected: Model | None,
+    result: str,
+    reason_code: str | None = None,
+    details: dict | None = None,
 ):
     """
     Log model selection decision for debugging.
@@ -915,13 +935,38 @@ async def log_selection_decision(
     # For now, just log
     import logging
     logger = logging.getLogger(__name__)
+    selected_model_ref = selected.model_id if selected else None
+    selected_provider_id = selected.provider_id if selected else None
+    selected_model_id = selected.id if selected else None
+
     logger.info(
-        "Model selection decision | feature=%s | candidates=%s | selected=%s | result=%s",
+        "Model selection decision | feature=%s | intent=%s | requested=%s | candidates=%s | selected=%s | result=%s | reason=%s",
         feature,
+        intent,
+        requested_model_ref,
         candidates,
-        selected.model_id,
+        selected_model_ref,
         result,
+        reason_code,
     )
+
+    try:
+        row = ModelSelectionLog(
+            requested_model_ref=requested_model_ref,
+            feature=feature,
+            intent=intent,
+            candidates=candidates,
+            selected_model_id=selected_model_id,
+            selected_provider_id=selected_provider_id,
+            selected_model_ref=selected_model_ref,
+            result=result,
+            reason_code=reason_code,
+            details=details or {},
+        )
+        db.add(row)
+        await db.flush()
+    except Exception as exc:
+        logger.warning("Failed to persist model selection log entry: %s", exc)
 
 
 def get_fallback_chain(feature: str) -> list[str]:

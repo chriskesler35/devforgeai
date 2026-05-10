@@ -1,0 +1,127 @@
+# DevForgeAI Completion Gap Checklist
+
+Updated: 2026-05-10
+Baseline commit: 11286bf
+Scope source: REQUIREMENTS.md (Pattern 1, Pattern 2, Pattern 3 acceptance criteria)
+
+## Status Legend
+
+- DONE: implemented and wired in runtime behavior
+- PARTIAL: implemented in backend or docs only; missing UI, persistence, or full acceptance behavior
+- MISSING: not implemented yet
+
+## Pattern 3: Deterministic Model Reliability
+
+1. PARTIAL - Diagnosis suite identifies root cause of hit-or-miss behavior
+2. DONE - Verification test suite covers chat, streaming, vision, embeddings, functions, error handling
+3. DONE - Verification state stored in DB with status, capabilities, test results
+4. MISSING - Verification report downloadable per model
+5. DONE - Runtime selection logic prioritizes verified models
+6. PARTIAL - Fallback chain is ordered and user-configurable (ordered yes, user-config no)
+7. MISSING - Pin Model button works (session-level override)
+8. PARTIAL - Model Health Dashboard shows real-time metrics (backend endpoint exists; UI and richer metrics incomplete)
+9. PARTIAL - Selection decisions are logged (currently logger output, not durable queryable store)
+10. DONE - Provider health check endpoint exists and works
+11. PARTIAL - Provider credential management UI shows status and actions (backend exists; UI flow incomplete)
+12. DONE - Background health monitoring runs periodically
+13. PARTIAL - Degraded provider auto-disabled in model selection (auto-deactivation exists; policy thresholding and observability incomplete)
+14. MISSING - Credential failure shows alert + fix action in UI
+15. PARTIAL - Model capability schema is JSON and enforced (JSON present; enforcement not complete for all paths/features)
+16. MISSING - Frontend syncs capability catalog on startup
+17. PARTIAL - Schema enforcement returns clear error messages (some paths do, not uniformly)
+18. MISSING - Marketplace models require verification + capability declaration before listing
+19. MISSING - Catalog sync protocol works (backend source -> frontend cache with TTL)
+20. MISSING - Provider webhook triggers catalog update
+
+### Pattern 3 Remaining Work Packs
+
+- P3-W1: Durable selection audit trail
+  - Add table for selection decisions
+  - Persist every resolution attempt (feature, candidates, winner, result)
+  - Add query endpoint for diagnostics
+- P3-W2: Pin model by session
+  - Add endpoint and session persistence
+  - Ensure resolver honors session pin ahead of normal chain
+- P3-W3: Capability catalog contract and sync
+  - Unified backend catalog endpoint with version/hash
+  - Frontend startup sync and TTL cache
+- P3-W4: Dashboard completion
+  - Frontend dashboard views for health and verification
+  - Alerts for degraded credentials/providers
+- P3-W5: Marketplace gate and webhook
+  - Certification requirement before listing
+  - Provider webhook ingestion and incremental catalog refresh
+
+## Pattern 1: Agent Transparency and Control
+
+Current summary: foundational agent streams/events exist in workbench and pipeline runtime, but required observability and intervention UX from acceptance criteria is not fully delivered.
+
+1. PARTIAL - Real-time agent state updates exist in runtime event streams; full state badge matrix and lifecycle UX incomplete
+2. MISSING - Execution graph (DAG) with live parent-child visualization and animation
+3. MISSING - Prompt inspector with full context diff view
+4. MISSING - Searchable complete inter-agent transcript UI
+5. MISSING - Pause all agents control with guaranteed halting semantics
+6. MISSING - Override result flow feeding parent agent
+7. MISSING - Retry with modified prompt UX
+8. MISSING - Approval gates before spawn (configurable per method/agent)
+9. MISSING - Kill cascade impact UX + safe execution
+10. MISSING - Confidence scoring + low-confidence verification flow
+11. MISSING - Alternative result selection UX
+12. MISSING - Dedicated Agent Monitor view and Agent Detail tabs
+13. MISSING - Live feed with filter/search and deep-linking
+
+### Pattern 1 Remaining Work Packs
+
+- P1-W1: Canonical agent event model and state machine contract
+- P1-W2: Agent Monitor + Agent Detail core views
+- P1-W3: Prompt inspector and transcript search
+- P1-W4: Intervention controls (pause, override, retry, kill)
+- P1-W5: Execution graph + live feed + confidence/alternatives
+
+## Pattern 2: Methods-First Workflows
+
+Current summary: method/workflow concepts exist in backend and UI areas, but acceptance-level flow shaping and UX parity are not complete.
+
+1. PARTIAL - Method entities and workflow machinery exist; method-first UI shaping incomplete
+2. MISSING - Complete method selector UX (Chat, GSD, BMAD, gtrack, Custom, Marketplace) with metadata cards
+3. PARTIAL - Chat immediate path exists; not fully isolated from run/session complexity in all entry flows
+4. MISSING - Full GSD guided flow with live roadmap build experience
+5. MISSING - Full BMAD staged flow UI with explicit milestones
+6. MISSING - gtrack issue import/mapping/execution UX
+7. MISSING - Home page CTA redesign around method-first entry
+8. MISSING - Method picker search + installed + marketplace segmentation
+9. MISSING - Interactive project creation Q&A with rich progress/breadcrumb/next steps
+10. MISSING - Method switching with context handoff guarantees
+11. MISSING - Marketplace UX depth (categories, preview, ratings, install loop)
+12. MISSING - Post-method feedback collection/aggregation
+
+### Pattern 2 Remaining Work Packs
+
+- P2-W1: Method launcher redesign and information architecture
+- P2-W2: Method-specific run surfaces (Chat, GSD, BMAD, gtrack)
+- P2-W3: Interactive kickoff/Q&A and roadmap live generation UX
+- P2-W4: Method switching and context handoff protocol
+- P2-W5: Marketplace and feedback loops
+
+## Completion Order (Recommended)
+
+1. Finish Pattern 3 remaining gaps (P3-W1 through P3-W5) to lock reliability guarantees
+2. Build Pattern 1 transparency baseline (P1-W1 through P1-W3)
+3. Add Pattern 1 intervention controls and graph/feed (P1-W4 through P1-W5)
+4. Deliver Pattern 2 method-first launcher and flows (P2-W1 through P2-W5)
+
+## Immediate Next Sprint (Start Now)
+
+1. Implement P3-W1 durable selection audit trail
+2. Implement P3-W2 session-level model pin endpoint and resolver support
+3. Implement P3-W3 capability catalog endpoint and frontend startup sync
+4. Add tests for Pattern 3 resolver + provider health monitor + verification routes
+
+## Definition of Fully Completed
+
+All acceptance items in REQUIREMENTS.md for Pattern 1, Pattern 2, and Pattern 3 are demonstrably satisfied with:
+
+- backend implementation
+- frontend UX implementation where required
+- automated test coverage for core behaviors
+- docs updated with operational runbooks

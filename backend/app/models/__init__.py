@@ -27,9 +27,10 @@ from app.models.oauth_credential import OAuthCredential
 from app.models.installed_skill import InstalledSkill
 from app.models.model_verification import ModelVerification
 from app.models.provider_health import ProviderHealth
+from app.models.model_selection_log import ModelSelectionLog
 
 __all__ = [
-    "Base", "BaseMixin", "Provider", "Model", "ModelVerification", "ProviderHealth", "Persona",
+    "Base", "BaseMixin", "Provider", "Model", "ModelVerification", "ProviderHealth", "ModelSelectionLog", "Persona",
     "Conversation", "Message", "ConversationShare", "RequestLog",
     "UserProfile", "MemoryFile", "PreferenceTracking", "SystemModification",
     "Agent", "AgentMemory", "AgentRun", "Task", "WorkbenchSession", "Pipeline", "PhaseRun", "CommandExecution",
