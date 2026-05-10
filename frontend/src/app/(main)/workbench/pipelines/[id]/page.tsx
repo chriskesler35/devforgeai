@@ -72,6 +72,11 @@ interface PipelineEvent {
   type: string
   payload?: Record<string, any>
   ts?: string
+  canonical_type?: string
+  canonical_state?: string | null
+  canonical_severity?: string
+  canonical_source?: string
+  canonical_version?: string
 }
 
 interface ModelOption {
@@ -165,11 +170,45 @@ const EVENT_REFRESH_TYPES = new Set([
   'files_written',
 ])
 
+const CANONICAL_PIPELINE_EVENT_ALIAS: Record<string, string> = {
+  'lifecycle.init': 'init',
+  'lifecycle.ping': 'ping',
+  'system.info': 'info',
+  'system.warning': 'warning',
+  'run.error': 'error',
+  'run.done': 'pipeline_done',
+  'run.awaiting_approval': 'awaiting_approval',
+  'user.message': 'user_message',
+  'pipeline.created': 'pipeline_created',
+  'pipeline.done': 'pipeline_done',
+  'pipeline.retry': 'pipeline_retry',
+  'phase.started': 'phase_started',
+  'phase.progress': 'phase_progress',
+  'phase.thinking': 'phase_thinking',
+  'phase.completed': 'phase_completed',
+  'phase.failed': 'phase_failed',
+  'phase.retry': 'phase_retry',
+  'phase.retry_exhausted': 'phase_retry_exhausted',
+  'phase.skipped': 'phase_skipped',
+  'phase.branch': 'phase_branch',
+  'phase.model_changed': 'phase_model_changed',
+  'phase.approved': 'phase_approved',
+  'phase.rejected': 'phase_rejected',
+  'artifact.files_written': 'files_written',
+  'command.awaiting_approval': 'command_awaiting_approval',
+  'command.running': 'command_running',
+  'command.completed': 'command_completed',
+}
+
+function getPipelineEventType(evt: PipelineEvent): string {
+  return CANONICAL_PIPELINE_EVENT_ALIAS[evt.canonical_type || ''] || evt.type
+}
+
 function makeEventKey(evt: PipelineEvent) {
   const payload = evt.payload || {}
   return [
     evt.ts || '',
-    evt.type || '',
+    getPipelineEventType(evt) || evt.type || '',
     payload.phase_run_id || '',
     payload.phase_index ?? '',
     payload.command_id || '',
@@ -186,10 +225,11 @@ function formatEventTime(ts?: string) {
 }
 
 function describeEvent(evt: PipelineEvent, phases?: PhaseDef[]) {
+  const eventType = getPipelineEventType(evt)
   const payload = evt.payload || {}
   const phaseName = payload.phase_name || (typeof payload.phase_index === 'number' ? phases?.[payload.phase_index]?.name : undefined) || 'Phase'
 
-  switch (evt.type) {
+  switch (eventType) {
     case 'pipeline_created':
       return { tone: 'info', title: 'Pipeline created', detail: `${payload.phases?.length || 0} phases queued.` }
     case 'phase_started':
@@ -1187,14 +1227,15 @@ export default function PipelinePage() {
   }, [])
 
   const appendEvent = useCallback((evt: PipelineEvent) => {
-    if (!evt || !evt.type || evt.type === 'ping' || evt.type === 'init') return
+    const eventType = getPipelineEventType(evt)
+    if (!evt || !eventType || eventType === 'ping' || eventType === 'init') return
     const key = makeEventKey(evt)
     if (seenEventKeysRef.current.has(key)) return
     seenEventKeysRef.current.add(key)
     setEvents(curr => {
-      if (evt.type === 'phase_progress' && curr.length > 0) {
+      if (eventType === 'phase_progress' && curr.length > 0) {
         const last = curr[curr.length - 1]
-        if (last.type === 'phase_progress' && last.payload?.phase_index === evt.payload?.phase_index) {
+        if (getPipelineEventType(last) === 'phase_progress' && last.payload?.phase_index === evt.payload?.phase_index) {
           return [...curr.slice(0, -1), evt]
         }
       }
@@ -1518,9 +1559,10 @@ export default function PipelinePage() {
 
     es.onmessage = (e) => {
       try {
-        const evt = JSON.parse(e.data)
-        if (evt.type === 'ping') return
-        if (evt.type === 'init') {
+        const evt: PipelineEvent = JSON.parse(e.data)
+        const eventType = getPipelineEventType(evt)
+        if (eventType === 'ping') return
+        if (eventType === 'init') {
           setPipeline(evt.payload)
           setPhaseRuns(evt.payload.phase_runs || [])
           setLoading(false)
@@ -1534,7 +1576,7 @@ export default function PipelinePage() {
           return
         }
         appendEvent(evt)
-        if (evt.type === 'pipeline_done') {
+        if (eventType === 'pipeline_done') {
           const status = evt.payload?.status
           if (status) {
             setPipeline(prev => prev ? { ...prev, status } : prev)
@@ -1544,7 +1586,7 @@ export default function PipelinePage() {
           esRef.current = null
           return
         }
-        if (EVENT_REFRESH_TYPES.has(evt.type)) {
+        if (EVENT_REFRESH_TYPES.has(eventType)) {
           refetch()
         }
       } catch {}
@@ -1728,12 +1770,16 @@ export default function PipelinePage() {
     r.status === 'approved' || r.status === 'skipped'
   ).length
   const totalPhases = pipeline?.phases?.length || 0
-  const latestEvent = [...events].reverse().find(evt => evt.type !== 'phase_progress') || null
+  const latestEvent = [...events].reverse().find(evt => getPipelineEventType(evt) !== 'phase_progress') || null
   const latestAlert = [...events].reverse().find(evt =>
-    evt.type === 'phase_failed' || evt.type === 'warning' || evt.type === 'awaiting_approval' || evt.type === 'pipeline_done'
+    getPipelineEventType(evt) === 'phase_failed' ||
+    getPipelineEventType(evt) === 'warning' ||
+    getPipelineEventType(evt) === 'awaiting_approval' ||
+    getPipelineEventType(evt) === 'pipeline_done'
   ) || null
   const latestEventSummary = latestEvent ? describeEvent(latestEvent, pipeline?.phases) : null
   const latestAlertSummary = latestAlert ? describeEvent(latestAlert, pipeline?.phases) : null
+  const latestAlertType = latestAlert ? getPipelineEventType(latestAlert) : null
 
   useEffect(() => {
     if (!likelyStuck) return
@@ -1875,9 +1921,9 @@ export default function PipelinePage() {
 
       {latestAlertSummary && (
         <div className={`rounded-2xl border px-4 py-3 ${
-          latestAlert?.type === 'phase_failed' || (latestAlert?.type === 'pipeline_done' && pipeline.status !== 'completed')
+          latestAlertType === 'phase_failed' || (latestAlertType === 'pipeline_done' && pipeline.status !== 'completed')
             ? 'border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-900/20'
-            : latestAlert?.type === 'awaiting_approval'
+            : latestAlertType === 'awaiting_approval'
               ? 'border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/20'
               : 'border-yellow-300 bg-yellow-50 dark:border-yellow-700 dark:bg-yellow-900/20'
         }`}>
