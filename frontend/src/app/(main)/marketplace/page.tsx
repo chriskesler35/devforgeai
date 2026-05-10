@@ -26,6 +26,13 @@ interface Skill {
   manifest_url: string;
 }
 
+interface MethodFeedbackSummary {
+  method_id: string;
+  total: number;
+  average_score: number;
+  average_rating: string;
+}
+
 interface FilterOptions {
   use_cases: string[];
   languages: string[];
@@ -67,6 +74,14 @@ export default function MarketplacePage() {
   const [filterOptions, setFilterOptions] = useState<FilterOptions | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [methodRatings, setMethodRatings] = useState<Record<string, MethodFeedbackSummary>>({});
+
+function resolveMethodIdForSkill(skillId: string): string | null {
+  const bridge = SKILL_METHOD_BRIDGE[skillId];
+  if (bridge) return bridge;
+  if (skillId.endsWith('-core')) return skillId.replace(/-core$/, '');
+  return null;
+}
 
   // Search & Filter
   const [searchQuery, setSearchQuery] = useState('');
@@ -103,6 +118,30 @@ export default function MarketplacePage() {
         if (!skillRes.ok) throw new Error('Failed to load skills');
         const skillData = await skillRes.json();
         setSkills(skillData.results || []);
+
+        try {
+          const ratingRes = await fetch(`${API_BASE}/v1/feedback/methods/summary`, {
+            headers: AUTH_HEADERS,
+          });
+          if (ratingRes.ok) {
+            const ratingPayload = await ratingRes.json();
+            const rows = Array.isArray(ratingPayload?.by_method) ? ratingPayload.by_method : [];
+            const next: Record<string, MethodFeedbackSummary> = {};
+            for (const row of rows) {
+              const methodId = String(row?.method_id || '').toLowerCase();
+              if (!methodId) continue;
+              next[methodId] = {
+                method_id: methodId,
+                total: Number(row?.total || 0),
+                average_score: Number(row?.average_score || 0),
+                average_rating: String(row?.average_rating || 'n/a'),
+              };
+            }
+            setMethodRatings(next);
+          }
+        } catch {
+          // Ratings are non-blocking metadata for marketplace cards.
+        }
 
         const installedRes = await fetch(`${API_BASE}/v1/skills/installed`);
         if (installedRes.ok) {
@@ -279,6 +318,9 @@ export default function MarketplacePage() {
     || skills.find((skill) => skill.skill_id === removingSkillId)
     || null;
 
+  const selectedSkillMethodId = selectedSkill ? resolveMethodIdForSkill(selectedSkill.skill_id) : null;
+  const selectedSkillRating = selectedSkillMethodId ? methodRatings[selectedSkillMethodId] : undefined;
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
       <div className="max-w-7xl mx-auto px-4 py-8">
@@ -360,6 +402,10 @@ export default function MarketplacePage() {
                       </p>
                       <div className="space-y-4">
                         {skills.map((skill) => (
+                          (() => {
+                            const methodId = resolveMethodIdForSkill(skill.skill_id);
+                            const rating = methodId ? methodRatings[methodId] : undefined;
+                            return (
                           <SkillCard
                             key={skill.skill_id}
                             skillId={skill.skill_id}
@@ -372,10 +418,15 @@ export default function MarketplacePage() {
                             isInstalled={installedSkillIds.includes(skill.skill_id)}
                             canInstall={canInstallSkill(skill)}
                             installBlockedReason={installBlockedReason(skill)}
+                            averageRating={rating?.average_rating}
+                            averageScore={rating?.average_score}
+                            totalRatings={rating?.total}
                             onSelect={handleSelectSkill}
                             onInstallClick={handleInstallClick}
                             onRemoveClick={handleRemoveClick}
                           />
+                            );
+                          })()
                         ))}
                       </div>
                     </div>
@@ -399,6 +450,9 @@ export default function MarketplacePage() {
                       isInstalled={installedSkillIds.includes(selectedSkill.skill_id)}
                       canInstall={canInstallSkill(selectedSkill)}
                       installBlockedReason={installBlockedReason(selectedSkill)}
+                      averageRating={selectedSkillRating?.average_rating}
+                      averageScore={selectedSkillRating?.average_score}
+                      totalRatings={selectedSkillRating?.total}
                       onClose={() => setSelectedSkill(null)}
                       onInstallClick={() => handleInstallClick(selectedSkill.skill_id)}
                       onRemoveClick={() => handleRemoveClick(selectedSkill.skill_id)}

@@ -14,6 +14,9 @@ export interface SkillCardProps {
   isInstalled?: boolean;
   canInstall?: boolean;
   installBlockedReason?: string;
+  averageRating?: string;
+  averageScore?: number;
+  totalRatings?: number;
   onSelect: (skillId: string) => void;
   onInstallClick: (skillId: string) => void;
   onRemoveClick: (skillId: string) => void;
@@ -48,6 +51,9 @@ export function SkillCard({
   isInstalled = false,
   canInstall = true,
   installBlockedReason,
+  averageRating,
+  averageScore,
+  totalRatings,
   onSelect,
   onInstallClick,
   onRemoveClick,
@@ -142,6 +148,15 @@ export function SkillCard({
               {trustLevel}
             </Badge>
           </div>
+
+          {typeof totalRatings === 'number' && totalRatings > 0 && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-gray-600">Method Rating:</span>
+              <Badge variant="outline" className="text-xs">
+                {String(averageRating || 'n/a')} ({averageScore?.toFixed(2) || '0.00'}) · {totalRatings}
+              </Badge>
+            </div>
+          )}
         </div>
       </CardContent>
 

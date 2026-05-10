@@ -140,18 +140,16 @@ Scope source: REQUIREMENTS.md acceptance criteria for Pattern 1, Pattern 2, Patt
 19. MISSING - Method switching mid-project works with context handoff guarantees
 - Evidence: no dedicated switch-method UX/contract found for active project flows.
 
-20. PARTIAL - Marketplace has categories, cards, preview, install, ratings
-- Evidence: frontend/src/app/(main)/marketplace/page.tsx (filters/cards/install/skill detail)
-- Gap: ratings loop is not yet connected to method feedback aggregates on cards.
+20. DONE - Marketplace has categories, cards, preview, install, ratings
+- Evidence: frontend/src/app/(main)/marketplace/page.tsx (filters/cards/install/skill detail + method rating fetch), frontend/src/components/marketplace/SkillCard.tsx, frontend/src/components/marketplace/SkillDetailPane.tsx
 
-21. PARTIAL - Post-method feedback is collected and aggregated
-- Evidence: backend/app/routes/feedback.py (/v1/feedback/methods, /v1/feedback/methods/summary), frontend/src/app/(main)/workbench/[id]/page.tsx, frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx
-- Gap: marketplace rating display integration is still pending.
+21. DONE - Post-method feedback is collected and aggregated
+- Evidence: backend/app/routes/feedback.py (/v1/feedback/methods, /v1/feedback/methods/summary), frontend/src/app/(main)/workbench/[id]/page.tsx, frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx, frontend/src/app/(main)/marketplace/page.tsx
 
 ### Pattern 2 Summary
 
-- DONE: 5
-- PARTIAL: 12
+- DONE: 7
+- PARTIAL: 10
 - MISSING: 4
 
 ## Pattern 3 Acceptance Matrix (Deterministic Model Reliability)
@@ -172,8 +170,7 @@ Status: DONE across documented acceptance criteria in this repository snapshot.
 1. Unify method selection into a single launch flow that directly satisfies item 1 without page fragmentation.
 2. Implement dedicated gtrack acceptance flow and UI shape (Pattern 2 items 6, 11).
 3. Implement method-switch mid-project with explicit context handoff guarantees (Pattern 2 item 19).
-4. Complete marketplace ratings loop by surfacing method aggregate ratings on cards (Pattern 2 items 20, 21).
-5. Upgrade Pattern 1 execution graph from linear handoff visualization to true DAG parent-child model (Pattern 1 items 2, 14).
+4. Upgrade Pattern 1 execution graph from linear handoff visualization to true DAG parent-child model (Pattern 1 items 2, 14).
 
 ## Definition of Fully Completed
 

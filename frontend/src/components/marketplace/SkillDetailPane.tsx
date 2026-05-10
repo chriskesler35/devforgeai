@@ -18,6 +18,9 @@ export interface SkillDetailPaneProps {
   isInstalled?: boolean;
   canInstall?: boolean;
   installBlockedReason?: string;
+  averageRating?: string;
+  averageScore?: number;
+  totalRatings?: number;
   onClose: () => void;
   onInstallClick: () => void;
   onRemoveClick: () => void;
@@ -37,6 +40,9 @@ export function SkillDetailPane({
   isInstalled = false,
   canInstall = true,
   installBlockedReason,
+  averageRating,
+  averageScore,
+  totalRatings,
   onClose,
   onInstallClick,
   onRemoveClick,
@@ -78,6 +84,16 @@ export function SkillDetailPane({
             <Badge variant="outline">{trustLevel}</Badge>
           </div>
         </div>
+
+        {typeof totalRatings === 'number' && totalRatings > 0 && (
+          <div>
+            <h4 className="font-semibold text-sm mb-2">Method Feedback</h4>
+            <div className="text-sm text-gray-700">
+              Average rating: <span className="font-semibold">{averageRating || 'n/a'}</span>
+              {' '}({averageScore?.toFixed(2) || '0.00'}) from {totalRatings} responses
+            </div>
+          </div>
+        )}
 
         {/* Use Cases */}
         {useCases.length > 0 && (
