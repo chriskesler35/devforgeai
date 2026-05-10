@@ -1,6 +1,7 @@
 'use client'
 
 import { API_BASE, API_KEY, AUTH_HEADERS, getApiBase } from '@/lib/config'
+import { filterModelsByCatalogFeature } from '@/lib/modelCatalog'
 import VoiceMode, { VoiceModeToggle } from '@/components/VoiceMode'
 import MediaConverterModal from '@/components/MediaConverterModal'
 
@@ -2111,7 +2112,7 @@ export default function ChatPage() {
     // Deduplicate by provider+model_id to avoid duplicate options while
     // preserving same model IDs that exist under different providers.
     const seen = new Set<string>()
-    return all.filter((m) => {
+    const deduped = all.filter((m) => {
       const key = `${m.provider_name || 'unknown'}::${m.model_id || ''}`
       if (!m.model_id || seen.has(key)) return false
       const caps = m.capabilities || {}
@@ -2122,6 +2123,8 @@ export default function ChatPage() {
       seen.add(key)
       return true
     })
+
+    return filterModelsByCatalogFeature(deduped, 'function_calling', 'tools')
   }, [])
 
   // ── Init ──────────────────────────────────────────────────────────────────

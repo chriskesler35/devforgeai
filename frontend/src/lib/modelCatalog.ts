@@ -129,3 +129,35 @@ export function modelSupportsFeature(modelRef: string, feature: string): boolean
   if (!match) return false
   return Boolean(match.capabilities?.[feature])
 }
+
+type CatalogFilterModel = {
+  provider_name?: string | null
+  model_id?: string | null
+}
+
+export function filterModelsByCatalogFeature<T extends CatalogFilterModel>(
+  models: T[],
+  feature: string,
+  fallbackFeature?: string,
+): T[] {
+  const catalog = getCachedModelCatalog()
+  if (!catalog) return models
+
+  const byRef = new Map(
+    (catalog.models || []).map((entry) => [entry.model_ref.toLowerCase(), entry]),
+  )
+
+  return models.filter((model) => {
+    const provider = String(model.provider_name || '').trim().toLowerCase()
+    const modelId = String(model.model_id || '').trim()
+    if (!provider || !modelId) return true
+
+    const entry = byRef.get(`${provider}/${modelId}`.toLowerCase())
+    // If model isn't in cached catalog yet, keep backward-compatible behavior.
+    if (!entry) return true
+
+    if (entry.capabilities?.[feature]) return true
+    if (fallbackFeature && entry.capabilities?.[fallbackFeature]) return true
+    return false
+  })
+}

@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { API_BASE, AUTH_HEADERS } from '@/lib/config'
+import { filterModelsByCatalogFeature } from '@/lib/modelCatalog'
 
 type Session = {
   id: string
@@ -264,7 +265,8 @@ export default function RunsPage() {
         )
         const payload = await res.json().catch(() => ({ data: [] }))
         if (!mounted) return
-        setModels(Array.isArray(payload?.data) ? payload.data as ModelOption[] : [])
+        const raw = Array.isArray(payload?.data) ? payload.data as ModelOption[] : []
+        setModels(filterModelsByCatalogFeature(raw, 'function_calling', 'tools'))
       } finally {
         if (mounted) setLoadingModels(false)
       }

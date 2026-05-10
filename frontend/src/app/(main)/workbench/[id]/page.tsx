@@ -5,6 +5,7 @@ export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
 import { API_BASE, AUTH_HEADERS } from '@/lib/config'
+import { filterModelsByCatalogFeature } from '@/lib/modelCatalog'
 import { renderMarkdown } from '@/lib/markdown'
 import { RunPanel } from '@/components/RunPanel'
 
@@ -468,7 +469,8 @@ export default function WorkbenchSessionPage() {
         )
         const payload = await res.json().catch(() => ({ data: [] }))
         if (cancelled) return
-        setModels(Array.isArray(payload?.data) ? payload.data : [])
+        const raw = Array.isArray(payload?.data) ? payload.data : []
+        setModels(filterModelsByCatalogFeature(raw, 'function_calling', 'tools'))
       } finally {
         if (!cancelled) setLoadingModels(false)
       }

@@ -4,6 +4,7 @@ export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
 import { getApiBase, getAuthHeaders } from '@/lib/config'
+import { filterModelsByCatalogFeature } from '@/lib/modelCatalog'
 import { renderMarkdown } from '@/lib/markdown'
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useParams, useRouter } from 'next/navigation'
@@ -1271,7 +1272,7 @@ export default function PipelinePage() {
       }
 
       const uniqueModels = Array.from(new Map(allModels.map(model => [model.id, model])).values())
-      setModels(uniqueModels)
+      setModels(filterModelsByCatalogFeature(uniqueModels, 'function_calling', 'tools'))
     } catch (e: any) {
       setActionError(e.message || 'Failed to load available models')
     }
