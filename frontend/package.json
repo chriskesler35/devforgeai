@@ -7,7 +7,8 @@
     "dev:clean": "node -e \"fs=require('fs');try{fs.rmSync('.next',{recursive:true,force:true})}catch(e){}\" && next dev -p 3001 --hostname 0.0.0.0",
     "build": "next build",
     "start": "next start -p 3001 --hostname 0.0.0.0",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:contract": "tsx --test src/lib/eventContract.test.ts"
   },
   "dependencies": {
     "lucide-react": "^1.8.0",
@@ -24,6 +25,7 @@
     "eslint-config-next": "14.1.0",
     "postcss": "^8.4.35",
     "tailwindcss": "^3.4.1",
+    "tsx": "^4.20.6",
     "typescript": "5.3.3"
   }
 }
