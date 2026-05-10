@@ -125,6 +125,7 @@ from app.routes.model_verification import router as model_verification_router
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     model_sync_task: asyncio.Task | None = None
+    provider_health_task: asyncio.Task | None = None
 
     async def _run_model_sync_once(trigger: str) -> None:
         from app.database import AsyncSessionLocal as _ASL
@@ -246,6 +247,28 @@ async def lifespan(app: FastAPI):
     except ValueError:
         sync_interval_minutes = 60
     model_sync_task = asyncio.create_task(_periodic_model_sync(sync_interval_minutes))
+
+    # Keep provider health/credential status fresh for deterministic runtime routing.
+    try:
+        provider_health_interval = int((os.environ.get("MODEL_HEALTH_CHECK_INTERVAL_SECONDS") or "300").strip())
+    except ValueError:
+        provider_health_interval = 300
+    try:
+        from app.services.provider_health import run_provider_health_monitor
+
+        provider_health_task = asyncio.create_task(
+            run_provider_health_monitor(
+                AsyncSessionLocal,
+                interval_seconds=provider_health_interval,
+            )
+        )
+    except Exception as _health_exc:
+        import logging as _log
+
+        _log.getLogger(__name__).warning(
+            "Provider health monitor startup failed (non-fatal): %s",
+            _health_exc,
+        )
     
     # Start Telegram polling (non-blocking background task)
     from app.routes.telegram_bot import start_polling as _start_telegram
@@ -258,6 +281,13 @@ async def lifespan(app: FastAPI):
         model_sync_task.cancel()
         try:
             await model_sync_task
+        except asyncio.CancelledError:
+            pass
+
+    if provider_health_task:
+        provider_health_task.cancel()
+        try:
+            await provider_health_task
         except asyncio.CancelledError:
             pass
 

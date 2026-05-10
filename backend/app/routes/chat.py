@@ -29,6 +29,7 @@ from app.services.runtime_model_resolver import (
     mark_runtime_validation_failure,
     mark_runtime_validation_success,
     resolve_model_for_runtime,
+    resolve_with_verification,
 )
 from app.middleware.auth import verify_api_key
 from app.middleware.rate_limit import check_rate_limit
@@ -859,9 +860,10 @@ async def chat_completions(
     
     # Apply model override if specified (user picked a specific model from dropdown)
     if override_ref and persona:
-        override_result = await resolve_model_for_runtime(
+        override_result = await resolve_with_verification(
             db,
             override_ref,
+            feature_required="chat",
             intent="chat",
         )
         if isinstance(override_result, RuntimeUnreachable):
@@ -935,7 +937,12 @@ async def chat_completions(
         ref = str(model_obj.id)
         if provider_obj and provider_obj.name:
             ref = f"{provider_obj.name}/{model_obj.model_id}"
-        resolved = await resolve_model_for_runtime(db, ref, intent="chat")
+        resolved = await resolve_with_verification(
+            db,
+            ref,
+            feature_required="chat",
+            intent="chat",
+        )
         if isinstance(resolved, RuntimeUnreachable):
             return model_obj, provider_obj, False, resolved.user_message, resolved
         if isinstance(resolved, (RuntimeReady, RuntimeNeedsLiveProbe)):

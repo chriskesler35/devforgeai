@@ -45,15 +45,22 @@ _event_logs: Dict[str, List[dict]]    = {}
 
 async def _resolve_runtime_model_ref(model_ref: str, *, intent: str = "pipeline"):
     """Resolve runtime model/provider via shared resolver without workbench dependency."""
-    from app.services.runtime_model_resolver import resolve_runtime_model_row_for_lookup
+    from app.services.runtime_model_resolver import (
+        NeedsLiveProbe as RuntimeNeedsLiveProbe,
+        Ready as RuntimeReady,
+        resolve_with_verification,
+    )
 
     async with AsyncSessionLocal() as db:
-        return await resolve_runtime_model_row_for_lookup(
+        result = await resolve_with_verification(
             db,
             model_ref,
+            feature_required="chat",
             intent=intent,
-            include_fuzzy=True,
         )
+        if isinstance(result, (RuntimeReady, RuntimeNeedsLiveProbe)):
+            return result.model, result.provider
+        return None, None
 
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────
@@ -1063,8 +1070,14 @@ async def _run_phase(pipeline_id: str, phase_index: int, retry_count: int = 0, m
         )
         # If model_chain is empty, try to get the detailed error message from the runtime resolver
         if not model_chain:
-            from app.services.runtime_model_resolver import resolve_model_for_runtime
-            result = await resolve_model_for_runtime(db, model_id, intent="pipeline")
+            from app.services.runtime_model_resolver import resolve_with_verification
+
+            result = await resolve_with_verification(
+                db,
+                model_id,
+                feature_required="chat",
+                intent="pipeline",
+            )
             user_message = getattr(result, "user_message", None)
             msg = user_message or (
                 f"Could not resolve model '{model_id}' for phase {phase_name}. "
@@ -2517,9 +2530,15 @@ async def update_phase_model(
     model_orm, _provider_orm = await _resolve_runtime_model_ref(model_ref, intent="pipeline")
     if not model_orm:
         # Try to get the detailed error message from the runtime resolver
-        from app.services.runtime_model_resolver import resolve_model_for_runtime
+        from app.services.runtime_model_resolver import resolve_with_verification
+
         async with AsyncSessionLocal() as db2:
-            result = await resolve_model_for_runtime(db2, model_ref, intent="pipeline")
+            result = await resolve_with_verification(
+                db2,
+                model_ref,
+                feature_required="chat",
+                intent="pipeline",
+            )
         user_message = getattr(result, "user_message", None)
         raise HTTPException(
             status_code=400,

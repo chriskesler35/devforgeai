@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Optional, Literal
+from typing import Awaitable, Callable, Optional, Literal
 
 import httpx
 from sqlalchemy import select, update
@@ -166,10 +166,10 @@ class ProviderHealthService:
             logger.warning(f"Error checking connectivity for {provider.name}: {e}")
             return "error"
     
-    async def check_all_providers(self, db: AsyncSession) -> dict[str, ProviderHealth]:
+    async def check_all_providers(self) -> dict[str, ProviderHealth]:
         """Check health for all active providers."""
         stmt = select(Provider).where(Provider.is_active == True)
-        providers = (await db.execute(stmt)).scalars().all()
+        providers = (await self.db.execute(stmt)).scalars().all()
         
         results = {}
         for provider in providers:
@@ -180,9 +180,8 @@ class ProviderHealthService:
     
     async def start_background_monitor(
         self,
-        db: AsyncSession,
         interval_seconds: int = 300,
-        on_degraded_callback=None
+        on_degraded_callback: Optional[Callable[[str, ProviderHealth], Awaitable[None]]] = None,
     ):
         """
         Background task: periodically check all provider health.
@@ -198,7 +197,7 @@ class ProviderHealthService:
         
         while True:
             try:
-                health_results = await self.check_all_providers(db)
+                health_results = await self.check_all_providers()
                 
                 for provider_name, health in health_results.items():
                     # Check if status changed
@@ -221,7 +220,6 @@ class ProviderHealthService:
         self,
         provider_name: str,
         health: ProviderHealth,
-        db: AsyncSession
     ):
         """
         Handle provider becoming degraded/failed.
@@ -243,7 +241,35 @@ class ProviderHealthService:
             is_active=False
         )
         
-        await db.execute(stmt)
-        await db.commit()
+        await self.db.execute(stmt)
+        await self.db.commit()
         
         logger.info(f"Deactivated all models from {provider_name}")
+
+
+async def run_provider_health_monitor(
+    session_factory,
+    *,
+    interval_seconds: int = 300,
+) -> None:
+    """Run provider health checks forever using short-lived DB sessions.
+
+    A fresh session per loop avoids stale transaction state in long-running tasks.
+    """
+    interval = max(30, int(interval_seconds))
+    logger.info("Starting provider health monitor loop (interval=%ss)", interval)
+
+    while True:
+        try:
+            async with session_factory() as db:
+                service = ProviderHealthService(db)
+                health_results = await service.check_all_providers()
+                for provider_name, health in health_results.items():
+                    if health.health_status in {"degraded", "failed"}:
+                        await service.handle_degraded_provider(provider_name, health)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("Provider health monitor loop failed: %s", exc)
+
+        await asyncio.sleep(interval)

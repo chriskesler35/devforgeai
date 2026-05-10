@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal, Optional, Union
 from uuid import UUID
+import logging
 import os
 import re
 import socket
@@ -20,7 +21,7 @@ from urllib.parse import urlparse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Model, Provider
+from app.models import Model, ModelVerification, Provider
 from app.services.github_copilot import get_copilot_auth_token, resolve_supported_copilot_model
 from app.services.provider_credentials import has_provider_api_key
 
@@ -34,6 +35,18 @@ _LOCAL_MODEL_PROVIDERS = {
     "lmstudio",
     "llamacpp",
 }
+
+_FEATURE_ALIASES: dict[str, str] = {
+    "functions": "function_calling",
+    "function": "function_calling",
+    "function_calling": "function_calling",
+    "chat": "chat",
+    "streaming": "streaming",
+    "vision": "vision",
+    "embeddings": "embeddings",
+}
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -252,6 +265,7 @@ async def collect_runtime_fallback_candidates(
     model_ref: str,
     *,
     intent: ResolveIntent,
+    feature_required: str | None = None,
     explicit_fallback_refs: list[str] | None = None,
     allow_catalog_fallbacks: bool = True,
     limit: int = 3,
@@ -271,6 +285,8 @@ async def collect_runtime_fallback_candidates(
     if requested_model:
         seen.add(str(requested_model.id))
 
+    normalized_feature = _normalize_feature_name(feature_required) if feature_required else None
+
     for fallback_ref in explicit_fallback_refs or []:
         model_obj, provider_obj = await resolve_runtime_model_row_for_lookup(
             db,
@@ -282,6 +298,12 @@ async def collect_runtime_fallback_candidates(
             continue
         if str(model_obj.id) in seen:
             continue
+        if normalized_feature:
+            verification = await get_model_verification(db, model_obj.id)
+            if not verification or verification.verification_status != "verified":
+                continue
+            if not (verification.capabilities or {}).get(normalized_feature, False):
+                continue
         seen.add(str(model_obj.id))
         candidates.append((model_obj, provider_obj, "configured fallback"))
         if len(candidates) >= limit:
@@ -302,6 +324,13 @@ async def collect_runtime_fallback_candidates(
     for model_obj, provider_obj in result.all():
         if str(model_obj.id) in seen:
             continue
+
+        if normalized_feature:
+            verification = await get_model_verification(db, model_obj.id)
+            if not verification or verification.verification_status != "verified":
+                continue
+            if not (verification.capabilities or {}).get(normalized_feature, False):
+                continue
 
         candidate_caps = _enabled_capabilities(getattr(model_obj, "capabilities", None))
         if required_caps and not required_caps.issubset(candidate_caps):
@@ -345,7 +374,13 @@ async def build_runtime_model_chain_for_runtime(
     chain: list[tuple[Model, Provider, str]] = []
     seen: set[str] = set()
 
-    primary = await resolve_model_for_runtime(db, model_ref, intent=intent)
+    feature_required = _feature_for_intent(intent)
+    primary = await resolve_with_verification(
+        db,
+        model_ref,
+        feature_required=feature_required,
+        intent=intent,
+    )
     primary_model = None
     if isinstance(primary, (Ready, NeedsLiveProbe)):
         primary_model = primary.model
@@ -357,6 +392,7 @@ async def build_runtime_model_chain_for_runtime(
         db,
         model_ref,
         intent=intent,
+        feature_required=feature_required,
         explicit_fallback_refs=explicit_fallback_refs,
         allow_catalog_fallbacks=bool(primary_model),
         limit=limit,
@@ -759,6 +795,8 @@ async def resolve_with_verification(
         3. If none, return fallback chain
         4. Log decision
     """
+    normalized_feature = _normalize_feature_name(feature_required)
+
     # First try exact resolve
     exact = await resolve_model_for_runtime(db, model_ref, intent=intent)
     
@@ -767,10 +805,10 @@ async def resolve_with_verification(
         verification = await get_model_verification(db, exact.model.id)
         if verification and verification.verification_status == "verified":
             capabilities = verification.capabilities or {}
-            if capabilities.get(feature_required, False):
+            if capabilities.get(normalized_feature, False):
                 await log_selection_decision(
                     db,
-                    feature=feature_required,
+                    feature=normalized_feature,
                     candidates=[exact.model.model_id],
                     selected=exact.model,
                     result="success"
@@ -778,14 +816,14 @@ async def resolve_with_verification(
                 return exact
     
     # Try verified models for feature
-    verified_models = await get_verified_models_for_feature(db, feature_required)
+    verified_models = await get_verified_models_for_feature(db, normalized_feature)
     
     if verified_models:
         # Pick first (could add priority logic)
         model, provider = verified_models[0]
         await log_selection_decision(
             db,
-            feature=feature_required,
+            feature=normalized_feature,
             candidates=[m[0].model_id for m in verified_models],
             selected=model,
             result="success"
@@ -795,18 +833,18 @@ async def resolve_with_verification(
             provider=provider,
             runtime_model_id=model.model_id,
             resolved_from="verified_feature_match",
-            notes=[f"Selected verified model for {feature_required}"]
+            notes=[f"Selected verified model for {normalized_feature}"]
         )
     
     # No verified models; return error
     return Unreachable(
         reason_code="no_verified_models",
-        user_message=f"No verified models support feature '{feature_required}'. "
+        user_message=f"No verified models support feature '{normalized_feature}'. "
                       f"Add/verify a model that supports this feature.",
-        technical_detail=f"feature_required={feature_required}, no verified models match",
+        technical_detail=f"feature_required={normalized_feature}, no verified models match",
         candidates_tried=[model_ref],
         remediation=[
-            f"Verify a model that supports {feature_required}",
+            f"Verify a model that supports {normalized_feature}",
             "Install a new provider with this capability",
             "Run 'devforgeai plugins verify' to check model status"
         ]
@@ -827,15 +865,15 @@ async def get_verified_models_for_feature(
     Returns:
         List of (Model, Provider) tuples, ordered by priority
     """
-    from app.models import ModelVerification
-    
+    normalized_feature = _normalize_feature_name(feature)
+
     stmt = (
         select(Model, Provider, ModelVerification)
         .join(Provider, Model.provider_id == Provider.id)
-        .outerjoin(ModelVerification, Model.id == ModelVerification.model_id)
+        .join(ModelVerification, Model.id == ModelVerification.model_id)
         .where(Model.is_active == True)
         .where(Provider.is_active == True)
-        .where((ModelVerification.verification_status == "verified") | (ModelVerification.verification_status.is_(None)))
+        .where(ModelVerification.verification_status == "verified")
         .order_by(Model.fallback_priority.asc().nulls_last(), Model.created_at.desc())
     )
     
@@ -843,21 +881,15 @@ async def get_verified_models_for_feature(
     
     matched = []
     for model, provider, verification in results:
-        if not verification:
-            continue
-        
         capabilities = verification.capabilities or {}
-        if capabilities.get(feature, False):
+        if capabilities.get(normalized_feature, False):
             matched.append((model, provider))
     
     return matched
 
 
-async def get_model_verification(db: AsyncSession, model_id: UUID) -> Optional:
+async def get_model_verification(db: AsyncSession, model_id: UUID) -> Optional[ModelVerification]:
     """Get verification record for a model."""
-    from app.models import ModelVerification
-    from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-    
     stmt = select(ModelVerification).where(ModelVerification.model_id == model_id)
     return (await db.execute(stmt)).scalars().first()
 
@@ -884,8 +916,11 @@ async def log_selection_decision(
     import logging
     logger = logging.getLogger(__name__)
     logger.info(
-        f"Model selection: feature={feature}, candidates={candidates}, "
-        f"selected={selected.model_id}, result={result}"
+        "Model selection decision | feature=%s | candidates=%s | selected=%s | result=%s",
+        feature,
+        candidates,
+        selected.model_id,
+        result,
     )
 
 
@@ -931,3 +966,13 @@ def get_fallback_chain(feature: str) -> list[str]:
     }
     
     return chains.get(feature, [])
+
+
+def _normalize_feature_name(feature: str | None) -> str:
+    return _FEATURE_ALIASES.get((feature or "chat").strip().lower(), "chat")
+
+
+def _feature_for_intent(intent: ResolveIntent) -> str:
+    if intent in {"agentic", "tools"}:
+        return "function_calling"
+    return "chat"

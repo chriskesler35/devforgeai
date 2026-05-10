@@ -22,9 +22,9 @@ from app.services.runtime_model_resolver import (
     NeedsLiveProbe as RuntimeNeedsLiveProbe,
     Ready as RuntimeReady,
     Unreachable as RuntimeUnreachable,
+    resolve_with_verification,
     should_deactivate_model_from_runtime_error,
     should_failover_on_runtime_error,
-    resolve_model_for_runtime,
 )
 from app.schemas.agentic import AgenticRunState
 from app.services.agentic_state_machine import AgenticStateMachine
@@ -176,9 +176,10 @@ async def _resolve_model(model_id: str):
     """
     try:
         async with AsyncSessionLocal() as db:
-            result = await resolve_model_for_runtime(
+            result = await resolve_with_verification(
                 db,
                 model_id,
+                feature_required="function_calling",
                 intent="agentic",
             )
             if isinstance(result, RuntimeUnreachable):
