@@ -32,6 +32,7 @@ from app.middleware.auth import verify_api_key
 from app.services.codex_oauth import get_codex_proxy_api_key, get_codex_proxy_base_url, should_use_codex_oauth_proxy
 from app.services.provider_credentials import get_provider_api_key, has_provider_api_key
 from app.services.github_copilot import COPILOT_API_BASE, get_copilot_headers, get_copilot_auth_token, is_pat_rejection_error_text
+from app.services.model_capabilities import sanitize_model_capabilities
 
 logger = logging.getLogger(__name__)
 
@@ -392,19 +393,24 @@ def _infer_model_capabilities(model_id: str, supported_methods: Optional[list[st
         or "video" in modality_text
         or any(token in methods for token in ("generatevideos", "generatevideo", "predictlongrunning"))
     ):
-        return {"video_generation": True}
+        caps, _ = sanitize_model_capabilities({"video_generation": True}, context=f"capabilities:{model_id}")
+        return caps
 
     if "embed" in normalized or "embedcontent" in methods:
-        return {"embedding": True}
+        caps, _ = sanitize_model_capabilities({"embedding": True}, context=f"capabilities:{model_id}")
+        return caps
 
     if any(token in normalized for token in ("moderation", "whisper", "transcribe", "transcription", "tts", "speech")):
-        return {"audio_or_moderation": True}
+        caps, _ = sanitize_model_capabilities({"audio_or_moderation": True}, context=f"capabilities:{model_id}")
+        return caps
 
     if any(token in normalized for token in ("babbage", "davinci")):
-        return {"legacy_completion": True}
+        caps, _ = sanitize_model_capabilities({"legacy_completion": True}, context=f"capabilities:{model_id}")
+        return caps
 
     if any(token in normalized for token in ("imagen", "dall-e", "flux", "stable-diffusion", "sdxl", "gpt-image", "chatgpt-image")):
-        return {"image_generation": True}
+        caps, _ = sanitize_model_capabilities({"image_generation": True}, context=f"capabilities:{model_id}")
+        return caps
 
     capabilities: dict[str, bool] = {
         "chat": True,
@@ -419,7 +425,8 @@ def _infer_model_capabilities(model_id: str, supported_methods: Optional[list[st
         capabilities["vision"] = True
     if "generatecontent" in methods or "counttokens" in methods:
         capabilities["chat"] = True
-    return capabilities
+    caps, _ = sanitize_model_capabilities(capabilities, context=f"capabilities:{model_id}")
+    return caps
 
 
 def _is_catalog_usable(model_id: str, capabilities: dict[str, Any]) -> bool:
@@ -468,7 +475,11 @@ def _enrich_with_litellm_metadata(provider_name: str, model_entry: dict[str, Any
         model_entry["input"] = round(float(input_cost) * 1_000_000, 6)
     if model_entry.get("output") is None and output_cost is not None:
         model_entry["output"] = round(float(output_cost) * 1_000_000, 6)
-    model_entry["caps"] = capabilities
+    cleaned_caps, _issues = sanitize_model_capabilities(
+        capabilities,
+        context=f"capabilities:{provider_name}/{model_entry.get('model_id', 'unknown')}",
+    )
+    model_entry["caps"] = cleaned_caps
     return model_entry
 
 
@@ -754,17 +765,22 @@ def infer_capabilities(model_name: str) -> dict:
         caps["code"] = True
     if any(x in name for x in ["embed", "nomic-embed", "mxbai-embed", "snowflake-arctic-embed"]):
         caps = {"embedding": True}  # embedding-only
-        return caps
+        normalized, _ = sanitize_model_capabilities(caps, context=f"capabilities:{model_name}")
+        return normalized
     # All Ollama models get full tool/function-calling access.
     caps["tools"] = True
     caps["function_calling"] = True
-    return caps
+    normalized, _ = sanitize_model_capabilities(caps, context=f"capabilities:{model_name}")
+    return normalized
 
 
 def _merge_capabilities(existing_caps: Optional[dict], discovered_caps: Optional[dict]) -> dict:
     """Merge capabilities while preserving/enforcing tool access on chat models."""
-    merged: dict[str, Any] = dict(existing_caps or {})
-    for key, value in (discovered_caps or {}).items():
+    existing_clean, _ = sanitize_model_capabilities(existing_caps or {}, context="capabilities:existing")
+    discovered_clean, _ = sanitize_model_capabilities(discovered_caps or {}, context="capabilities:discovered")
+
+    merged: dict[str, Any] = dict(existing_clean)
+    for key, value in discovered_clean.items():
         if key in merged and isinstance(merged[key], bool) and isinstance(value, bool):
             merged[key] = merged[key] or value
         elif key not in merged or merged[key] in (None, ""):
@@ -773,7 +789,8 @@ def _merge_capabilities(existing_caps: Optional[dict], discovered_caps: Optional
     if merged.get("chat") or merged.get("completion"):
         merged["tools"] = True
         merged["function_calling"] = True
-    return merged
+    normalized, _ = sanitize_model_capabilities(merged, context="capabilities:merged")
+    return normalized
 
 
 def nice_display_name(model_id: str) -> str:
@@ -806,6 +823,7 @@ async def run_model_sync(db: AsyncSession, *, deduplicate_existing: bool = True,
     added = []
     skipped = []
     errors = []
+    capability_schema_issues_total = 0
     provider_details: dict[str, dict[str, Any]] = {}
 
     def mark_model_unavailable(
@@ -962,6 +980,13 @@ async def run_model_sync(db: AsyncSession, *, deduplicate_existing: bool = True,
         validation_warning: Optional[str] = None,
     ) -> bool:
         """Upsert a model. Returns True if it was new."""
+        nonlocal capability_schema_issues_total
+        cleaned_caps, capability_issues = sanitize_model_capabilities(
+            caps,
+            context=f"capabilities:{provider.name}/{model_id}",
+        )
+        capability_schema_issues_total += len(capability_issues)
+
         key = (str(provider.id), model_id)
         qualified_ref = _qualified_model_ref(provider.name, model_id)
         if key in existing:
@@ -977,7 +1002,7 @@ async def run_model_sync(db: AsyncSession, *, deduplicate_existing: bool = True,
             current.cost_per_1m_input = current.cost_per_1m_input if current.cost_per_1m_input is not None else cost_in
             current.cost_per_1m_output = current.cost_per_1m_output if current.cost_per_1m_output is not None else cost_out
             current.context_window = current.context_window or ctx
-            current.capabilities = _merge_capabilities(current.capabilities, caps)
+            current.capabilities = _merge_capabilities(current.capabilities, cleaned_caps)
             if validation_status == "validated":
                 current.validation_status = "validated"
                 current.validated_at = datetime.utcnow()
@@ -1090,6 +1115,7 @@ async def run_model_sync(db: AsyncSession, *, deduplicate_existing: bool = True,
     for provider_name in PROVIDER_DEFAULT_MODELS:
         if provider_filter and provider_filter != provider_name:
             continue
+        provider_capability_issues_before = capability_schema_issues_total
         if not has_provider_api_key(provider_name):
             logger.debug(f"Skipping {provider_name} — no API key set")
             deactivated_missing = 0
@@ -1109,6 +1135,7 @@ async def run_model_sync(db: AsyncSession, *, deduplicate_existing: bool = True,
                 "added": 0,
                 "skipped": 0,
                 "deactivated": deactivated_missing,
+                "capability_schema_issues": 0,
             }
             continue
 
@@ -1274,6 +1301,7 @@ async def run_model_sync(db: AsyncSession, *, deduplicate_existing: bool = True,
             "outdated_skipped": outdated_skipped,
             "deactivated": deactivated_missing,
             "deleted_stale": deleted_stale,
+            "capability_schema_issues": capability_schema_issues_total - provider_capability_issues_before,
         }
 
     # Normalize legacy rows so chat/completion models always advertise tool access.
@@ -1290,6 +1318,7 @@ async def run_model_sync(db: AsyncSession, *, deduplicate_existing: bool = True,
         "ollama_models": len([a for a in added if a.startswith("ollama/")]),
         "paid_models": len([a for a in added if not a.startswith("ollama/")]),
         "provider_details": provider_details,
+        "capability_schema_issues_total": capability_schema_issues_total,
         "duplicates_removed": duplicates_removed,
         "stale_deleted": sum(d.get("deleted_stale", 0) for d in provider_details.values()),
     }
