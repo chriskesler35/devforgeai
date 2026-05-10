@@ -32,6 +32,7 @@ const DEFAULT_CANONICAL_EVENT_ALIAS: Record<string, string> = {
   'session.resumed': 'session_resumed',
   'run.retry_with_prompt': 'retry_with_prompt',
   'run.override_result': 'override_result',
+  'run.alternative_selected': 'alternative_selected',
   'phase.started': 'phase_started',
   'phase.progress': 'phase_progress',
   'phase.thinking': 'phase_thinking',

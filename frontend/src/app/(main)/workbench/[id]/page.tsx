@@ -47,6 +47,14 @@ interface SessionPinState {
 
 interface FileEntry { path: string; status: 'created' | 'modified'; content?: string; diff?: string }
 
+interface AgentResultSnapshot {
+  eventIndex: number
+  message: string
+  confidence: number | null
+  alternatives: string[]
+  ts: string
+}
+
 const EVENT_STYLE: Record<string, { icon: string; color: string; label: string }> = {
   agent_thought: { icon: '💭', color: 'text-purple-600 dark:text-purple-400',  label: 'Thinking'     },
   tool_call:     { icon: '🔧', color: 'text-blue-600 dark:text-blue-400',      label: 'Tool'         },
@@ -107,6 +115,19 @@ function diffPromptLines(previousText: string, currentText: string): { added: st
     added: current.filter((line) => !previousSet.has(line)),
     removed: previous.filter((line) => !currentSet.has(line)),
   }
+}
+
+function normalizeConfidence(raw: unknown): number | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return null
+  return Math.max(0, Math.min(100, Math.round(raw)))
+}
+
+function normalizeAlternatives(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((item) => (typeof item === 'string' ? item.trim() : ''))
+    .filter(Boolean)
+    .slice(0, 3)
 }
 
 // ─── Event row ────────────────────────────────────────────────────────────────
@@ -520,6 +541,11 @@ export default function WorkbenchSessionPage() {
   const [monitorStateFilter, setMonitorStateFilter] = useState('all')
   const [monitorTypeFilter, setMonitorTypeFilter] = useState('all')
   const [selectedPromptTurnIndex, setSelectedPromptTurnIndex] = useState<number | null>(null)
+  const [lowConfidenceModalOpen, setLowConfidenceModalOpen] = useState(false)
+  const [lowConfidenceCandidate, setLowConfidenceCandidate] = useState<AgentResultSnapshot | null>(null)
+  const [lastLowConfidenceEventIndex, setLastLowConfidenceEventIndex] = useState<number | null>(null)
+  const [selectedAlternativeIndex, setSelectedAlternativeIndex] = useState(0)
+  const [choosingAlternative, setChoosingAlternative] = useState(false)
 
   const streamRef = useRef<EventSource | null>(null)
   const streamEndRef = useRef<HTMLDivElement>(null)
@@ -890,6 +916,31 @@ export default function WorkbenchSessionPage() {
     }
   }
 
+  const selectAlternativeResult = useCallback(async (alternativeContent: string, alternativeIndex: number, confidence: number | null) => {
+    if (!alternativeContent.trim()) return
+    setChoosingAlternative(true)
+    try {
+      const res = await fetch(`${API_BASE}/v1/workbench/sessions/${id}/select-alternative`, {
+        method: 'POST',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify({
+          content: alternativeContent.trim(),
+          alternative_index: alternativeIndex,
+          confidence,
+        }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setStatus('waiting')
+      setWaitingForHuman(true)
+      setRightPanelTab('agent')
+      setLowConfidenceModalOpen(false)
+    } catch (e: any) {
+      alert(`Alternative selection failed: ${e.message}`)
+    } finally {
+      setChoosingAlternative(false)
+    }
+  }, [id])
+
   const approveCommand = async (commandId: string) => {
     try {
       const res = await fetch(`${API_BASE}/v1/workbench/sessions/${id}/commands/${commandId}/approve`, { method: 'POST', headers: AUTH_HEADERS })
@@ -1010,6 +1061,7 @@ export default function WorkbenchSessionPage() {
         const category =
           eventType === 'error' || eventType === 'phase_failed' ? 'error'
           : eventType === 'done' || eventType === 'agent_reply' ? 'yield'
+          : eventType === 'alternative_selected' ? 'alternative'
           : eventType === 'override_result' ? 'override'
           : eventType === 'retry_with_prompt' ? 'retry'
           : eventType === 'session_paused' || eventType === 'session_resumed' ? 'control'
@@ -1019,6 +1071,7 @@ export default function WorkbenchSessionPage() {
         const feedTitle =
           category === 'error' ? 'Agent errored'
           : category === 'yield' ? 'Agent yielded result'
+          : category === 'alternative' ? 'Alternative selected'
           : category === 'override' ? 'Result overridden'
           : category === 'retry' ? 'Retry with modified prompt'
           : category === 'control' ? 'Session control'
@@ -1028,6 +1081,7 @@ export default function WorkbenchSessionPage() {
         const categoryColor =
           category === 'error' ? 'text-red-700 bg-red-50 border-red-200'
           : category === 'yield' ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+          : category === 'alternative' ? 'text-cyan-700 bg-cyan-50 border-cyan-200'
           : category === 'override' ? 'text-orange-700 bg-orange-50 border-orange-200'
           : category === 'retry' ? 'text-indigo-700 bg-indigo-50 border-indigo-200'
           : category === 'control' ? 'text-slate-700 bg-slate-50 border-slate-200'
@@ -1177,6 +1231,26 @@ export default function WorkbenchSessionPage() {
     return agentTimeline[agentTimeline.length - 1].state
   }, [agentTimeline, status])
 
+  const latestResultSnapshot = useMemo<AgentResultSnapshot | null>(() => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const evt = events[i]
+      const eventType = getEventType(evt)
+      if (eventType !== 'agent_reply') continue
+
+      const message = String(evt.payload?.message || '').trim()
+      if (!message) continue
+
+      return {
+        eventIndex: i,
+        message,
+        confidence: normalizeConfidence(evt.payload?.confidence),
+        alternatives: normalizeAlternatives(evt.payload?.alternatives),
+        ts: evt.ts,
+      }
+    }
+    return null
+  }, [events])
+
   const selectedAgentEvent = selectedMonitorEvent != null
     ? agentTimeline.find((item) => item.eventIndex === selectedMonitorEvent)?.evt || null
     : null
@@ -1188,6 +1262,18 @@ export default function WorkbenchSessionPage() {
       setSelectedMonitorEvent(null)
     }
   }, [agentTimeline, selectedMonitorEvent])
+
+  useEffect(() => {
+    if (!latestResultSnapshot) return
+    if (latestResultSnapshot.confidence == null) return
+    if (latestResultSnapshot.confidence >= 70) return
+    if (lastLowConfidenceEventIndex === latestResultSnapshot.eventIndex) return
+
+    setLowConfidenceCandidate(latestResultSnapshot)
+    setSelectedAlternativeIndex(0)
+    setLowConfidenceModalOpen(true)
+    setLastLowConfidenceEventIndex(latestResultSnapshot.eventIndex)
+  }, [latestResultSnapshot, lastLowConfidenceEventIndex])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1803,6 +1889,46 @@ export default function WorkbenchSessionPage() {
                       Override Result
                     </button>
                   </div>
+
+                  <div className="rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40 p-2 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Result Confidence</span>
+                      {latestResultSnapshot?.confidence != null ? (
+                        <span className={`px-1.5 py-0.5 rounded border text-[10px] font-semibold ${
+                          latestResultSnapshot.confidence >= 80
+                            ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                            : latestResultSnapshot.confidence >= 60
+                              ? 'bg-yellow-100 text-yellow-700 border-yellow-200'
+                              : 'bg-red-100 text-red-700 border-red-200'
+                        }`}>
+                          Confidence: {latestResultSnapshot.confidence}%
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-gray-400">Not provided</span>
+                      )}
+                    </div>
+
+                    {latestResultSnapshot?.alternatives && latestResultSnapshot.alternatives.length > 0 && (
+                      <div className="space-y-1.5">
+                        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                          Alternatives ({latestResultSnapshot.alternatives.length})
+                        </div>
+                        <div className="space-y-1">
+                          {latestResultSnapshot.alternatives.map((alt, idx) => (
+                            <button
+                              key={`alt-${idx}`}
+                              onClick={() => selectAlternativeResult(alt, idx, latestResultSnapshot.confidence)}
+                              disabled={choosingAlternative}
+                              className="w-full text-left rounded border border-cyan-200 hover:border-cyan-300 bg-white dark:bg-gray-900 px-2 py-1.5 text-[11px] text-gray-700 dark:text-gray-200 disabled:opacity-50"
+                            >
+                              <div className="text-[10px] font-semibold text-cyan-700 mb-0.5">Alternative {idx + 1}</div>
+                              <div className="line-clamp-2">{alt}</div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {monitorView === 'timeline' ? (
@@ -2205,6 +2331,78 @@ export default function WorkbenchSessionPage() {
               <button onClick={async () => { await setBypassModeRemote(true); setShowBypassWarning(false) }}
                 className="px-4 py-2 text-sm font-bold rounded-lg bg-red-600 hover:bg-red-700 text-white">
                 I understand — enable bypass
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {lowConfidenceModalOpen && lowConfidenceCandidate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setLowConfidenceModalOpen(false)}>
+          <div
+            className="w-full max-w-lg bg-white dark:bg-gray-900 rounded-2xl shadow-2xl overflow-hidden border border-amber-300"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 border-b border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20">
+              <h2 className="text-base font-bold text-amber-900 dark:text-amber-100">
+                Agent is uncertain ({lowConfidenceCandidate.confidence ?? 0}% confidence)
+              </h2>
+            </div>
+            <div className="px-6 py-4 space-y-3">
+              <p className="text-sm text-gray-700 dark:text-gray-300">
+                Accept this result, pick an alternative, or override with your own output.
+              </p>
+              <div className="rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40 p-2 text-xs text-gray-600 dark:text-gray-300 max-h-32 overflow-auto whitespace-pre-wrap">
+                {lowConfidenceCandidate.message}
+              </div>
+
+              {lowConfidenceCandidate.alternatives.length > 0 && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-gray-600 dark:text-gray-300">Show alternatives</label>
+                  <select
+                    value={selectedAlternativeIndex}
+                    onChange={(e) => setSelectedAlternativeIndex(Number(e.target.value))}
+                    className="w-full rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-xs px-2 py-1 text-gray-700 dark:text-gray-200"
+                  >
+                    {lowConfidenceCandidate.alternatives.map((_, idx) => (
+                      <option key={`low-alt-${idx}`} value={idx}>Alternative {idx + 1}</option>
+                    ))}
+                  </select>
+                  <div className="rounded border border-cyan-200 bg-cyan-50 p-2 text-xs text-cyan-900 whitespace-pre-wrap max-h-28 overflow-auto">
+                    {lowConfidenceCandidate.alternatives[selectedAlternativeIndex] || ''}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="px-6 py-3 border-t border-gray-200 dark:border-gray-800 flex flex-wrap gap-2 justify-end">
+              <button
+                onClick={() => setLowConfidenceModalOpen(false)}
+                className="px-3 py-1.5 text-xs font-medium rounded border border-gray-300 text-gray-700 hover:bg-gray-50"
+              >
+                Yes (accept)
+              </button>
+              <button
+                onClick={() => setMonitorView('feed')}
+                className="px-3 py-1.5 text-xs font-medium rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+              >
+                Show Alternatives
+              </button>
+              <button
+                onClick={overrideLastResult}
+                className="px-3 py-1.5 text-xs font-medium rounded border border-orange-300 text-orange-700 hover:bg-orange-50"
+              >
+                Override
+              </button>
+              <button
+                disabled={choosingAlternative || lowConfidenceCandidate.alternatives.length === 0}
+                onClick={() => selectAlternativeResult(
+                  lowConfidenceCandidate.alternatives[selectedAlternativeIndex] || '',
+                  selectedAlternativeIndex,
+                  lowConfidenceCandidate.confidence,
+                )}
+                className="px-3 py-1.5 text-xs font-medium rounded bg-cyan-600 hover:bg-cyan-700 text-white disabled:opacity-50"
+              >
+                No (use selected alternative)
               </button>
             </div>
           </div>

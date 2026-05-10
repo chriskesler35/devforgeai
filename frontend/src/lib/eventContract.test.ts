@@ -8,6 +8,7 @@ test('resolveEventType maps canonical values for shared aliases', () => {
   assert.equal(resolveEventType({ canonical_type: 'phase.failed', type: 'legacy_phase_failed' }), 'phase_failed')
   assert.equal(resolveEventType({ canonical_type: 'pipeline.done', type: 'legacy_pipeline_done' }), 'pipeline_done')
   assert.equal(resolveEventType({ canonical_type: 'artifact.files_written', type: 'legacy_files_written' }), 'files_written')
+  assert.equal(resolveEventType({ canonical_type: 'run.alternative_selected', type: 'legacy_alt' }), 'alternative_selected')
 })
 
 test('resolveEventType honors explicit overrides before defaults', () => {

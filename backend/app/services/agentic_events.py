@@ -54,6 +54,7 @@ _CANONICAL_TYPE_MAP: Dict[str, str] = {
     "session_resumed": "session.resumed",
     "retry_with_prompt": "run.retry_with_prompt",
     "override_result": "run.override_result",
+    "alternative_selected": "run.alternative_selected",
 }
 
 
