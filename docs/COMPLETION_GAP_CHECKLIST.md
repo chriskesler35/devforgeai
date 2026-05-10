@@ -1,121 +1,179 @@
 # DevForgeAI Completion Gap Checklist
 
 Updated: 2026-05-10
-Baseline commit: 11286bf
-Scope source: REQUIREMENTS.md (Pattern 1, Pattern 2, Pattern 3 acceptance criteria)
+Scope source: REQUIREMENTS.md acceptance criteria for Pattern 1, Pattern 2, Pattern 3.
 
 ## Status Legend
 
-- DONE: implemented and wired in runtime behavior
-- PARTIAL: implemented in backend or docs only; missing UI, persistence, or full acceptance behavior
-- MISSING: not implemented yet
+- DONE: shipped and user-visible or runtime-enforced
+- PARTIAL: implemented but not fully matching acceptance language
+- MISSING: no production-ready implementation found
 
-## Pattern 3: Deterministic Model Reliability
+## Pattern 1 Acceptance Matrix (Agent Transparency and Control)
 
-1. DONE - Diagnosis suite endpoint + frontend dashboard now surface root-cause signals from verification status, provider health, and selection failures
-2. DONE - Verification test suite covers chat, streaming, vision, embeddings, functions, error handling
-3. DONE - Verification state stored in DB with status, capabilities, test results
-4. DONE - Verification report is downloadable per model (markdown/json) and exposed in Models diagnose modal
-5. DONE - Runtime selection logic prioritizes verified models
-6. DONE - Fallback chain is ordered and user-configurable via persisted runtime fallback order settings and Models dashboard controls
-7. DONE - Session-level model pinning now includes Workbench Pin/Unpin UI wiring with live pin status
-8. DONE - Model Health Dashboard now has frontend views for real-time metrics, provider health, and degraded alerts
-9. DONE - Selection decisions are durably logged and now surfaced in frontend diagnostics view
-10. DONE - Provider health check endpoint exists and works
-11. DONE - Provider credential management UI now shows live per-provider health status, credential/connectivity signals, and refresh action
-12. DONE - Background health monitoring runs periodically
-13. DONE - Degraded provider auto-disabled in model selection with freshness threshold policy and explicit runtime diagnostics/remediation
-14. DONE - Global provider-health warning banner includes direct Fix credentials action into Settings -> API Keys with provider focus
-15. DONE - Model capability schema is JSON and enforced across CRUD and sync/import normalization paths
-16. DONE - Frontend syncs capability catalog on startup and now applies catalog capability filtering across Workbench launch/session/pipeline, Chat, and Runs model selectors
-17. DONE - Schema enforcement returns explicit capability key/type errors for CRUD and surfaces normalization issue counts for sync/import diagnostics
-18. DONE - Marketplace install flow now enforces verified trust-level gate (non-verified entries are visible but install-blocked with explicit messaging)
-19. DONE - Frontend now performs version-based cache invalidation (periodic + on-focus) against backend catalog version metadata, so webhook-triggered backend updates propagate without waiting full TTL
-20. DONE - Provider webhook ingestion now supports external integration hardening (auth token, provider/source normalization, idempotent event handling) with incremental provider refresh
+1. PARTIAL - Agent state badge visible on all running agents
+- Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (agent state badge + styles)
+- Gap: coverage appears session-centric; not a dedicated global all-agents monitor list.
 
-### Pattern 3 Remaining Work Packs
+2. PARTIAL - Execution graph rendered in real-time with correct parent-child relationships
+- Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (Execution Graph view + active pulse)
+- Gap: current graph is primarily linear turn handoff; requirement calls for true DAG parent-child relationship view.
 
-- P3-W1: Durable selection audit trail
-  - Add table for selection decisions
-  - Persist every resolution attempt (feature, candidates, winner, result)
-  - Add query endpoint for diagnostics
-- P3-W2: Pin model by session
-  - Add endpoint and session persistence
-  - Ensure resolver honors session pin ahead of normal chain
-- P3-W3: Capability catalog contract and sync
-  - Unified backend catalog endpoint with version/hash
-  - Frontend startup sync and TTL cache
-- P3-W4: Dashboard completion
-  - Frontend dashboard views for health and verification
-  - Alerts for degraded credentials/providers
-- P3-W5: Marketplace gate and webhook
-  - Certification requirement before listing
-  - Provider webhook ingestion and incremental catalog refresh
+3. DONE - Prompt Inspector shows exact system prompt + context + diff
+- Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (Prompt Inspector, context injected, diff vs previous turn, copy raw)
 
-## Pattern 1: Agent Transparency and Control
+4. PARTIAL - Agent conversation transcripts are complete and searchable
+- Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (Transcript search/filter + exports)
+- Gap: transcript appears turn-centric; full inter-agent/tool-thread completeness is not fully proven.
 
-Current summary: foundational agent streams/events exist in workbench and pipeline runtime, but required observability and intervention UX from acceptance criteria is not fully delivered.
+5. PARTIAL - Pause All Agents works (all agents halt, no partial results)
+- Evidence: backend/app/routes/workbench.py (/sessions/pause-all, /sessions/resume-all), frontend/src/app/(main)/workbench/page.tsx (Pause/Resume All controls)
+- Gap: strict "no partial results" semantics are not explicitly guaranteed in acceptance-level verification.
 
-1. PARTIAL - Real-time agent state updates exist in runtime event streams; full state badge matrix and lifecycle UX incomplete
-2. MISSING - Execution graph (DAG) with live parent-child visualization and animation
-3. MISSING - Prompt inspector with full context diff view
-4. MISSING - Searchable complete inter-agent transcript UI
-5. MISSING - Pause all agents control with guaranteed halting semantics
-6. MISSING - Override result flow feeding parent agent
-7. MISSING - Retry with modified prompt UX
-8. MISSING - Approval gates before spawn (configurable per method/agent)
-9. MISSING - Kill cascade impact UX + safe execution
-10. MISSING - Confidence scoring + low-confidence verification flow
-11. MISSING - Alternative result selection UX
-12. MISSING - Dedicated Agent Monitor view and Agent Detail tabs
-13. MISSING - Live feed with filter/search and deep-linking
+6. DONE - Override Result accepts user input and feeds parent flow
+- Evidence: backend/app/routes/workbench.py (/sessions/{session_id}/override), frontend/src/app/(main)/workbench/[id]/page.tsx (Override Result action)
 
-### Pattern 1 Remaining Work Packs
+7. DONE - Retry with Modified Prompt works
+- Evidence: backend/app/routes/workbench.py (/sessions/{session_id}/retry), frontend/src/app/(main)/workbench/[id]/page.tsx (Retry Prompt action)
 
-- P1-W1: Canonical agent event model and state machine contract
-- P1-W2: Agent Monitor + Agent Detail core views
-- P1-W3: Prompt inspector and transcript search
-- P1-W4: Intervention controls (pause, override, retry, kill)
-- P1-W5: Execution graph + live feed + confidence/alternatives
+8. DONE - Approval gates fire before agent spawn
+- Evidence: backend/app/routes/workbench.py (require_spawn_approval + /spawn/approve + /spawn/reject), frontend/src/app/(main)/workbench/page.tsx (launch toggle), frontend/src/app/(main)/workbench/[id]/page.tsx (approval UI)
 
-## Pattern 2: Methods-First Workflows
+9. DONE - Kill Agent cascade impact is calculated and exposed before confirm
+- Evidence: backend/app/routes/workbench.py (/kill-impact + /kill), frontend/src/app/(main)/workbench/[id]/page.tsx (kill confirmation workflow)
 
-Current summary: method/workflow concepts exist in backend and UI areas, but acceptance-level flow shaping and UX parity are not complete.
+10. PARTIAL - Confidence scores display and trigger verification prompts
+- Evidence: backend/app/routes/workbench.py (_extract_confidence_and_alternatives), frontend/src/app/(main)/workbench/[id]/page.tsx (confidence badge and low-confidence handling)
+- Gap: acceptance wording implies stronger verification gating policy; current behavior is user-prompt driven.
 
-1. PARTIAL - Method entities and workflow machinery exist; method-first UI shaping incomplete
-2. MISSING - Complete method selector UX (Chat, GSD, BMAD, gtrack, Custom, Marketplace) with metadata cards
-3. PARTIAL - Chat immediate path exists; not fully isolated from run/session complexity in all entry flows
-4. MISSING - Full GSD guided flow with live roadmap build experience
-5. MISSING - Full BMAD staged flow UI with explicit milestones
-6. MISSING - gtrack issue import/mapping/execution UX
-7. MISSING - Home page CTA redesign around method-first entry
-8. MISSING - Method picker search + installed + marketplace segmentation
-9. MISSING - Interactive project creation Q&A with rich progress/breadcrumb/next steps
-10. MISSING - Method switching with context handoff guarantees
-11. MISSING - Marketplace UX depth (categories, preview, ratings, install loop)
-12. PARTIAL - Post-method feedback now captured from completed session/pipeline flows and aggregated via /v1/feedback/methods/summary; marketplace ratings UX still missing
+11. DONE - Alternative results are selectable
+- Evidence: backend/app/routes/workbench.py (/select-alternative), frontend/src/app/(main)/workbench/[id]/page.tsx (alternative selection UI)
 
-### Pattern 2 Remaining Work Packs
+12. PARTIAL - Agent Monitor view shows all agents in real-time
+- Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (Agent Monitor tab and monitor views)
+- Gap: current monitor is session-scoped, not clearly a global all-agent monitor.
 
-- P2-W1: Method launcher redesign and information architecture
-- P2-W2: Method-specific run surfaces (Chat, GSD, BMAD, gtrack)
-- P2-W3: Interactive kickoff/Q&A and roadmap live generation UX
-- P2-W4: Method switching and context handoff protocol
-- P2-W5: Marketplace and feedback loops
+13. PARTIAL - Agent Detail modal has all 5 tabs and correct data
+- Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (timeline/transcript/prompt/graph/feed views)
+- Gap: requirement specifies dedicated modal with exact tab contract; current implementation is integrated panel.
 
-## Completion Order (Recommended)
+14. PARTIAL - Execution graph animated and color-coded correctly
+- Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (state color badges, active pulse)
+- Gap: still not a full DAG implementation.
 
-1. Finish Pattern 3 remaining gaps (P3-W1 through P3-W5) to lock reliability guarantees
-2. Build Pattern 1 transparency baseline (P1-W1 through P1-W3)
-3. Add Pattern 1 intervention controls and graph/feed (P1-W4 through P1-W5)
-4. Deliver Pattern 2 method-first launcher and flows (P2-W1 through P2-W5)
+15. PARTIAL - Live Feed updates in real-time and is searchable with deep-linking
+- Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (Live Feed + filters + monitorView query support)
+- Gap: deep-linking to specific feed entries/agents is limited.
 
-## Immediate Next Sprint (Start Now)
+### Pattern 1 Summary
 
-1. Implement P3-W1 durable selection audit trail
-2. Implement P3-W2 session-level model pin endpoint and resolver support
-3. Implement P3-W3 capability catalog endpoint and frontend startup sync
-4. Add tests for Pattern 3 resolver + provider health monitor + verification routes
+- DONE: 6
+- PARTIAL: 9
+- MISSING: 0
+
+## Pattern 2 Acceptance Matrix (Methods-First Workflows)
+
+1. PARTIAL - Method selector shows Chat, GSD, BMAD, gtrack, Custom, Marketplace options
+- Evidence: frontend/src/app/(main)/methods/page.tsx, frontend/src/app/(main)/workbench/page.tsx, frontend/src/app/(main)/marketplace/page.tsx
+- Gap: still fragmented across pages; not one cohesive requirement-matching selector experience.
+
+2. DONE - Method cards display icon, description, duration, required context, sample roadmap
+- Evidence: frontend/src/app/(main)/page.tsx (Method Picker cards include icon, description, duration, required context, and sample roadmap), frontend/src/app/(main)/methods/page.tsx
+
+3. PARTIAL - Chat method is immediate with no Run/Session overhead
+- Evidence: frontend/src/app/chat/page.tsx
+- Gap: entry architecture still strongly centered around workbench/session pathways in broader UX.
+
+4. PARTIAL - GSD flow: context gather -> roadmap -> review -> phase execution
+- Evidence: backend/app/services/phase_templates.py (GSD-style phases), frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx
+- Gap: dedicated end-user GSD flow contract is not fully explicit across all required UX steps.
+
+5. PARTIAL - BMAD flow: discovery -> ideation -> planning -> handoff -> dev
+- Evidence: backend/app/services/phase_templates.py, frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx
+- Gap: requirement calls for explicit staged BMAD UX surfaces; current view is more generic supervisor UI.
+
+6. MISSING - gtrack flow: import issue -> map to agents -> execute
+- Evidence: no complete gtrack issue import/mapping UX matching acceptance contract found.
+
+7. PARTIAL - Custom chains (2+ methods) with clear handoff points
+- Evidence: frontend/src/app/(main)/methods/page.tsx (stacking), frontend/src/app/(main)/workbench/page.tsx (stack/runtime method behavior)
+- Gap: explicit handoff visualization and guarantees are not fully surfaced as acceptance asks.
+
+8. DONE - Chat UI is direct text in/out without mandatory workbench agent controls
+- Evidence: frontend/src/app/chat/page.tsx
+
+9. PARTIAL - GSD UI shape (roadmap sidebar, main phase panel, right monitor)
+- Evidence: frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx (timeline/phase controls/monitor-like areas)
+- Gap: layout is close but not a strict dedicated GSD-only surface.
+
+10. MISSING - BMAD UI shape as explicit multi-panel stage navigator
+- Evidence: no dedicated BMAD stage panel UI found that matches requirement wording.
+
+11. MISSING - gtrack UI shape (sidebar issues, mapping view, bulk actions)
+- Evidence: no acceptance-matching gtrack surface found.
+
+12. DONE - Home page has three big CTAs: Chat, Pick Method, Use Template
+- Evidence: frontend/src/app/(main)/page.tsx (StartAction cards for Chat, Pick a Method, Use Template)
+
+13. DONE - Method picker has search + installed + marketplace segmentation
+- Evidence: frontend/src/app/(main)/page.tsx (Method Picker search + Installed and Marketplace segmented lists), frontend/src/app/(main)/marketplace/page.tsx
+
+14. PARTIAL - Method -> project creation is interactive with rich Q&A
+- Evidence: frontend/src/app/(main)/workbench/page.tsx (guided/pro launch + recommendations), frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx (discovery continuation/handoff)
+- Gap: richer intake UX (uploads/repo selector/breadcrumbed wizard) is incomplete.
+
+15. PARTIAL - Roadmap builds in real-time
+- Evidence: frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx (SSE-driven phase progress and timeline)
+- Gap: not consistently method-specific roadmap UX across all methods.
+
+16. DONE - Progress indicator visible and accurate
+- Evidence: frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx (phase index/status/progress controls)
+
+17. PARTIAL - Breadcrumb shows current context
+- Evidence: frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx (Workbench / Pipeline / method status context)
+- Gap: requirement expects stronger cross-flow breadcrumb continuity.
+
+18. PARTIAL - Next Steps preview shows what is coming
+- Evidence: frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx (discovery handoff + launch guidance)
+- Gap: generalized next-step preview is not consistently present across methods.
+
+19. MISSING - Method switching mid-project works with context handoff guarantees
+- Evidence: no dedicated switch-method UX/contract found for active project flows.
+
+20. PARTIAL - Marketplace has categories, cards, preview, install, ratings
+- Evidence: frontend/src/app/(main)/marketplace/page.tsx (filters/cards/install/skill detail)
+- Gap: ratings loop is not yet connected to method feedback aggregates on cards.
+
+21. PARTIAL - Post-method feedback is collected and aggregated
+- Evidence: backend/app/routes/feedback.py (/v1/feedback/methods, /v1/feedback/methods/summary), frontend/src/app/(main)/workbench/[id]/page.tsx, frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx
+- Gap: marketplace rating display integration is still pending.
+
+### Pattern 2 Summary
+
+- DONE: 5
+- PARTIAL: 12
+- MISSING: 4
+
+## Pattern 3 Acceptance Matrix (Deterministic Model Reliability)
+
+Status: DONE across documented acceptance criteria in this repository snapshot.
+
+- Evidence baseline: docs/COMPLETION_GAP_CHECKLIST.md (previous Pattern 3 section), backend/app/services/model_verification.py, backend/app/services/runtime_model_resolver.py, frontend model/runtime diagnostics surfaces.
+- Note: previous "Remaining Work Packs" list for Pattern 3 was stale against later implementation waves and has been removed from this checklist to prevent drift.
+
+### Pattern 3 Summary
+
+- DONE: 20
+- PARTIAL: 0
+- MISSING: 0
+
+## Remaining High-Impact Gaps (Priority)
+
+1. Unify method selection into a single launch flow that directly satisfies item 1 without page fragmentation.
+2. Implement dedicated gtrack acceptance flow and UI shape (Pattern 2 items 6, 11).
+3. Implement method-switch mid-project with explicit context handoff guarantees (Pattern 2 item 19).
+4. Complete marketplace ratings loop by surfacing method aggregate ratings on cards (Pattern 2 items 20, 21).
+5. Upgrade Pattern 1 execution graph from linear handoff visualization to true DAG parent-child model (Pattern 1 items 2, 14).
 
 ## Definition of Fully Completed
 
