@@ -515,7 +515,7 @@ export default function WorkbenchSessionPage() {
   const [showCommandLog, setShowCommandLog] = useState(false)
   const [rightPanelTab, setRightPanelTab] = useState<'files' | 'agent'>('files')
   const [selectedMonitorEvent, setSelectedMonitorEvent] = useState<number | null>(null)
-  const [monitorView, setMonitorView] = useState<'timeline' | 'transcript' | 'prompt' | 'graph'>('timeline')
+  const [monitorView, setMonitorView] = useState<'timeline' | 'transcript' | 'prompt' | 'graph' | 'feed'>('timeline')
   const [monitorSearch, setMonitorSearch] = useState('')
   const [monitorStateFilter, setMonitorStateFilter] = useState('all')
   const [monitorTypeFilter, setMonitorTypeFilter] = useState('all')
@@ -701,7 +701,7 @@ export default function WorkbenchSessionPage() {
     if (panel === 'agent' || panel === 'files') {
       setRightPanelTab(panel)
     }
-    if (monitorViewParam === 'timeline' || monitorViewParam === 'transcript' || monitorViewParam === 'prompt' || monitorViewParam === 'graph') {
+    if (monitorViewParam === 'timeline' || monitorViewParam === 'transcript' || monitorViewParam === 'prompt' || monitorViewParam === 'graph' || monitorViewParam === 'feed') {
       setMonitorView(monitorViewParam)
     }
     if (Number.isInteger(deepLinkEvent) && deepLinkEvent >= 0) {
@@ -998,6 +998,67 @@ export default function WorkbenchSessionPage() {
       const state = item.state.toLowerCase()
       return summary.includes(needle) || payload.includes(needle) || eventType.includes(needle) || state.includes(needle)
     })
+  }, [agentTimeline, monitorSearch, monitorStateFilter, monitorTypeFilter])
+
+  const liveFeedRows = useMemo(() => {
+    const needle = monitorSearch.trim().toLowerCase()
+
+    return [...agentTimeline]
+      .reverse()
+      .map((item) => {
+        const eventType = item.eventType
+        const category =
+          eventType === 'error' || eventType === 'phase_failed' ? 'error'
+          : eventType === 'done' || eventType === 'agent_reply' ? 'yield'
+          : eventType === 'override_result' ? 'override'
+          : eventType === 'retry_with_prompt' ? 'retry'
+          : eventType === 'session_paused' || eventType === 'session_resumed' ? 'control'
+          : eventType.includes('phase_') ? 'phase'
+          : 'activity'
+
+        const feedTitle =
+          category === 'error' ? 'Agent errored'
+          : category === 'yield' ? 'Agent yielded result'
+          : category === 'override' ? 'Result overridden'
+          : category === 'retry' ? 'Retry with modified prompt'
+          : category === 'control' ? 'Session control'
+          : category === 'phase' ? 'Phase update'
+          : 'Agent activity'
+
+        const categoryColor =
+          category === 'error' ? 'text-red-700 bg-red-50 border-red-200'
+          : category === 'yield' ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+          : category === 'override' ? 'text-orange-700 bg-orange-50 border-orange-200'
+          : category === 'retry' ? 'text-indigo-700 bg-indigo-50 border-indigo-200'
+          : category === 'control' ? 'text-slate-700 bg-slate-50 border-slate-200'
+          : category === 'phase' ? 'text-purple-700 bg-purple-50 border-purple-200'
+          : 'text-gray-700 bg-gray-50 border-gray-200'
+
+        return {
+          ...item,
+          category,
+          feedTitle,
+          categoryColor,
+        }
+      })
+      .filter((row) => {
+        if (monitorStateFilter !== 'all' && row.state !== monitorStateFilter) {
+          return false
+        }
+        if (monitorTypeFilter !== 'all' && row.eventType !== monitorTypeFilter) {
+          return false
+        }
+        if (!needle) return true
+
+        const payload = JSON.stringify(row.evt.payload || {}).toLowerCase()
+        return (
+          row.feedTitle.toLowerCase().includes(needle) ||
+          row.summary.toLowerCase().includes(needle) ||
+          row.eventType.toLowerCase().includes(needle) ||
+          row.state.toLowerCase().includes(needle) ||
+          payload.includes(needle)
+        )
+      })
   }, [agentTimeline, monitorSearch, monitorStateFilter, monitorTypeFilter])
 
   const mergedTurns = useMemo(() => {
@@ -1660,7 +1721,7 @@ export default function WorkbenchSessionPage() {
                 </div>
 
                 <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-2 space-y-2">
-                  <div className="grid grid-cols-4 gap-1 rounded-lg bg-gray-100 dark:bg-gray-800 p-1">
+                  <div className="grid grid-cols-5 gap-1 rounded-lg bg-gray-100 dark:bg-gray-800 p-1">
                     <button
                       onClick={() => setMonitorView('timeline')}
                       className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
@@ -1700,6 +1761,16 @@ export default function WorkbenchSessionPage() {
                       }`}
                     >
                       Graph
+                    </button>
+                    <button
+                      onClick={() => setMonitorView('feed')}
+                      className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
+                        monitorView === 'feed'
+                          ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                          : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                      }`}
+                    >
+                      Live Feed
                     </button>
                   </div>
                   <div className="flex items-center gap-1.5">
@@ -1957,7 +2028,7 @@ export default function WorkbenchSessionPage() {
                       </>
                     )}
                   </div>
-                ) : (
+                ) : monitorView === 'graph' ? (
                   <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
                     <div className="px-2 py-1.5 bg-gray-50 dark:bg-gray-800/50 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                       Execution Graph
@@ -2003,6 +2074,95 @@ export default function WorkbenchSessionPage() {
                     <div className="px-2 py-1.5 border-t border-gray-100 dark:border-gray-800 text-[10px] text-gray-500">
                       Click a node to inspect the turn prompt and context diff.
                     </div>
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+                    <div className="px-2 py-1.5 bg-gray-50 dark:bg-gray-800/50 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                      Live Feed
+                    </div>
+                    <div className="p-2 space-y-1.5 border-y border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900">
+                      <input
+                        value={monitorSearch}
+                        onChange={(e) => setMonitorSearch(e.target.value)}
+                        placeholder="Search feed by status, event, text, payload"
+                        className="w-full rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-xs px-2 py-1 text-gray-700 dark:text-gray-200"
+                      />
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <select
+                          value={monitorStateFilter}
+                          onChange={(e) => setMonitorStateFilter(e.target.value)}
+                          className="rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-xs px-2 py-1 text-gray-700 dark:text-gray-200"
+                        >
+                          <option value="all">All states</option>
+                          {monitorStates.map((state) => (
+                            <option key={state} value={state}>{state}</option>
+                          ))}
+                        </select>
+                        <select
+                          value={monitorTypeFilter}
+                          onChange={(e) => setMonitorTypeFilter(e.target.value)}
+                          className="rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-xs px-2 py-1 text-gray-700 dark:text-gray-200"
+                        >
+                          <option value="all">All types</option>
+                          {monitorEventTypes.map((eventType) => (
+                            <option key={eventType} value={eventType}>{eventType}</option>
+                          ))}
+                        </select>
+                      </div>
+                      {(monitorSearch || monitorStateFilter !== 'all' || monitorTypeFilter !== 'all') && (
+                        <button
+                          onClick={() => {
+                            setMonitorSearch('')
+                            setMonitorStateFilter('all')
+                            setMonitorTypeFilter('all')
+                          }}
+                          className="text-[10px] text-indigo-600 hover:text-indigo-700"
+                        >
+                          Clear filters
+                        </button>
+                      )}
+                    </div>
+                    <div className="max-h-80 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
+                      {liveFeedRows.length === 0 ? (
+                        <div className="px-2 py-3 text-xs text-gray-400">No feed entries match current filters.</div>
+                      ) : (
+                        liveFeedRows.map((row, idx) => {
+                          const selected = selectedMonitorEvent === row.eventIndex
+                          return (
+                            <button
+                              key={`${row.evt.ts}-${idx}`}
+                              onClick={() => setSelectedMonitorEvent(row.eventIndex)}
+                              className={`w-full text-left px-2 py-2 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors ${selected ? 'bg-indigo-50 dark:bg-indigo-900/20' : ''}`}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className={`px-1.5 py-0.5 rounded border text-[9px] font-semibold ${row.categoryColor}`}>
+                                  {row.feedTitle}
+                                </span>
+                                <span className="text-[10px] font-mono text-gray-500">{new Date(row.evt.ts).toLocaleTimeString()}</span>
+                              </div>
+                              <div className="mt-1 text-[11px] text-gray-800 dark:text-gray-200 truncate">{row.summary}</div>
+                              <div className="text-[10px] text-gray-400">{row.eventType} · {row.state}</div>
+                            </button>
+                          )
+                        })
+                      )}
+                    </div>
+                    {selectedAgentEvent && (
+                      <div className="border-t border-gray-100 dark:border-gray-800">
+                        <div className="px-2 py-1.5 bg-gray-50 dark:bg-gray-800/50 flex items-center justify-between">
+                          <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Feed Entry Payload</span>
+                          <button
+                            onClick={() => setSelectedMonitorEvent(null)}
+                            className="text-[10px] text-gray-500 hover:text-gray-700"
+                          >
+                            Clear
+                          </button>
+                        </div>
+                        <pre className="p-2 text-[11px] font-mono whitespace-pre-wrap break-all text-gray-700 dark:text-gray-300 max-h-56 overflow-auto">
+                          {JSON.stringify(selectedAgentEvent, null, 2)}
+                        </pre>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
