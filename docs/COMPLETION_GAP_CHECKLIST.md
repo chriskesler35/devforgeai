@@ -17,7 +17,7 @@ Scope source: REQUIREMENTS.md (Pattern 1, Pattern 2, Pattern 3 acceptance criter
 3. DONE - Verification state stored in DB with status, capabilities, test results
 4. DONE - Verification report is downloadable per model (markdown/json) and exposed in Models diagnose modal
 5. DONE - Runtime selection logic prioritizes verified models
-6. PARTIAL - Fallback chain is ordered and user-configurable (ordered yes, user-config no)
+6. DONE - Fallback chain is ordered and user-configurable via persisted runtime fallback order settings and Models dashboard controls
 7. DONE - Session-level model pinning now includes Workbench Pin/Unpin UI wiring with live pin status
 8. DONE - Model Health Dashboard now has frontend views for real-time metrics, provider health, and degraded alerts
 9. DONE - Selection decisions are durably logged and now surfaced in frontend diagnostics view

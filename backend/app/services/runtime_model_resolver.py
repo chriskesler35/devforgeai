@@ -13,6 +13,7 @@ from typing import Literal, Optional, Union
 from uuid import UUID
 import logging
 import os
+import json
 import re
 import socket
 import uuid
@@ -21,7 +22,7 @@ from urllib.parse import urlparse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Model, ModelSelectionLog, ModelVerification, Provider, SessionModelPin
+from app.models import AppSetting, Model, ModelSelectionLog, ModelVerification, Provider, SessionModelPin
 from app.services.github_copilot import get_copilot_auth_token, resolve_supported_copilot_model
 from app.services.provider_credentials import has_provider_api_key
 
@@ -287,6 +288,8 @@ async def collect_runtime_fallback_candidates(
 
     normalized_feature = _normalize_feature_name(feature_required) if feature_required else None
 
+    configured_fallback_refs = await _load_user_configured_fallback_refs(db, normalized_feature)
+
     for fallback_ref in explicit_fallback_refs or []:
         model_obj, provider_obj = await resolve_runtime_model_row_for_lookup(
             db,
@@ -306,6 +309,28 @@ async def collect_runtime_fallback_candidates(
                 continue
         seen.add(str(model_obj.id))
         candidates.append((model_obj, provider_obj, "configured fallback"))
+        if len(candidates) >= limit:
+            return candidates
+
+    for fallback_ref in configured_fallback_refs:
+        model_obj, provider_obj = await resolve_runtime_model_row_for_lookup(
+            db,
+            fallback_ref,
+            intent=intent,
+            include_fuzzy=False,
+        )
+        if not model_obj or not provider_obj:
+            continue
+        if str(model_obj.id) in seen:
+            continue
+        if normalized_feature:
+            verification = await get_model_verification(db, model_obj.id)
+            if not verification or verification.verification_status != "verified":
+                continue
+            if not (verification.capabilities or {}).get(normalized_feature, False):
+                continue
+        seen.add(str(model_obj.id))
+        candidates.append((model_obj, provider_obj, "user configured fallback"))
         if len(candidates) >= limit:
             return candidates
 
@@ -1068,6 +1093,49 @@ def get_fallback_chain(feature: str) -> list[str]:
 
 def _normalize_feature_name(feature: str | None) -> str:
     return _FEATURE_ALIASES.get((feature or "chat").strip().lower(), "chat")
+
+
+async def _load_user_configured_fallback_refs(
+    db: AsyncSession,
+    feature: str | None,
+) -> list[str]:
+    """Load runtime fallback order from app settings.
+
+    Accepted value formats for `runtime_fallback_order`:
+    - JSON list: ["provider/model", ...] (global order)
+    - JSON object: {"default": [...], "chat": [...], "function_calling": [...], ...}
+    """
+    row = (await db.execute(select(AppSetting).where(AppSetting.key == "runtime_fallback_order"))).scalar_one_or_none()
+    if not row or not row.value:
+        return []
+
+    try:
+        payload = json.loads(row.value)
+    except Exception:
+        return []
+
+    refs: list[str] = []
+    normalized_feature = _normalize_feature_name(feature)
+
+    if isinstance(payload, list):
+        refs = [str(item).strip() for item in payload if str(item).strip()]
+    elif isinstance(payload, dict):
+        feature_specific = payload.get(normalized_feature)
+        if isinstance(feature_specific, list):
+            refs.extend(str(item).strip() for item in feature_specific if str(item).strip())
+        default_list = payload.get("default")
+        if isinstance(default_list, list):
+            refs.extend(str(item).strip() for item in default_list if str(item).strip())
+
+    # Preserve order while removing duplicates.
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for ref in refs:
+        if ref in seen:
+            continue
+        seen.add(ref)
+        deduped.append(ref)
+    return deduped
 
 
 def _feature_for_intent(intent: ResolveIntent) -> str:

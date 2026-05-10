@@ -24,6 +24,7 @@ _DEFAULTS = {
     "remote_wireguard_frontend_url": "",
     "remote_wireguard_backend_url": "",
     "remote_wireguard_comfyui_url": "",
+    "runtime_fallback_order": "[]",
 }
 
 # Env var overrides (highest priority)

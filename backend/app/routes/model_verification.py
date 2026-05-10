@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from app.database import get_db
 from app.config import settings
-from app.models import Model, Provider, ModelSelectionLog, ModelVerification, ProviderHealth, SessionModelPin
+from app.models import AppSetting, Model, Provider, ModelSelectionLog, ModelVerification, ProviderHealth, SessionModelPin
 from app.middleware.auth import verify_api_key
 from app.services.model_verification import ModelVerificationService
 from app.services.provider_health import ProviderHealthService
@@ -219,6 +219,16 @@ class CatalogWebhookRequest(BaseModel):
     changed_models: list[str] = []
     reason: Optional[str] = None
     payload: dict = {}
+
+
+class FallbackOrderUpdateRequest(BaseModel):
+    refs: list[str] = []
+
+
+class FallbackOrderResponse(BaseModel):
+    configured_refs: list[str] = []
+    available_refs: list[str] = []
+    updated_at: Optional[datetime] = None
 
 
 async def _compute_catalog_version(
@@ -653,6 +663,80 @@ async def get_model_selection_log(
         )
         for row in rows
     ]
+
+
+@router.get("/models/fallback-order")
+async def get_runtime_fallback_order(
+    db: AsyncSession = Depends(get_db),
+) -> FallbackOrderResponse:
+    """Return user-configured fallback order plus currently available validated model refs."""
+    setting_row = (await db.execute(select(AppSetting).where(AppSetting.key == "runtime_fallback_order"))).scalar_one_or_none()
+
+    configured_refs: list[str] = []
+    if setting_row and setting_row.value:
+        try:
+            parsed = json.loads(setting_row.value)
+            if isinstance(parsed, list):
+                configured_refs = [str(item).strip() for item in parsed if str(item).strip()]
+            elif isinstance(parsed, dict):
+                # Keep backward/forward compatibility with feature-keyed payloads.
+                default_refs = parsed.get("default")
+                if isinstance(default_refs, list):
+                    configured_refs = [str(item).strip() for item in default_refs if str(item).strip()]
+        except Exception:
+            configured_refs = []
+
+    available_stmt = (
+        select(Model, Provider)
+        .join(Provider, Model.provider_id == Provider.id)
+        .where(Model.is_active == True)
+        .where(Provider.is_active == True)
+        .where(Model.validation_status == "validated")
+        .order_by(Model.validated_at.desc().nulls_last(), Model.display_name.asc())
+    )
+    available_rows = (await db.execute(available_stmt)).all()
+
+    available_refs = [f"{provider.name}/{model.model_id}" for model, provider in available_rows if provider and provider.name]
+
+    # Preserve user order first; append any validated refs not explicitly listed.
+    merged_available: list[str] = []
+    for ref in configured_refs + available_refs:
+        if ref and ref not in merged_available:
+            merged_available.append(ref)
+
+    return FallbackOrderResponse(
+        configured_refs=configured_refs,
+        available_refs=merged_available,
+        updated_at=setting_row.updated_at if setting_row else None,
+    )
+
+
+@router.put("/models/fallback-order")
+async def update_runtime_fallback_order(
+    body: FallbackOrderUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+) -> FallbackOrderResponse:
+    """Persist user-configurable runtime fallback order."""
+    cleaned: list[str] = []
+    for item in body.refs:
+        ref = str(item or "").strip()
+        if not ref or ref in cleaned:
+            continue
+        cleaned.append(ref)
+
+    payload = json.dumps(cleaned)
+
+    row = (await db.execute(select(AppSetting).where(AppSetting.key == "runtime_fallback_order"))).scalar_one_or_none()
+    if row:
+        row.value = payload
+    else:
+        row = AppSetting(key="runtime_fallback_order", value=payload)
+        db.add(row)
+
+    await db.commit()
+    await db.refresh(row)
+
+    return await get_runtime_fallback_order(db)
 
 
 @router.get("/models/catalog")

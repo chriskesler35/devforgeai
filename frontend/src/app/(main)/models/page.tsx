@@ -166,6 +166,13 @@ interface DiagnosisSuite {
     details?: Record<string, unknown>
   }>
 }
+
+interface FallbackOrderData {
+  configured_refs: string[]
+  available_refs: string[]
+  updated_at?: string | null
+}
+
 function formatSyncMode(mode?: string): string {
   if (!mode) return 'Catalog sync'
   return mode.replace(/_/g, ' ')
@@ -230,6 +237,9 @@ export default function ModelsPage() {
   const [selectionLog, setSelectionLog] = useState<SelectionLogEntry[]>([])
   const [providerHealth, setProviderHealth] = useState<ProviderHealthSummary[]>([])
   const [diagnosisSuite, setDiagnosisSuite] = useState<DiagnosisSuite | null>(null)
+  const [fallbackOrder, setFallbackOrder] = useState<FallbackOrderData | null>(null)
+  const [fallbackOrderSaving, setFallbackOrderSaving] = useState(false)
+  const [fallbackOrderAddRef, setFallbackOrderAddRef] = useState('')
   const [dashboardRefreshing, setDashboardRefreshing] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [syncingProvider, setSyncingProvider] = useState(false)
@@ -369,10 +379,77 @@ export default function ModelsPage() {
     }
   }
 
+  const fetchFallbackOrder = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/v1/models/fallback-order`, { headers: AUTH_HEADERS })
+      if (res.ok) {
+        const data: FallbackOrderData = await res.json()
+        setFallbackOrder(data)
+      }
+    } catch {
+      // Non-fatal diagnostics
+    }
+  }
+
+  const moveFallbackRef = (index: number, direction: -1 | 1) => {
+    setFallbackOrder((prev) => {
+      if (!prev) return prev
+      const target = index + direction
+      if (target < 0 || target >= prev.configured_refs.length) return prev
+      const next = [...prev.configured_refs]
+      const [item] = next.splice(index, 1)
+      next.splice(target, 0, item)
+      return { ...prev, configured_refs: next }
+    })
+  }
+
+  const removeFallbackRef = (ref: string) => {
+    setFallbackOrder((prev) => {
+      if (!prev) return prev
+      return { ...prev, configured_refs: prev.configured_refs.filter((item) => item !== ref) }
+    })
+  }
+
+  const addFallbackRef = () => {
+    const ref = fallbackOrderAddRef.trim()
+    if (!ref) return
+    setFallbackOrder((prev) => {
+      if (!prev) return prev
+      if (prev.configured_refs.includes(ref)) return prev
+      return { ...prev, configured_refs: [...prev.configured_refs, ref] }
+    })
+    setFallbackOrderAddRef('')
+  }
+
+  const saveFallbackOrder = async () => {
+    if (!fallbackOrder) return
+    setFallbackOrderSaving(true)
+    try {
+      const res = await fetch(`${API_BASE}/v1/models/fallback-order`, {
+        method: 'PUT',
+        headers: {
+          ...AUTH_HEADERS,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ refs: fallbackOrder.configured_refs }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        alert(data.detail || 'Failed to save fallback order')
+        return
+      }
+      setFallbackOrder(data)
+    } catch {
+      alert('Failed to save fallback order')
+    } finally {
+      setFallbackOrderSaving(false)
+    }
+  }
+
   const refreshReliabilityDashboard = async () => {
     setDashboardRefreshing(true)
     try {
-      await Promise.all([fetchHealthDashboard(), fetchSelectionLog(), fetchProviderHealth(), fetchDiagnosisSuite()])
+      await Promise.all([fetchHealthDashboard(), fetchSelectionLog(), fetchProviderHealth(), fetchDiagnosisSuite(), fetchFallbackOrder()])
     } finally {
       setDashboardRefreshing(false)
     }
@@ -459,6 +536,7 @@ export default function ModelsPage() {
           fetchSelectionLog(),
           fetchProviderHealth(),
           fetchDiagnosisSuite(),
+          fetchFallbackOrder(),
         ])
       } catch (e) {
         console.error('Failed to fetch:', e)
@@ -1090,6 +1168,79 @@ export default function ModelsPage() {
                   <div className="mt-1 text-gray-600 dark:text-gray-300">{cause.message}</div>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {fallbackOrder && (
+          <div className="mt-3 rounded border border-indigo-200 bg-white p-3 dark:border-indigo-800 dark:bg-gray-900">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-indigo-700 dark:text-indigo-300">
+              Runtime Fallback Order
+            </div>
+            <div className="mb-2 text-xs text-gray-600 dark:text-gray-300">
+              Configure the ordered list of fallback models used after explicit per-run fallbacks.
+            </div>
+
+            <div className="space-y-2">
+              {fallbackOrder.configured_refs.map((ref, idx) => (
+                <div key={ref} className="flex items-center justify-between gap-2 rounded border border-gray-200 px-2 py-1.5 text-xs dark:border-gray-700">
+                  <span className="truncate text-gray-800 dark:text-gray-200">{idx + 1}. {ref}</span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => moveFallbackRef(idx, -1)}
+                      disabled={idx === 0}
+                      className="rounded border border-gray-300 px-2 py-0.5 text-gray-700 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800"
+                    >
+                      Up
+                    </button>
+                    <button
+                      onClick={() => moveFallbackRef(idx, 1)}
+                      disabled={idx === fallbackOrder.configured_refs.length - 1}
+                      className="rounded border border-gray-300 px-2 py-0.5 text-gray-700 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800"
+                    >
+                      Down
+                    </button>
+                    <button
+                      onClick={() => removeFallbackRef(ref)}
+                      className="rounded border border-rose-300 px-2 py-0.5 text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:text-rose-300 dark:hover:bg-rose-900/20"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {fallbackOrder.configured_refs.length === 0 && (
+                <div className="text-xs text-gray-500 dark:text-gray-400">No configured order yet.</div>
+              )}
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <select
+                value={fallbackOrderAddRef}
+                onChange={(e) => setFallbackOrderAddRef(e.target.value)}
+                className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+              >
+                <option value="">Add model to fallback chain…</option>
+                {fallbackOrder.available_refs
+                  .filter((ref) => !fallbackOrder.configured_refs.includes(ref))
+                  .map((ref) => (
+                    <option key={ref} value={ref}>{ref}</option>
+                  ))}
+              </select>
+              <button
+                onClick={addFallbackRef}
+                disabled={!fallbackOrderAddRef}
+                className="rounded border border-indigo-300 px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+              >
+                Add
+              </button>
+              <button
+                onClick={saveFallbackOrder}
+                disabled={fallbackOrderSaving}
+                className="rounded bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {fallbackOrderSaving ? 'Saving…' : 'Save Order'}
+              </button>
             </div>
           </div>
         )}
