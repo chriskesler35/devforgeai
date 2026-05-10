@@ -3,6 +3,7 @@ import './globals.css'
 import ToastProvider from './ToastProvider'
 import ChunkErrorRecovery from './ChunkErrorRecovery'
 import BackendProbe from './BackendProbe'
+import ProviderHealthBanner from './ProviderHealthBanner'
 import { AuthProvider } from '@/contexts/AuthContext'
 
 const metadataBaseUrl = (() => {
@@ -46,6 +47,7 @@ export default function RootLayout({
       <body className="bg-gray-50 dark:bg-gray-900 h-full overflow-hidden">
         <ChunkErrorRecovery />
         <BackendProbe />
+        <ProviderHealthBanner />
         <AuthProvider>
           <ToastProvider>
             {children}

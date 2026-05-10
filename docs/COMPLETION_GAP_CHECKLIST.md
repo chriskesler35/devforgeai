@@ -25,7 +25,7 @@ Scope source: REQUIREMENTS.md (Pattern 1, Pattern 2, Pattern 3 acceptance criter
 11. PARTIAL - Provider credential management UI shows status and actions (backend exists; UI flow incomplete)
 12. DONE - Background health monitoring runs periodically
 13. PARTIAL - Degraded provider auto-disabled in model selection (auto-deactivation exists; policy thresholding and observability incomplete)
-14. MISSING - Credential failure shows alert + fix action in UI
+14. PARTIAL - Global provider-health warning banner implemented; dedicated credential management UX still pending
 15. PARTIAL - Model capability schema is JSON and enforced (JSON present; enforcement not complete for all paths/features)
 16. PARTIAL - Frontend syncs capability catalog on startup (cached); broader feature consumers still pending
 17. PARTIAL - Schema enforcement returns clear error messages (some paths do, not uniformly)
