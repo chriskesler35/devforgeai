@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Model, ModelSelectionLog, ModelVerification, Provider
+from app.models import Model, ModelSelectionLog, ModelVerification, Provider, SessionModelPin
 from app.services.github_copilot import get_copilot_auth_token, resolve_supported_copilot_model
 from app.services.provider_credentials import has_provider_api_key
 
@@ -368,6 +368,7 @@ async def build_runtime_model_chain_for_runtime(
     model_ref: str,
     *,
     intent: ResolveIntent,
+    session_id: str | None = None,
     explicit_fallback_refs: list[str] | None = None,
     limit: int = 3,
 ) -> tuple[list[tuple[Model, Provider, str]], str | None]:
@@ -380,6 +381,7 @@ async def build_runtime_model_chain_for_runtime(
         model_ref,
         feature_required=feature_required,
         intent=intent,
+        session_id=session_id,
     )
     primary_model = None
     if isinstance(primary, (Ready, NeedsLiveProbe)):
@@ -775,7 +777,8 @@ async def resolve_with_verification(
     db: AsyncSession,
     model_ref: str,
     feature_required: str,
-    intent: ResolveIntent = "chat"
+    intent: ResolveIntent = "chat",
+    session_id: str | None = None,
 ) -> ResolveResult:
     """
     Resolve model with verification check.
@@ -796,6 +799,47 @@ async def resolve_with_verification(
         4. Log decision
     """
     normalized_feature = _normalize_feature_name(feature_required)
+
+    # Session pin always wins over automatic selection.
+    if session_id:
+        pinned = await get_pinned_model_ref_for_session(db, session_id)
+        if pinned:
+            pinned_resolved = await resolve_model_for_runtime(db, pinned, intent=intent)
+            if isinstance(pinned_resolved, (Ready, NeedsLiveProbe)):
+                await log_selection_decision(
+                    db,
+                    feature=normalized_feature,
+                    requested_model_ref=model_ref,
+                    intent=intent,
+                    candidates=[pinned],
+                    selected=pinned_resolved.model,
+                    result="success",
+                    reason_code="session_pin",
+                    details={"session_id": session_id},
+                )
+                return pinned_resolved
+
+            await log_selection_decision(
+                db,
+                feature=normalized_feature,
+                requested_model_ref=model_ref,
+                intent=intent,
+                candidates=[pinned],
+                selected=None,
+                result="failure",
+                reason_code="session_pin_unavailable",
+                details={"session_id": session_id},
+            )
+            return Unreachable(
+                reason_code="session_pin_unavailable",
+                user_message=(
+                    f"Pinned model '{pinned}' for session '{session_id}' is unavailable. "
+                    "Update or remove the pin to continue."
+                ),
+                technical_detail=f"session pin failed for session_id={session_id}, model={pinned}",
+                candidates_tried=[pinned],
+                remediation=["Pin a different model", "Remove session pin", "Fix provider credentials"],
+            )
 
     # First try exact resolve
     exact = await resolve_model_for_runtime(db, model_ref, intent=intent)
@@ -908,6 +952,15 @@ async def get_model_verification(db: AsyncSession, model_id: UUID) -> Optional[M
     """Get verification record for a model."""
     stmt = select(ModelVerification).where(ModelVerification.model_id == model_id)
     return (await db.execute(stmt)).scalars().first()
+
+
+async def get_pinned_model_ref_for_session(db: AsyncSession, session_id: str) -> str | None:
+    """Return pinned model ref for session id, if any."""
+    stmt = select(SessionModelPin).where(SessionModelPin.session_id == session_id)
+    row = (await db.execute(stmt)).scalars().first()
+    if not row:
+        return None
+    return (row.pinned_model_ref or "").strip() or None
 
 
 async def log_selection_decision(

@@ -865,6 +865,7 @@ async def chat_completions(
             override_ref,
             feature_required="chat",
             intent="chat",
+            session_id=conv_id,
         )
         if isinstance(override_result, RuntimeUnreachable):
             recovery_notice = override_result.user_message
@@ -942,6 +943,7 @@ async def chat_completions(
             ref,
             feature_required="chat",
             intent="chat",
+            session_id=conv_id,
         )
         if isinstance(resolved, RuntimeUnreachable):
             return model_obj, provider_obj, False, resolved.user_message, resolved

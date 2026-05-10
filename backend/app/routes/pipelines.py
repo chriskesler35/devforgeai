@@ -43,7 +43,12 @@ _queues:     Dict[str, asyncio.Queue] = {}
 _event_logs: Dict[str, List[dict]]    = {}
 
 
-async def _resolve_runtime_model_ref(model_ref: str, *, intent: str = "pipeline"):
+async def _resolve_runtime_model_ref(
+    model_ref: str,
+    *,
+    intent: str = "pipeline",
+    session_id: str | None = None,
+):
     """Resolve runtime model/provider via shared resolver without workbench dependency."""
     from app.services.runtime_model_resolver import (
         NeedsLiveProbe as RuntimeNeedsLiveProbe,
@@ -57,6 +62,7 @@ async def _resolve_runtime_model_ref(model_ref: str, *, intent: str = "pipeline"
             model_ref,
             feature_required="chat",
             intent=intent,
+            session_id=session_id,
         )
         if isinstance(result, (RuntimeReady, RuntimeNeedsLiveProbe)):
             return result.model, result.provider
@@ -1066,6 +1072,7 @@ async def _run_phase(pipeline_id: str, phase_index: int, retry_count: int = 0, m
             db,
             model_id,
             intent="pipeline",
+            session_id=pipeline_id,
             explicit_fallback_refs=explicit_fallback_models,
         )
         # If model_chain is empty, try to get the detailed error message from the runtime resolver
@@ -1077,6 +1084,7 @@ async def _run_phase(pipeline_id: str, phase_index: int, retry_count: int = 0, m
                 model_id,
                 feature_required="chat",
                 intent="pipeline",
+                session_id=pipeline_id,
             )
             user_message = getattr(result, "user_message", None)
             msg = user_message or (
@@ -2527,7 +2535,11 @@ async def update_phase_model(
     if not model_ref:
         raise HTTPException(status_code=400, detail="Model is required")
 
-    model_orm, _provider_orm = await _resolve_runtime_model_ref(model_ref, intent="pipeline")
+    model_orm, _provider_orm = await _resolve_runtime_model_ref(
+        model_ref,
+        intent="pipeline",
+        session_id=pipeline_id,
+    )
     if not model_orm:
         # Try to get the detailed error message from the runtime resolver
         from app.services.runtime_model_resolver import resolve_with_verification
@@ -2538,6 +2550,7 @@ async def update_phase_model(
                 model_ref,
                 feature_required="chat",
                 intent="pipeline",
+                session_id=pipeline_id,
             )
         user_message = getattr(result, "user_message", None)
         raise HTTPException(

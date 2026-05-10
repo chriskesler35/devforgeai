@@ -10,7 +10,7 @@ from sqlalchemy import select, func
 from pydantic import BaseModel
 
 from app.database import get_db
-from app.models import Model, Provider, ModelSelectionLog, ModelVerification, ProviderHealth
+from app.models import Model, Provider, ModelSelectionLog, ModelVerification, ProviderHealth, SessionModelPin
 from app.middleware.auth import verify_api_key
 from app.services.model_verification import ModelVerificationService
 from app.services.provider_health import ProviderHealthService
@@ -80,6 +80,19 @@ class ModelSelectionLogDTO(BaseModel):
     result: str
     reason_code: Optional[str] = None
     details: dict = {}
+
+
+class SessionModelPinRequest(BaseModel):
+    pinned_by: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class SessionModelPinDTO(BaseModel):
+    session_id: str
+    pinned_model_ref: str
+    pinned_by: Optional[str] = None
+    notes: Optional[str] = None
+    updated_at: Optional[datetime] = None
 
 
 # ============================================================================
@@ -277,6 +290,61 @@ async def get_model_selection_log(
         )
         for row in rows
     ]
+
+
+@router.post("/models/{model_id}/pin-session/{session_id}")
+async def pin_model_for_session(
+    model_id: UUID,
+    session_id: str,
+    body: SessionModelPinRequest,
+    db: AsyncSession = Depends(get_db),
+) -> SessionModelPinDTO:
+    """Pin a model for a specific session id (chat/workbench/pipeline)."""
+    model = (await db.execute(select(Model).where(Model.id == model_id))).scalars().first()
+    if not model:
+        raise HTTPException(status_code=404, detail="Model not found")
+
+    provider = (await db.execute(select(Provider).where(Provider.id == model.provider_id))).scalars().first()
+    model_ref = f"{provider.name}/{model.model_id}" if provider else model.model_id
+
+    pin = (await db.execute(select(SessionModelPin).where(SessionModelPin.session_id == session_id))).scalars().first()
+    if not pin:
+        pin = SessionModelPin(
+            session_id=session_id,
+            pinned_model_ref=model_ref,
+            pinned_by=body.pinned_by,
+            notes=body.notes,
+        )
+        db.add(pin)
+    else:
+        pin.pinned_model_ref = model_ref
+        pin.pinned_by = body.pinned_by
+        pin.notes = body.notes
+
+    await db.commit()
+    await db.refresh(pin)
+    return SessionModelPinDTO(
+        session_id=pin.session_id,
+        pinned_model_ref=pin.pinned_model_ref,
+        pinned_by=pin.pinned_by,
+        notes=pin.notes,
+        updated_at=pin.updated_at,
+    )
+
+
+@router.delete("/models/pin-session/{session_id}")
+async def unpin_model_for_session(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Remove session-level model pin."""
+    pin = (await db.execute(select(SessionModelPin).where(SessionModelPin.session_id == session_id))).scalars().first()
+    if not pin:
+        return {"ok": True, "message": "No pin existed for this session."}
+
+    await db.delete(pin)
+    await db.commit()
+    return {"ok": True, "message": f"Removed pinned model for session '{session_id}'."}
 
 
 # ============================================================================

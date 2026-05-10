@@ -88,6 +88,16 @@ MIGRATIONS = [
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )""",
     "CREATE INDEX IF NOT EXISTS ix_installed_skills_skill_id ON installed_skills(skill_id)",
+    """CREATE TABLE IF NOT EXISTS session_model_pins (
+        id VARCHAR(36) PRIMARY KEY,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        session_id VARCHAR(100) NOT NULL UNIQUE,
+        pinned_model_ref VARCHAR(255) NOT NULL,
+        pinned_by VARCHAR(100),
+        notes VARCHAR(500)
+    )""",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_session_model_pins_session_id ON session_model_pins(session_id)",
 ]
 
 

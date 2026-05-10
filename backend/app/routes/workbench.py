@@ -156,6 +156,7 @@ async def _build_runtime_model_chain(
     model_ref: str,
     explicit_fallback_refs: Optional[list[str]] = None,
     *,
+    session_id: str | None = None,
     limit: int = 3,
 ):
     async with AsyncSessionLocal() as db:
@@ -163,6 +164,7 @@ async def _build_runtime_model_chain(
             db,
             model_ref,
             intent="agentic",
+            session_id=session_id,
             explicit_fallback_refs=explicit_fallback_refs,
             limit=limit,
         )
@@ -499,7 +501,7 @@ async def _run_turn(
     state_machine.transition(AgenticRunState.EXECUTING)
     _push_agentic_state(session_id, state_machine.current, "orchestrator", turn="llm_call")
 
-    model_chain, preflight_note = await _build_runtime_model_chain(model_id)
+    model_chain, preflight_note = await _build_runtime_model_chain(model_id, session_id=session_id)
     if not model_chain:
         _push(
             session_id,
