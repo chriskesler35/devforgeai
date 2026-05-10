@@ -118,6 +118,35 @@ def canonical_event_fields(event_type: str, payload: Optional[Dict[str, Any]] = 
     }
 
 
+def normalize_sse_event(evt: Optional[Dict[str, Any]], *, source: str = "runtime") -> Dict[str, Any]:
+    """Normalize any SSE event shape and backfill canonical metadata.
+
+    This is used by stream replay paths so legacy stored events emitted before
+    canonical metadata existed still provide the normalized contract.
+    """
+
+    raw = evt if isinstance(evt, dict) else {}
+    event_type = str(raw.get("type") or "info")
+    payload = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
+    ts = raw.get("ts") or datetime.utcnow().isoformat()
+
+    normalized: Dict[str, Any] = {
+        "type": event_type,
+        "payload": payload,
+        "ts": ts,
+    }
+
+    for key, value in canonical_event_fields(event_type, payload, source=source).items():
+        normalized[key] = raw.get(key, value)
+
+    # Preserve any extra top-level fields to avoid dropping historical data.
+    for key, value in raw.items():
+        if key not in normalized:
+            normalized[key] = value
+
+    return normalized
+
+
 def build_agentic_event(
     run_id: str,
     state: AgenticRunState,

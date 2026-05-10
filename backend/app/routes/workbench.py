@@ -28,7 +28,12 @@ from app.services.runtime_model_resolver import (
 )
 from app.schemas.agentic import AgenticRunState
 from app.services.agentic_state_machine import AgenticStateMachine
-from app.services.agentic_events import build_agentic_event, canonical_event_fields, compute_agentic_score
+from app.services.agentic_events import (
+    build_agentic_event,
+    canonical_event_fields,
+    compute_agentic_score,
+    normalize_sse_event,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1133,10 +1138,12 @@ async def stream_session(session_id: str, request: Request):
         if not queue:
             # Session exists in DB but not actively running - replay stored events.
             session_dict = session.to_dict()
-            yield f"data: {json.dumps({'type':'init','payload':session_dict})}\n\n"
+            init_evt = normalize_sse_event({"type": "init", "payload": session_dict}, source="workbench")
+            init_evt["canonical_state"] = session_dict.get("status") or init_evt.get("canonical_state")
+            yield f"data: {json.dumps(init_evt)}\n\n"
             log = session_dict.get('events_log') or []
             for evt in log:
-                yield f"data: {json.dumps(evt)}\n\n"
+                yield f"data: {json.dumps(normalize_sse_event(evt, source='workbench'))}\n\n"
                 import asyncio as _asyncio; await _asyncio.sleep(0.02)
 
             # Detect if the LAST turn in the log is incomplete.
@@ -1154,8 +1161,28 @@ async def stream_session(session_id: str, request: Request):
 
             if last_turn_incomplete:
                 terminal_status = session.status if session.status in ('failed', 'cancelled', 'completed', 'waiting') else 'waiting'
-                yield f"data: {json.dumps({'type':'agent_reply','payload':{'message':'(Turn ended before completing — backend may have restarted. Send a new message to continue.)','files_changed':[]}})}\n\n"
-                yield f"data: {json.dumps({'type':'done','payload':{'message':f'Turn recovered ({terminal_status})','status':terminal_status}})}\n\n"
+                recovered_reply = normalize_sse_event(
+                    {
+                        "type": "agent_reply",
+                        "payload": {
+                            "message": "(Turn ended before completing — backend may have restarted. Send a new message to continue.)",
+                            "files_changed": [],
+                        },
+                    },
+                    source="workbench",
+                )
+                recovered_done = normalize_sse_event(
+                    {
+                        "type": "done",
+                        "payload": {
+                            "message": f"Turn recovered ({terminal_status})",
+                            "status": terminal_status,
+                        },
+                    },
+                    source="workbench",
+                )
+                yield f"data: {json.dumps(recovered_reply)}\n\n"
+                yield f"data: {json.dumps(recovered_done)}\n\n"
 
             # For 'waiting' sessions: create a live queue so the stream stays
             # alive (user might send a follow-up). Without this, the generator
@@ -1171,20 +1198,24 @@ async def stream_session(session_id: str, request: Request):
                 return
 
         else:
-            yield f"data: {json.dumps({'type':'init','payload':session.to_dict()})}\n\n"
+            init_evt = normalize_sse_event({"type": "init", "payload": session.to_dict()}, source="workbench")
+            init_evt["canonical_state"] = session.status or init_evt.get("canonical_state")
+            yield f"data: {json.dumps(init_evt)}\n\n"
 
         while True:
             if await request.is_disconnected():
                 break
             try:
                 evt = await asyncio.wait_for(queue.get(), timeout=30.0)
-                yield f"data: {json.dumps(evt)}\n\n"
-                if evt.get("type") == "done":
-                    final_status = (evt.get("payload") or {}).get("status", "")
+                normalized_evt = normalize_sse_event(evt, source="workbench")
+                yield f"data: {json.dumps(normalized_evt)}\n\n"
+                if normalized_evt.get("type") == "done":
+                    final_status = (normalized_evt.get("payload") or {}).get("status", "")
                     if final_status in ("completed", "failed", "cancelled", "error"):
                         break
             except asyncio.TimeoutError:
-                yield f"data: {json.dumps({'type':'ping','payload':{}})}\n\n"
+                ping_evt = normalize_sse_event({"type": "ping", "payload": {}}, source="workbench")
+                yield f"data: {json.dumps(ping_evt)}\n\n"
 
     return StreamingResponse(
         event_generator(),

@@ -32,7 +32,7 @@ from pydantic import BaseModel
 
 from app.middleware.auth import verify_api_key
 from app.database import get_db, AsyncSessionLocal
-from app.services.agentic_events import canonical_event_fields
+from app.services.agentic_events import canonical_event_fields, normalize_sse_event
 
 logger = logging.getLogger(__name__)
 
@@ -2985,17 +2985,23 @@ async def stream_pipeline(pipeline_id: str, request: Request):
     active_statuses = {"pending", "running", "paused", "awaiting_approval"}
 
     async def event_generator() -> AsyncGenerator[str, None]:
-        yield f"data: {json.dumps({'type':'init','payload':init_payload})}\n\n"
+        init_evt = normalize_sse_event({"type": "init", "payload": init_payload}, source="pipeline")
+        init_evt["canonical_state"] = p.status or init_evt.get("canonical_state")
+        yield f"data: {json.dumps(init_evt)}\n\n"
 
         queue = _queues.get(pipeline_id)
         if not queue:
             # Pipeline exists but no live queue — replay stored events
             for evt in _event_logs.get(pipeline_id, []):
-                yield f"data: {json.dumps(evt)}\n\n"
+                yield f"data: {json.dumps(normalize_sse_event(evt, source='pipeline'))}\n\n"
                 await asyncio.sleep(0.02)
             # Terminal pipelines should emit one final done event and end.
             if p.status in ("completed", "failed", "cancelled"):
-                yield f"data: {json.dumps({'type':'pipeline_done','payload':{'status':p.status}})}\n\n"
+                done_evt = normalize_sse_event(
+                    {"type": "pipeline_done", "payload": {"status": p.status}},
+                    source="pipeline",
+                )
+                yield f"data: {json.dumps(done_evt)}\n\n"
                 return
 
             # Non-terminal pipelines must keep the stream alive. Otherwise the
@@ -3012,11 +3018,13 @@ async def stream_pipeline(pipeline_id: str, request: Request):
                 break
             try:
                 evt = await asyncio.wait_for(queue.get(), timeout=30.0)
-                yield f"data: {json.dumps(evt)}\n\n"
-                if evt.get("type") == "pipeline_done":
+                normalized_evt = normalize_sse_event(evt, source="pipeline")
+                yield f"data: {json.dumps(normalized_evt)}\n\n"
+                if normalized_evt.get("type") == "pipeline_done":
                     break
             except asyncio.TimeoutError:
-                yield f"data: {json.dumps({'type':'ping','payload':{}})}\n\n"
+                ping_evt = normalize_sse_event({"type": "ping", "payload": {}}, source="pipeline")
+                yield f"data: {json.dumps(ping_evt)}\n\n"
 
     return StreamingResponse(
         event_generator(),
