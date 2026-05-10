@@ -219,6 +219,8 @@ export default function WorkbenchListPage() {
   const [runtimeLayeredMethods, setRuntimeLayeredMethods] = useState<string[]>([])
   const [runtimeStackedPromptApplied, setRuntimeStackedPromptApplied] = useState(false)
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null)
+  const [pausingAll, setPausingAll] = useState(false)
+  const [resumingAll, setResumingAll] = useState(false)
   const [wbFilter, setWbFilter] = useState<SessionFilterKey>('all')
   const [wbSort, setWbSort] = useState<SessionSortKey>('newest')
 
@@ -673,6 +675,36 @@ export default function WorkbenchListPage() {
     }
   }
 
+  const pauseAllSessions = async () => {
+    setPausingAll(true)
+    try {
+      const apiBase = getApiBase()
+      const authHeaders = getAuthHeaders()
+      const res = await fetch(`${apiBase}/v1/workbench/sessions/pause-all`, { method: 'POST', headers: authHeaders })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await fetchSessions()
+    } catch (e: any) {
+      alert(`Pause all failed: ${e.message}`)
+    } finally {
+      setPausingAll(false)
+    }
+  }
+
+  const resumeAllSessions = async () => {
+    setResumingAll(true)
+    try {
+      const apiBase = getApiBase()
+      const authHeaders = getAuthHeaders()
+      const res = await fetch(`${apiBase}/v1/workbench/sessions/resume-all`, { method: 'POST', headers: authHeaders })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await fetchSessions()
+    } catch (e: any) {
+      alert(`Resume all failed: ${e.message}`)
+    } finally {
+      setResumingAll(false)
+    }
+  }
+
   const applyGuidedPreset = (preset: 'mvp' | 'prototype' | 'review') => {
     setAsPipeline(true)
     setCustomizeModels(false)
@@ -780,6 +812,8 @@ export default function WorkbenchListPage() {
   const resolvedBySessionCount = phasePreview.filter(ph => !modelOverrides[ph.name] && !!model).length
   const resolvedByOverrideCount = phasePreview.filter(ph => !!modelOverrides[ph.name]).length
   const launchExplainabilityStack = effectiveLaunchStack.length > 0 ? effectiveLaunchStack : (asPipeline ? [pipelineMethod] : [])
+  const activeSessionCount = sessions.filter(s => s.status === 'running' || s.status === 'pending' || s.status === 'waiting').length
+  const pausedSessionCount = sessions.filter(s => s.status === 'paused').length
 
   return (
     <div className="space-y-6">
@@ -789,6 +823,26 @@ export default function WorkbenchListPage() {
           <p className="mt-1 text-sm text-gray-500">Watch agents build in real-time — and step in when needed</p>
         </div>
         <div className="flex items-center gap-2">
+          {activeSessionCount > 0 && (
+            <button
+              onClick={pauseAllSessions}
+              disabled={pausingAll}
+              className="px-3 py-2 text-sm font-medium rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+              title="Pause all active sessions"
+            >
+              {pausingAll ? 'Pausing…' : 'Pause All Agents'}
+            </button>
+          )}
+          {pausedSessionCount > 0 && (
+            <button
+              onClick={resumeAllSessions}
+              disabled={resumingAll}
+              className="px-3 py-2 text-sm font-medium rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              title="Resume all paused sessions"
+            >
+              {resumingAll ? 'Resuming…' : 'Resume All Agents'}
+            </button>
+          )}
           {(sessions.length > 0 || pipelines.length > 0) && (
             <button
               onClick={async () => {

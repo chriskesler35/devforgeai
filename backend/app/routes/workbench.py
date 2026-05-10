@@ -1555,6 +1555,48 @@ async def pause_session(session_id: str):
     return {"ok": True, "status": "paused"}
 
 
+@router.post("/sessions/pause-all", dependencies=[Depends(verify_api_key)])
+async def pause_all_sessions():
+    """Pause all active workbench sessions in one operation."""
+    from app.models.workbench import WorkbenchSession
+
+    paused_ids: list[str] = []
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(
+            select(WorkbenchSession).where(WorkbenchSession.status.in_(["running", "pending", "waiting"]))
+        )).scalars().all()
+
+    for sess in rows:
+        sid = str(sess.id)
+        _pending_messages[sid] = "paused"
+        await _db_update(sid, status="paused")
+        _push(sid, "session_paused", message="Session paused by global control.", status="paused")
+        paused_ids.append(sid)
+
+    return {"ok": True, "paused_count": len(paused_ids), "session_ids": paused_ids}
+
+
+@router.post("/sessions/resume-all", dependencies=[Depends(verify_api_key)])
+async def resume_all_sessions():
+    """Resume all paused workbench sessions to interactive waiting state."""
+    from app.models.workbench import WorkbenchSession
+
+    resumed_ids: list[str] = []
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(
+            select(WorkbenchSession).where(WorkbenchSession.status == "paused")
+        )).scalars().all()
+
+    for sess in rows:
+        sid = str(sess.id)
+        _pending_messages[sid] = []
+        await _db_update(sid, status="waiting")
+        _push(sid, "session_resumed", message="Session resumed by global control.", status="waiting")
+        resumed_ids.append(sid)
+
+    return {"ok": True, "resumed_count": len(resumed_ids), "session_ids": resumed_ids}
+
+
 @router.post("/sessions/{session_id}/resume", dependencies=[Depends(verify_api_key)])
 async def resume_session(session_id: str):
     """Resume a paused workbench session to waiting/interactive state."""
