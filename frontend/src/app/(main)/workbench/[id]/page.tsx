@@ -26,6 +26,14 @@ interface ModelOption {
   provider_name?: string
 }
 
+interface SessionPinState {
+  session_id: string
+  pinned_model_ref: string
+  pinned_by?: string | null
+  notes?: string | null
+  updated_at?: string | null
+}
+
 interface FileEntry { path: string; status: 'created' | 'modified'; content?: string; diff?: string }
 
 const EVENT_STYLE: Record<string, { icon: string; color: string; label: string }> = {
@@ -426,6 +434,9 @@ export default function WorkbenchSessionPage() {
   const [modelDraft, setModelDraft] = useState('')
   const [updatingModel, setUpdatingModel] = useState(false)
   const [modelUpdateNote, setModelUpdateNote] = useState('')
+  const [sessionPin, setSessionPin] = useState<SessionPinState | null>(null)
+  const [pinningModel, setPinningModel] = useState(false)
+  const [pinNote, setPinNote] = useState('')
   const [events, setEvents] = useState<WBEvent[]>([])
   const [files, setFiles] = useState<FileEntry[]>([])
   const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null)
@@ -465,6 +476,24 @@ export default function WorkbenchSessionPage() {
     loadModels()
     return () => { cancelled = true }
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const loadSessionPin = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/v1/models/pin-session/${id}`, { headers: AUTH_HEADERS })
+        const payload = await res.json().catch(() => ({}))
+        if (cancelled) return
+        setSessionPin(payload?.pin || null)
+      } catch {
+        if (!cancelled) setSessionPin(null)
+      }
+    }
+    loadSessionPin()
+    return () => {
+      cancelled = true
+    }
+  }, [id])
 
   // Auto-scroll stream
   useEffect(() => {
@@ -624,6 +653,60 @@ export default function WorkbenchSessionPage() {
     }
   }, [id, modelDraft, session])
 
+  const pinModelForSession = useCallback(async () => {
+    const targetRef = modelDraft.trim()
+    if (!targetRef) return
+
+    const modelRow = models.find((m) => `${m.provider_name || 'unknown'}/${m.model_id}` === targetRef)
+    if (!modelRow?.id) {
+      setPinNote('Pin failed: selected model is not in validated catalog list.')
+      return
+    }
+
+    setPinningModel(true)
+    setPinNote('')
+    try {
+      const res = await fetch(`${API_BASE}/v1/models/${modelRow.id}/pin-session/${id}`, {
+        method: 'POST',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify({ pinned_by: 'workbench-ui', notes: 'Pinned from Workbench session controls' }),
+      })
+      const payload = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const detail = payload?.detail || `HTTP ${res.status}`
+        throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+      }
+      setSessionPin(payload)
+      setPinNote('Session model pin applied.')
+    } catch (e: any) {
+      setPinNote(`Pin failed: ${e?.message || 'unknown error'}`)
+    } finally {
+      setPinningModel(false)
+    }
+  }, [id, modelDraft, models])
+
+  const unpinModelForSession = useCallback(async () => {
+    setPinningModel(true)
+    setPinNote('')
+    try {
+      const res = await fetch(`${API_BASE}/v1/models/pin-session/${id}`, {
+        method: 'DELETE',
+        headers: AUTH_HEADERS,
+      })
+      const payload = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const detail = payload?.detail || `HTTP ${res.status}`
+        throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+      }
+      setSessionPin(null)
+      setPinNote('Session model pin removed.')
+    } catch (e: any) {
+      setPinNote(`Unpin failed: ${e?.message || 'unknown error'}`)
+    } finally {
+      setPinningModel(false)
+    }
+  }, [id])
+
   const sendIntervention = useCallback(async () => {
     if (!intervention.trim() || sending) return
     setSending(true)
@@ -780,12 +863,34 @@ export default function WorkbenchSessionPage() {
             >
               {updatingModel ? 'Applying…' : 'Apply Model'}
             </button>
+            <button
+              onClick={pinModelForSession}
+              disabled={pinningModel || !modelDraft.trim()}
+              className="px-2 py-1 text-xs rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Pin this model for the current session"
+            >
+              {pinningModel ? 'Pinning…' : 'Pin Model'}
+            </button>
+            <button
+              onClick={unpinModelForSession}
+              disabled={pinningModel || !sessionPin}
+              className="px-2 py-1 text-xs rounded border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Remove session-level model pin"
+            >
+              Unpin
+            </button>
             {status === 'running' && (
               <span className="text-[10px] text-amber-600">Takes effect next turn while running</span>
             )}
           </div>
           {modelUpdateNote && (
             <p className="mt-1 text-[10px] text-gray-500">{modelUpdateNote}</p>
+          )}
+          {sessionPin?.pinned_model_ref && (
+            <p className="mt-1 text-[10px] text-emerald-700">Pinned for this session: {sessionPin.pinned_model_ref}</p>
+          )}
+          {pinNote && (
+            <p className="mt-1 text-[10px] text-gray-500">{pinNote}</p>
           )}
         </div>
 

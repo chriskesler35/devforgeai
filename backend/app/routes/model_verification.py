@@ -454,6 +454,26 @@ async def pin_model_for_session(
     )
 
 
+@router.get("/models/pin-session/{session_id}")
+async def get_model_pin_for_session(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Get current session-level model pin, if any."""
+    pin = (await db.execute(select(SessionModelPin).where(SessionModelPin.session_id == session_id))).scalars().first()
+    if not pin:
+        return {"ok": True, "pin": None}
+
+    dto = SessionModelPinDTO(
+        session_id=pin.session_id,
+        pinned_model_ref=pin.pinned_model_ref,
+        pinned_by=pin.pinned_by,
+        notes=pin.notes,
+        updated_at=pin.updated_at,
+    )
+    return {"ok": True, "pin": dto.model_dump()}
+
+
 @router.delete("/models/pin-session/{session_id}")
 async def unpin_model_for_session(
     session_id: str,

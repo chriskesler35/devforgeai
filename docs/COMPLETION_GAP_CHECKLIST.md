@@ -18,7 +18,7 @@ Scope source: REQUIREMENTS.md (Pattern 1, Pattern 2, Pattern 3 acceptance criter
 4. MISSING - Verification report downloadable per model
 5. DONE - Runtime selection logic prioritizes verified models
 6. PARTIAL - Fallback chain is ordered and user-configurable (ordered yes, user-config no)
-7. PARTIAL - Session-level model pinning backend exists; Pin Model button/UI wiring still pending
+7. DONE - Session-level model pinning now includes Workbench Pin/Unpin UI wiring with live pin status
 8. DONE - Model Health Dashboard now has frontend views for real-time metrics, provider health, and degraded alerts
 9. DONE - Selection decisions are durably logged and now surfaced in frontend diagnostics view
 10. DONE - Provider health check endpoint exists and works
