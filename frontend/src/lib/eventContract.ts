@@ -30,6 +30,7 @@ const DEFAULT_CANONICAL_EVENT_ALIAS: Record<string, string> = {
   'pipeline.retry': 'pipeline_retry',
   'session.paused': 'session_paused',
   'session.resumed': 'session_resumed',
+  'session.killed': 'session_killed',
   'run.retry_with_prompt': 'retry_with_prompt',
   'run.override_result': 'override_result',
   'run.alternative_selected': 'alternative_selected',

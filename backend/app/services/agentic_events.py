@@ -52,6 +52,7 @@ _CANONICAL_TYPE_MAP: Dict[str, str] = {
     "pipeline_done": "pipeline.done",
     "session_paused": "session.paused",
     "session_resumed": "session.resumed",
+    "session_killed": "session.killed",
     "retry_with_prompt": "run.retry_with_prompt",
     "override_result": "run.override_result",
     "alternative_selected": "run.alternative_selected",

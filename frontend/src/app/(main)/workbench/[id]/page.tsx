@@ -55,6 +55,13 @@ interface AgentResultSnapshot {
   ts: string
 }
 
+interface KillImpactPayload {
+  session_id: string
+  status: string
+  impacts: string[]
+  impacted_commands: Array<{ command_id: string; status: string; command: string }>
+}
+
 const EVENT_STYLE: Record<string, { icon: string; color: string; label: string }> = {
   agent_thought: { icon: '💭', color: 'text-purple-600 dark:text-purple-400',  label: 'Thinking'     },
   tool_call:     { icon: '🔧', color: 'text-blue-600 dark:text-blue-400',      label: 'Tool'         },
@@ -68,6 +75,7 @@ const EVENT_STYLE: Record<string, { icon: string; color: string; label: string }
   done:          { icon: '✅', color: 'text-green-600 dark:text-green-400',    label: 'Done'         },
   session_paused:{ icon: '⏸️', color: 'text-amber-600 dark:text-amber-400',    label: 'Paused'       },
   session_resumed:{ icon: '▶️', color: 'text-blue-600 dark:text-blue-400',     label: 'Resumed'      },
+  session_killed:{ icon: '🛑', color: 'text-red-700 dark:text-red-400',        label: 'Killed'       },
   retry_with_prompt:{ icon: '↻', color: 'text-indigo-600 dark:text-indigo-400', label: 'Retry'        },
   override_result:{ icon: '🛠️', color: 'text-emerald-600 dark:text-emerald-400', label: 'Override'    },
   ping:          { icon: '·',  color: 'text-gray-300',                          label: ''             },
@@ -208,7 +216,19 @@ function AgentCard({
   fileCount: number
 }) {
   const meta = AGENT_AVATARS[agentType] || AGENT_AVATARS.coder
-  const statusLabel = status === 'running' ? 'Working…' : status === 'waiting' ? 'Idle — send another message or close' : status === 'completed' ? 'Done' : status === 'failed' ? 'Failed' : status === 'cancelled' ? 'Cancelled' : 'Connecting'
+  const statusLabel = status === 'running'
+    ? 'Working…'
+    : status === 'waiting'
+      ? 'Idle — send another message or close'
+      : status === 'completed'
+        ? 'Done'
+        : status === 'failed'
+          ? 'Failed'
+          : status === 'cancelled'
+            ? 'Cancelled'
+            : status === 'killed'
+              ? 'Killed'
+              : 'Connecting'
   const isWorking = status === 'running' || status === 'pending'
 
   return (
@@ -546,6 +566,11 @@ export default function WorkbenchSessionPage() {
   const [lastLowConfidenceEventIndex, setLastLowConfidenceEventIndex] = useState<number | null>(null)
   const [selectedAlternativeIndex, setSelectedAlternativeIndex] = useState(0)
   const [choosingAlternative, setChoosingAlternative] = useState(false)
+  const [killModalOpen, setKillModalOpen] = useState(false)
+  const [loadingKillImpact, setLoadingKillImpact] = useState(false)
+  const [killingSession, setKillingSession] = useState(false)
+  const [killReason, setKillReason] = useState('')
+  const [killImpact, setKillImpact] = useState<KillImpactPayload | null>(null)
 
   const streamRef = useRef<EventSource | null>(null)
   const streamEndRef = useRef<HTMLDivElement>(null)
@@ -975,6 +1000,45 @@ export default function WorkbenchSessionPage() {
     }
   }
 
+  const openKillModal = async () => {
+    setKillModalOpen(true)
+    setLoadingKillImpact(true)
+    setKillImpact(null)
+    try {
+      const res = await fetch(`${API_BASE}/v1/workbench/sessions/${id}/kill-impact`, {
+        headers: AUTH_HEADERS,
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const payload = await res.json()
+      setKillImpact(payload)
+    } catch (e: any) {
+      alert(`Failed to load kill impact: ${e.message}`)
+      setKillModalOpen(false)
+    } finally {
+      setLoadingKillImpact(false)
+    }
+  }
+
+  const confirmKillSession = async () => {
+    setKillingSession(true)
+    try {
+      const res = await fetch(`${API_BASE}/v1/workbench/sessions/${id}/kill`, {
+        method: 'POST',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify({ reason: killReason.trim() || null }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setStatus('killed')
+      setWaitingForHuman(false)
+      setKillModalOpen(false)
+      setKillReason('')
+    } catch (e: any) {
+      alert(`Kill failed: ${e.message}`)
+    } finally {
+      setKillingSession(false)
+    }
+  }
+
   // Click file in the tree → fetch full content from disk (SSE payload is truncated)
   const selectFile = useCallback(async (f: FileEntry) => {
     // Show immediately with preview, then replace with full content
@@ -995,6 +1059,7 @@ export default function WorkbenchSessionPage() {
     running:      'bg-blue-100 text-blue-700',
     waiting:      'bg-orange-100 text-orange-700',
     paused:       'bg-amber-100 text-amber-700',
+    killed:       'bg-red-100 text-red-700',
     completed:    'bg-green-100 text-green-700',
     cancelled:    'bg-gray-100 text-gray-500',
     error:        'bg-red-100 text-red-700',
@@ -1224,6 +1289,7 @@ export default function WorkbenchSessionPage() {
       if (status === 'running') return 'EXECUTING'
       if (status === 'waiting') return 'AWAITING_APPROVAL'
       if (status === 'completed') return 'COMPLETED'
+      if (status === 'killed') return 'KILLED'
       if (status === 'failed' || status === 'error') return 'FAILED'
       if (status === 'cancelled') return 'CANCELLED'
       return 'IDLE'
@@ -1497,6 +1563,12 @@ export default function WorkbenchSessionPage() {
             <button onClick={cancelSession}
               className="px-3 py-1.5 text-xs font-medium rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors">
               Cancel
+            </button>
+          )}
+          {(status === 'running' || status === 'pending' || status === 'paused' || status === 'waiting') && (
+            <button onClick={openKillModal}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg border border-red-300 text-red-700 hover:bg-red-50 transition-colors">
+              Kill Agent
             </button>
           )}
           {status === 'waiting' && (
@@ -2331,6 +2403,61 @@ export default function WorkbenchSessionPage() {
               <button onClick={async () => { await setBypassModeRemote(true); setShowBypassWarning(false) }}
                 className="px-4 py-2 text-sm font-bold rounded-lg bg-red-600 hover:bg-red-700 text-white">
                 I understand — enable bypass
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {killModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setKillModalOpen(false)}>
+          <div className="w-full max-w-xl bg-white dark:bg-gray-900 rounded-2xl shadow-2xl overflow-hidden border border-red-300" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20">
+              <h2 className="text-base font-bold text-red-900 dark:text-red-100">Kill Agent Session</h2>
+            </div>
+            <div className="px-6 py-4 space-y-3 text-sm">
+              {loadingKillImpact ? (
+                <p className="text-gray-600 dark:text-gray-300">Calculating cascade impact…</p>
+              ) : (
+                <>
+                  <p className="text-gray-700 dark:text-gray-300">Killing this session may terminate in-flight work and dependent commands.</p>
+                  <div className="rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40 p-3 space-y-2">
+                    {(killImpact?.impacts || []).map((impact, idx) => (
+                      <div key={`impact-${idx}`} className="text-xs text-gray-700 dark:text-gray-200">• {impact}</div>
+                    ))}
+                    {killImpact?.impacted_commands?.length ? (
+                      <div className="space-y-1 pt-1">
+                        <div className="text-[11px] font-semibold text-gray-600 dark:text-gray-300">Impacted commands</div>
+                        {killImpact.impacted_commands.map((cmd) => (
+                          <div key={cmd.command_id} className="text-[11px] text-gray-700 dark:text-gray-200 font-mono break-all">
+                            [{cmd.status}] {cmd.command}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                  <input
+                    value={killReason}
+                    onChange={(e) => setKillReason(e.target.value)}
+                    placeholder="Kill reason (optional)"
+                    className="w-full rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-xs px-2 py-1.5 text-gray-700 dark:text-gray-200"
+                  />
+                </>
+              )}
+            </div>
+            <div className="px-6 py-3 border-t border-gray-200 dark:border-gray-800 flex gap-2 justify-end">
+              <button
+                onClick={() => setKillModalOpen(false)}
+                className="px-3 py-1.5 text-xs font-medium rounded border border-gray-300 text-gray-700 hover:bg-gray-50"
+              >
+                No
+              </button>
+              <button
+                onClick={confirmKillSession}
+                disabled={loadingKillImpact || killingSession}
+                className="px-3 py-1.5 text-xs font-medium rounded bg-red-600 hover:bg-red-700 text-white disabled:opacity-50"
+              >
+                {killingSession ? 'Killing…' : 'Yes, kill now'}
               </button>
             </div>
           </div>
