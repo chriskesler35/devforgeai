@@ -119,6 +119,36 @@ interface RuntimeStatus {
   }
 }
 
+interface ModelHealthDashboard {
+  total_models: number
+  verified: number
+  failed: number
+  degraded: number
+  by_provider: Record<string, { total: number; verified: number; failed: number; degraded: number }>
+  models: Array<Record<string, unknown>>
+}
+
+interface SelectionLogEntry {
+  id: string
+  created_at: string
+  feature: string
+  intent?: string | null
+  requested_model_ref?: string | null
+  candidates: string[]
+  selected_model_ref?: string | null
+  result: string
+  reason_code?: string | null
+  details?: Record<string, unknown>
+}
+
+interface ProviderHealthSummary {
+  provider_id: string
+  provider_name: string
+  health_status: 'ok' | 'degraded' | 'failed' | 'unknown' | string
+  credential_status: 'valid' | 'invalid' | 'unchecked' | string
+  connectivity_status: 'ok' | 'error' | 'unchecked' | string
+  last_checked_at?: string | null
+}
 function formatSyncMode(mode?: string): string {
   if (!mode) return 'Catalog sync'
   return mode.replace(/_/g, ' ')
@@ -179,6 +209,10 @@ export default function ModelsPage() {
   const validateTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null)
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null)
+  const [healthDashboard, setHealthDashboard] = useState<ModelHealthDashboard | null>(null)
+  const [selectionLog, setSelectionLog] = useState<SelectionLogEntry[]>([])
+  const [providerHealth, setProviderHealth] = useState<ProviderHealthSummary[]>([])
+  const [dashboardRefreshing, setDashboardRefreshing] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [syncingProvider, setSyncingProvider] = useState(false)
   const [selectedProviderSync, setSelectedProviderSync] = useState('openai')
@@ -269,6 +303,51 @@ export default function ModelsPage() {
     }
   }
 
+  const fetchHealthDashboard = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/v1/models/health-dashboard`, { headers: AUTH_HEADERS })
+      if (res.ok) {
+        const data: ModelHealthDashboard = await res.json()
+        setHealthDashboard(data)
+      }
+    } catch {
+      // Non-fatal diagnostics
+    }
+  }
+
+  const fetchSelectionLog = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/v1/models/selection-log?limit=8`, { headers: AUTH_HEADERS })
+      if (res.ok) {
+        const data: SelectionLogEntry[] = await res.json()
+        setSelectionLog(Array.isArray(data) ? data : [])
+      }
+    } catch {
+      // Non-fatal diagnostics
+    }
+  }
+
+  const fetchProviderHealth = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/v1/providers/health/all`, { headers: AUTH_HEADERS })
+      if (res.ok) {
+        const data: ProviderHealthSummary[] = await res.json()
+        setProviderHealth(Array.isArray(data) ? data : [])
+      }
+    } catch {
+      // Non-fatal diagnostics
+    }
+  }
+
+  const refreshReliabilityDashboard = async () => {
+    setDashboardRefreshing(true)
+    try {
+      await Promise.all([fetchHealthDashboard(), fetchSelectionLog(), fetchProviderHealth()])
+    } finally {
+      setDashboardRefreshing(false)
+    }
+  }
+
   const runSync = async () => {
     setSyncing(true)
     setSyncResult(null)
@@ -279,6 +358,11 @@ export default function ModelsPage() {
       await fetchModels()
       await fetchSyncStatus()
       await fetchRuntimeStatus()
+      await refreshReliabilityDashboard()
+      await refreshReliabilityDashboard()
+      await refreshReliabilityDashboard()
+      await refreshReliabilityDashboard()
+      await refreshReliabilityDashboard()
     } catch (e: any) {
       setSyncResult({ ok: false, message: 'Sync failed — check backend logs' })
     } finally {
@@ -339,9 +423,14 @@ export default function ModelsPage() {
   useEffect(() => {
     async function fetchData() {
       try {
-        await fetchModels()
-        await fetchSyncStatus()
-        await fetchRuntimeStatus()
+        await Promise.all([
+          fetchModels(),
+          fetchSyncStatus(),
+          fetchRuntimeStatus(),
+          fetchHealthDashboard(),
+          fetchSelectionLog(),
+          fetchProviderHealth(),
+        ])
       } catch (e) {
         console.error('Failed to fetch:', e)
       } finally {
@@ -690,6 +779,14 @@ export default function ModelsPage() {
 
   const grouped = groupModelsByProvider(models)
   const reviewGrouped = groupModelsByProvider(reviewModels)
+  const degradedProviders = providerHealth.filter((p) => p.health_status === 'degraded' || p.health_status === 'failed')
+
+  const healthPillClass = (status: string) => {
+    if (status === 'ok') return 'bg-emerald-100 text-emerald-800 border-emerald-200'
+    if (status === 'degraded') return 'bg-amber-100 text-amber-800 border-amber-200'
+    if (status === 'failed') return 'bg-rose-100 text-rose-800 border-rose-200'
+    return 'bg-slate-100 text-slate-700 border-slate-200'
+  }
 
   const renderModelGroups = (
     groupMap: Record<string, Model[]>,
@@ -886,6 +983,92 @@ export default function ModelsPage() {
           )}
         </div>
       )}
+
+      <div className="mb-6 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-4 dark:border-indigo-800 dark:bg-indigo-900/20">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-indigo-900 dark:text-indigo-200">Reliability Dashboard</div>
+            <div className="text-xs text-indigo-800/90 dark:text-indigo-300/90">Live verification, provider health, and recent runtime selection decisions.</div>
+          </div>
+          <button
+            onClick={refreshReliabilityDashboard}
+            disabled={dashboardRefreshing}
+            className="inline-flex items-center rounded-md border border-indigo-300 px-3 py-1.5 text-xs font-medium text-indigo-800 hover:bg-indigo-100 disabled:opacity-50 dark:border-indigo-700 dark:text-indigo-200 dark:hover:bg-indigo-900/40"
+          >
+            {dashboardRefreshing ? 'Refreshing…' : 'Refresh dashboard'}
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="rounded border border-indigo-200 bg-white px-3 py-2 text-xs dark:border-indigo-700 dark:bg-gray-900">
+            <div className="text-gray-500 dark:text-gray-400">Total models</div>
+            <div className="text-lg font-semibold text-gray-900 dark:text-white">{healthDashboard?.total_models ?? models.length + reviewModels.length}</div>
+          </div>
+          <div className="rounded border border-emerald-200 bg-white px-3 py-2 text-xs dark:border-emerald-800 dark:bg-gray-900">
+            <div className="text-emerald-700 dark:text-emerald-300">Verified</div>
+            <div className="text-lg font-semibold text-emerald-800 dark:text-emerald-200">{healthDashboard?.verified ?? models.length}</div>
+          </div>
+          <div className="rounded border border-amber-200 bg-white px-3 py-2 text-xs dark:border-amber-800 dark:bg-gray-900">
+            <div className="text-amber-700 dark:text-amber-300">Degraded</div>
+            <div className="text-lg font-semibold text-amber-800 dark:text-amber-200">{healthDashboard?.degraded ?? 0}</div>
+          </div>
+          <div className="rounded border border-rose-200 bg-white px-3 py-2 text-xs dark:border-rose-800 dark:bg-gray-900">
+            <div className="text-rose-700 dark:text-rose-300">Failed</div>
+            <div className="text-lg font-semibold text-rose-800 dark:text-rose-200">{healthDashboard?.failed ?? 0}</div>
+          </div>
+        </div>
+
+        {degradedProviders.length > 0 && (
+          <div className="mt-3 rounded border border-amber-300 bg-amber-100/70 px-3 py-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200">
+            <strong>Degraded providers:</strong> {degradedProviders.map((p) => p.provider_name).join(', ')}.{' '}
+            <a href="/settings?tab=api-keys" className="underline font-medium">Fix in API Keys ↗</a>
+          </div>
+        )}
+
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+          <div className="rounded border border-indigo-200 bg-white p-3 dark:border-indigo-800 dark:bg-gray-900">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-indigo-700 dark:text-indigo-300">Provider health</div>
+            <div className="space-y-2">
+              {(providerHealth.length > 0 ? providerHealth : []).map((provider) => (
+                <div key={provider.provider_id} className="flex items-center justify-between gap-2 text-xs">
+                  <span className="font-medium text-gray-800 dark:text-gray-200">{provider.provider_name}</span>
+                  <span className={`rounded border px-2 py-0.5 ${healthPillClass(provider.health_status)}`}>
+                    {provider.health_status}
+                  </span>
+                </div>
+              ))}
+              {providerHealth.length === 0 && (
+                <div className="text-xs text-gray-500 dark:text-gray-400">No provider health data available yet.</div>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded border border-indigo-200 bg-white p-3 dark:border-indigo-800 dark:bg-gray-900">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-indigo-700 dark:text-indigo-300">Recent selection decisions</div>
+            <div className="space-y-2">
+              {selectionLog.slice(0, 6).map((entry) => (
+                <div key={entry.id} className="rounded border border-gray-200 px-2 py-1.5 text-xs dark:border-gray-700">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-gray-800 dark:text-gray-200">{entry.feature}</span>
+                    <span className={`rounded px-1.5 py-0.5 ${entry.result === 'resolved' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+                      {entry.result}
+                    </span>
+                  </div>
+                  <div className="mt-1 truncate text-gray-600 dark:text-gray-300">
+                    {entry.selected_model_ref || entry.requested_model_ref || 'no model selected'}
+                  </div>
+                  {entry.reason_code && (
+                    <div className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400">Reason: {entry.reason_code}</div>
+                  )}
+                </div>
+              ))}
+              {selectionLog.length === 0 && (
+                <div className="text-xs text-gray-500 dark:text-gray-400">No selection decisions logged yet.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div className="sm:flex sm:items-center sm:justify-between mb-6">
         <div>

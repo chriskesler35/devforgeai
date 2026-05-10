@@ -19,8 +19,8 @@ Scope source: REQUIREMENTS.md (Pattern 1, Pattern 2, Pattern 3 acceptance criter
 5. DONE - Runtime selection logic prioritizes verified models
 6. PARTIAL - Fallback chain is ordered and user-configurable (ordered yes, user-config no)
 7. PARTIAL - Session-level model pinning backend exists; Pin Model button/UI wiring still pending
-8. PARTIAL - Model Health Dashboard shows real-time metrics (backend endpoint exists; UI and richer metrics incomplete)
-9. PARTIAL - Selection decisions are logged (currently logger output, not durable queryable store)
+8. DONE - Model Health Dashboard now has frontend views for real-time metrics, provider health, and degraded alerts
+9. DONE - Selection decisions are durably logged and now surfaced in frontend diagnostics view
 10. DONE - Provider health check endpoint exists and works
 11. DONE - Provider credential management UI now shows live per-provider health status, credential/connectivity signals, and refresh action
 12. DONE - Background health monitoring runs periodically
