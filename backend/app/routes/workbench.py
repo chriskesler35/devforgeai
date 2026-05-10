@@ -62,6 +62,15 @@ class WorkbenchModelUpdate(BaseModel):
     model: str
 
 
+class WorkbenchRetryBody(BaseModel):
+    message: str
+
+
+class WorkbenchOverrideBody(BaseModel):
+    content: str
+    reason: Optional[str] = None
+
+
 # ─── Event helpers ────────────────────────────────────────────────────────────
 def _push(session_id: str, type: str, **payload):
     evt = {
@@ -605,6 +614,8 @@ async def _run_turn(
         async for chunk in stream:
             if _pending_messages.get(session_id) == "cancelled":
                 break
+            if _pending_messages.get(session_id) == "paused":
+                break
 
             # Handle pending user messages mid-stream
             pending = _pending_messages.get(session_id, [])
@@ -728,6 +739,17 @@ async def _run_turn(
         await _db_update(
             session_id,
             status="cancelled",
+            completed_at=datetime.utcnow(),
+            events_log=_event_logs.get(session_id, []),
+        )
+        return
+
+    if _pending_messages.get(session_id) == "paused":
+        _push(session_id, "info", message="Session paused by user. Current turn was halted.")
+        _push(session_id, "done", message="Session paused.", status="paused")
+        await _db_update(
+            session_id,
+            status="paused",
             completed_at=datetime.utcnow(),
             events_log=_event_logs.get(session_id, []),
         )
@@ -1242,6 +1264,8 @@ async def send_message(session_id: str, body: WorkbenchMessage):
 
     if session.status == "running":
         raise HTTPException(status_code=409, detail="Agent is still working on the previous turn — wait for it to finish")
+    if session.status == "paused":
+        raise HTTPException(status_code=409, detail="Session is paused — resume before sending a message")
 
     # Recreate SSE queue if session was previously idle
     if session_id not in _queues:
@@ -1347,6 +1371,112 @@ async def complete_session(session_id: str):
     _queues.pop(session_id, None)
     _pending_messages.pop(session_id, None)
     return {"ok": True}
+
+
+@router.post("/sessions/{session_id}/pause", dependencies=[Depends(verify_api_key)])
+async def pause_session(session_id: str):
+    """Pause a workbench session.
+
+    If the session is currently running, the active turn is halted and discarded.
+    If idle/waiting, only the status is updated to paused.
+    """
+    from app.models.workbench import WorkbenchSession
+    async with AsyncSessionLocal() as db:
+        session = (await db.execute(
+            select(WorkbenchSession).where(WorkbenchSession.id == session_id)
+        )).scalar_one_or_none()
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if session.status in {"completed", "cancelled", "failed"}:
+            raise HTTPException(status_code=409, detail=f"Cannot pause session in status '{session.status}'")
+
+    _pending_messages[session_id] = "paused"
+    _push(session_id, "info", message="Pause requested…")
+    await _db_update(session_id, status="paused")
+    _push(session_id, "session_paused", message="Session paused by user.", status="paused")
+    return {"ok": True, "status": "paused"}
+
+
+@router.post("/sessions/{session_id}/resume", dependencies=[Depends(verify_api_key)])
+async def resume_session(session_id: str):
+    """Resume a paused workbench session to waiting/interactive state."""
+    from app.models.workbench import WorkbenchSession
+    async with AsyncSessionLocal() as db:
+        session = (await db.execute(
+            select(WorkbenchSession).where(WorkbenchSession.id == session_id)
+        )).scalar_one_or_none()
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if session.status != "paused":
+            raise HTTPException(status_code=409, detail=f"Session is not paused (current status: '{session.status}')")
+
+    _pending_messages[session_id] = []
+    await _db_update(session_id, status="waiting")
+    _push(session_id, "session_resumed", message="Session resumed.", status="waiting")
+    return {"ok": True, "status": "waiting"}
+
+
+@router.post("/sessions/{session_id}/retry", dependencies=[Depends(verify_api_key)])
+async def retry_with_modified_prompt(session_id: str, body: WorkbenchRetryBody):
+    """Retry a turn with a user-supplied prompt revision."""
+    from app.models.workbench import WorkbenchSession
+    async with AsyncSessionLocal() as db:
+        session = (await db.execute(
+            select(WorkbenchSession).where(WorkbenchSession.id == session_id)
+        )).scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.status == "running":
+        raise HTTPException(status_code=409, detail="Cannot retry while the session is running")
+    if not (body.message or "").strip():
+        raise HTTPException(status_code=400, detail="Retry prompt is required")
+
+    if session_id not in _queues:
+        _queues[session_id] = asyncio.Queue(maxsize=1000)
+
+    retry_message = body.message.strip()
+    _push(session_id, "retry_with_prompt", message=retry_message)
+
+    history = session.messages or []
+    project_path = Path(session.project_path) if session.project_path else None
+    asyncio.create_task(_run_turn(
+        session_id=session_id,
+        user_message=retry_message,
+        agent_type=session.agent_type or "coder",
+        model_id=session.model or "llama3.1:8b",
+        project_path=project_path,
+        history=history,
+    ))
+    return {"ok": True, "status": "running"}
+
+
+@router.post("/sessions/{session_id}/override", dependencies=[Depends(verify_api_key)])
+async def override_result(session_id: str, body: WorkbenchOverrideBody):
+    """Override the last result and inject it as authoritative context."""
+    from app.models.workbench import WorkbenchSession
+    async with AsyncSessionLocal() as db:
+        session = (await db.execute(
+            select(WorkbenchSession).where(WorkbenchSession.id == session_id)
+        )).scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not (body.content or "").strip():
+        raise HTTPException(status_code=400, detail="Override content is required")
+
+    content = body.content.strip()
+    reason = (body.reason or "").strip()
+    reason_txt = reason if reason else "No reason provided"
+    prior_history = list(session.messages or [])
+    prior_history.append({"role": "assistant", "content": content})
+    prior_history.append({
+        "role": "user",
+        "content": f"[system-note] User override applied. Treat this as authoritative output. Reason: {reason_txt}",
+    })
+
+    await _db_update(session_id, messages=prior_history, status="waiting")
+    _push(session_id, "override_result", message=content, reason=reason_txt)
+    _push(session_id, "agent_reply", message=content, overridden=True, reason=reason_txt)
+    return {"ok": True, "status": "waiting"}
 
 
 @router.get("/sessions/{session_id}/agentic", dependencies=[Depends(verify_api_key)])

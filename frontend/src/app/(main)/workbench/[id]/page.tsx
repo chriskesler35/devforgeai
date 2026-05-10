@@ -58,6 +58,10 @@ const EVENT_STYLE: Record<string, { icon: string; color: string; label: string }
   agent_reply:   { icon: '🤖', color: 'text-emerald-600 dark:text-emerald-400', label: 'Agent'       },
   info:          { icon: 'ℹ️',  color: 'text-gray-500 dark:text-gray-400',      label: 'Info'         },
   done:          { icon: '✅', color: 'text-green-600 dark:text-green-400',    label: 'Done'         },
+  session_paused:{ icon: '⏸️', color: 'text-amber-600 dark:text-amber-400',    label: 'Paused'       },
+  session_resumed:{ icon: '▶️', color: 'text-blue-600 dark:text-blue-400',     label: 'Resumed'      },
+  retry_with_prompt:{ icon: '↻', color: 'text-indigo-600 dark:text-indigo-400', label: 'Retry'        },
+  override_result:{ icon: '🛠️', color: 'text-emerald-600 dark:text-emerald-400', label: 'Override'    },
   ping:          { icon: '·',  color: 'text-gray-300',                          label: ''             },
 }
 
@@ -827,6 +831,65 @@ export default function WorkbenchSessionPage() {
     }
   }
 
+  const pauseSession = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/v1/workbench/sessions/${id}/pause`, { method: 'POST', headers: AUTH_HEADERS })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setStatus('paused')
+      setWaitingForHuman(false)
+    } catch (e: any) {
+      alert(`Failed to pause session: ${e.message}`)
+    }
+  }
+
+  const resumeSession = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/v1/workbench/sessions/${id}/resume`, { method: 'POST', headers: AUTH_HEADERS })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setStatus('waiting')
+      setWaitingForHuman(true)
+      inputRef.current?.focus()
+    } catch (e: any) {
+      alert(`Failed to resume session: ${e.message}`)
+    }
+  }
+
+  const retryWithModifiedPrompt = async () => {
+    const seed = selectedPromptTurn?.userPrompt || intervention || ''
+    const revised = prompt('Edit retry prompt:', seed)
+    if (!revised || !revised.trim()) return
+    try {
+      const res = await fetch(`${API_BASE}/v1/workbench/sessions/${id}/retry`, {
+        method: 'POST', headers: AUTH_HEADERS,
+        body: JSON.stringify({ message: revised.trim() }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setStatus('running')
+      setWaitingForHuman(false)
+      setRightPanelTab('agent')
+    } catch (e: any) {
+      alert(`Retry failed: ${e.message}`)
+    }
+  }
+
+  const overrideLastResult = async () => {
+    const content = prompt('Override result content (will be injected as authoritative context):')
+    if (!content || !content.trim()) return
+    const reason = prompt('Reason for override (optional):') || ''
+    try {
+      const res = await fetch(`${API_BASE}/v1/workbench/sessions/${id}/override`, {
+        method: 'POST', headers: AUTH_HEADERS,
+        body: JSON.stringify({ content: content.trim(), reason: reason.trim() || null }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setStatus('waiting')
+      setWaitingForHuman(true)
+      setRightPanelTab('agent')
+    } catch (e: any) {
+      alert(`Override failed: ${e.message}`)
+    }
+  }
+
   const approveCommand = async (commandId: string) => {
     try {
       const res = await fetch(`${API_BASE}/v1/workbench/sessions/${id}/commands/${commandId}/approve`, { method: 'POST', headers: AUTH_HEADERS })
@@ -880,6 +943,7 @@ export default function WorkbenchSessionPage() {
     pending:      'bg-yellow-100 text-yellow-700',
     running:      'bg-blue-100 text-blue-700',
     waiting:      'bg-orange-100 text-orange-700',
+    paused:       'bg-amber-100 text-amber-700',
     completed:    'bg-green-100 text-green-700',
     cancelled:    'bg-gray-100 text-gray-500',
     error:        'bg-red-100 text-red-700',
@@ -1270,7 +1334,19 @@ export default function WorkbenchSessionPage() {
             className={`px-2.5 py-1 text-xs rounded-lg border transition-colors ${autoScroll ? 'bg-green-50 border-green-200 text-green-700' : 'border-gray-200 text-gray-500'}`}>
             {autoScroll ? '↓ Auto' : '↓ Manual'}
           </button>
-          {isActive && status !== 'waiting' && (
+          {status === 'running' && (
+            <button onClick={pauseSession}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50 transition-colors">
+              Pause
+            </button>
+          )}
+          {status === 'paused' && (
+            <button onClick={resumeSession}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-700 hover:bg-slate-800 text-white transition-colors">
+              Resume
+            </button>
+          )}
+          {(status === 'running' || status === 'pending' || status === 'paused') && (
             <button onClick={cancelSession}
               className="px-3 py-1.5 text-xs font-medium rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors">
               Cancel
@@ -1638,6 +1714,22 @@ export default function WorkbenchSessionPage() {
                       className="flex-1 px-2 py-1 text-[10px] rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50"
                     >
                       Export Markdown
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      onClick={retryWithModifiedPrompt}
+                      disabled={status === 'running'}
+                      className="px-2 py-1 text-[10px] rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-50 disabled:opacity-40"
+                    >
+                      Retry Prompt
+                    </button>
+                    <button
+                      onClick={overrideLastResult}
+                      disabled={status === 'running'}
+                      className="px-2 py-1 text-[10px] rounded border border-orange-300 text-orange-700 hover:bg-orange-50 disabled:opacity-40"
+                    >
+                      Override Result
                     </button>
                   </div>
                 </div>
