@@ -495,6 +495,9 @@ export default function WorkbenchSessionPage() {
   const [showCommandLog, setShowCommandLog] = useState(false)
   const [rightPanelTab, setRightPanelTab] = useState<'files' | 'agent'>('files')
   const [selectedMonitorEvent, setSelectedMonitorEvent] = useState<number | null>(null)
+  const [monitorSearch, setMonitorSearch] = useState('')
+  const [monitorStateFilter, setMonitorStateFilter] = useState('all')
+  const [monitorTypeFilter, setMonitorTypeFilter] = useState('all')
 
   const streamRef = useRef<EventSource | null>(null)
   const streamEndRef = useRef<HTMLDivElement>(null)
@@ -664,6 +667,20 @@ export default function WorkbenchSessionPage() {
     }
 
     return () => es.close()
+  }, [id])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const deepLinkEvent = Number(params.get('ae'))
+    const panel = params.get('panel')
+
+    if (panel === 'agent' || panel === 'files') {
+      setRightPanelTab(panel)
+    }
+    if (Number.isInteger(deepLinkEvent) && deepLinkEvent >= 0) {
+      setSelectedMonitorEvent(deepLinkEvent)
+    }
   }, [id])
 
   const applyModelChange = useCallback(async () => {
@@ -851,22 +868,51 @@ export default function WorkbenchSessionPage() {
 
   const agentTimeline = useMemo(() => {
     return events
-      .filter((evt) => {
+      .map((evt, eventIndex) => ({ evt, eventIndex }))
+      .filter(({ evt }) => {
         const t = getEventType(evt)
         return t !== 'ping' && t !== 'init'
       })
-      .map((evt) => {
+      .map(({ evt, eventIndex }) => {
         const eventType = getEventType(evt)
         const state = getAgentStateFromEvent(evt)
         const summary = evt.payload?.message || evt.payload?.thought || evt.payload?.error || evt.payload?.path || eventType
         return {
           evt,
+          eventIndex,
           eventType,
           state,
           summary: String(summary || eventType),
         }
       })
   }, [events])
+
+  const monitorStates = useMemo(() => {
+    return Array.from(new Set(agentTimeline.map((item) => item.state))).sort()
+  }, [agentTimeline])
+
+  const monitorEventTypes = useMemo(() => {
+    return Array.from(new Set(agentTimeline.map((item) => item.eventType))).sort()
+  }, [agentTimeline])
+
+  const filteredAgentTimeline = useMemo(() => {
+    const needle = monitorSearch.trim().toLowerCase()
+    return agentTimeline.filter((item) => {
+      if (monitorStateFilter !== 'all' && item.state !== monitorStateFilter) {
+        return false
+      }
+      if (monitorTypeFilter !== 'all' && item.eventType !== monitorTypeFilter) {
+        return false
+      }
+      if (!needle) return true
+
+      const payload = JSON.stringify(item.evt.payload || {}).toLowerCase()
+      const summary = item.summary.toLowerCase()
+      const eventType = item.eventType.toLowerCase()
+      const state = item.state.toLowerCase()
+      return summary.includes(needle) || payload.includes(needle) || eventType.includes(needle) || state.includes(needle)
+    })
+  }, [agentTimeline, monitorSearch, monitorStateFilter, monitorTypeFilter])
 
   const currentAgentState = useMemo(() => {
     if (agentTimeline.length === 0) {
@@ -881,8 +927,32 @@ export default function WorkbenchSessionPage() {
   }, [agentTimeline, status])
 
   const selectedAgentEvent = selectedMonitorEvent != null
-    ? agentTimeline[selectedMonitorEvent]?.evt || null
+    ? agentTimeline.find((item) => item.eventIndex === selectedMonitorEvent)?.evt || null
     : null
+
+  useEffect(() => {
+    if (selectedMonitorEvent == null) return
+    const exists = agentTimeline.some((item) => item.eventIndex === selectedMonitorEvent)
+    if (!exists) {
+      setSelectedMonitorEvent(null)
+    }
+  }, [agentTimeline, selectedMonitorEvent])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const url = new URL(window.location.href)
+    if (rightPanelTab === 'agent') {
+      url.searchParams.set('panel', 'agent')
+    } else {
+      url.searchParams.delete('panel')
+    }
+    if (selectedMonitorEvent != null) {
+      url.searchParams.set('ae', String(selectedMonitorEvent))
+    } else {
+      url.searchParams.delete('ae')
+    }
+    window.history.replaceState({}, '', url.toString())
+  }, [rightPanelTab, selectedMonitorEvent])
 
   return (
     <div className="flex flex-col h-full -m-6 lg:-m-10">
@@ -1303,17 +1373,63 @@ export default function WorkbenchSessionPage() {
                   <div className="px-2 py-1.5 bg-gray-50 dark:bg-gray-800/50 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                     Lifecycle Timeline
                   </div>
+                  <div className="p-2 space-y-1.5 border-y border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900">
+                    <input
+                      value={monitorSearch}
+                      onChange={(e) => setMonitorSearch(e.target.value)}
+                      placeholder="Search event text, payload, or type"
+                      className="w-full rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-xs px-2 py-1 text-gray-700 dark:text-gray-200"
+                    />
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <select
+                        value={monitorStateFilter}
+                        onChange={(e) => setMonitorStateFilter(e.target.value)}
+                        className="rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-xs px-2 py-1 text-gray-700 dark:text-gray-200"
+                      >
+                        <option value="all">All states</option>
+                        {monitorStates.map((state) => (
+                          <option key={state} value={state}>{state}</option>
+                        ))}
+                      </select>
+                      <select
+                        value={monitorTypeFilter}
+                        onChange={(e) => setMonitorTypeFilter(e.target.value)}
+                        className="rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-xs px-2 py-1 text-gray-700 dark:text-gray-200"
+                      >
+                        <option value="all">All types</option>
+                        {monitorEventTypes.map((eventType) => (
+                          <option key={eventType} value={eventType}>{eventType}</option>
+                        ))}
+                      </select>
+                    </div>
+                    {(monitorSearch || monitorStateFilter !== 'all' || monitorTypeFilter !== 'all') && (
+                      <button
+                        onClick={() => {
+                          setMonitorSearch('')
+                          setMonitorStateFilter('all')
+                          setMonitorTypeFilter('all')
+                        }}
+                        className="text-[10px] text-indigo-600 hover:text-indigo-700"
+                      >
+                        Clear filters
+                      </button>
+                    )}
+                  </div>
                   <div className="max-h-64 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
-                    {agentTimeline.length === 0 ? (
-                      <div className="px-2 py-3 text-xs text-gray-400">No lifecycle events yet.</div>
+                    {filteredAgentTimeline.length === 0 ? (
+                      <div className="px-2 py-3 text-xs text-gray-400">
+                        {agentTimeline.length === 0 ? 'No lifecycle events yet.' : 'No events match current filters.'}
+                      </div>
                     ) : (
-                      agentTimeline.slice(-40).map((item, idx) => {
-                        const absoluteIndex = Math.max(0, agentTimeline.length - 40) + idx
-                        const selected = selectedMonitorEvent === absoluteIndex
+                      filteredAgentTimeline.slice(-80).map((item, idx) => {
+                        const selected = selectedMonitorEvent === item.eventIndex
                         return (
                           <button
                             key={`${item.evt.ts}-${idx}`}
-                            onClick={() => setSelectedMonitorEvent(absoluteIndex)}
+                            onClick={() => {
+                              setRightPanelTab('agent')
+                              setSelectedMonitorEvent(item.eventIndex)
+                            }}
                             className={`w-full text-left px-2 py-2 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors ${selected ? 'bg-indigo-50 dark:bg-indigo-900/20' : ''}`}
                           >
                             <div className="flex items-center justify-between gap-2">
