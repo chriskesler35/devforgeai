@@ -89,6 +89,22 @@ function getAgentStateFromEvent(evt: WBEvent): string {
   return 'IDLE'
 }
 
+function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
+  return Array.from(new Set(values.map((v) => String(v || '').trim()).filter(Boolean)))
+}
+
+function diffPromptLines(previousText: string, currentText: string): { added: string[]; removed: string[] } {
+  const previous = uniqueNonEmpty(previousText.split('\n'))
+  const current = uniqueNonEmpty(currentText.split('\n'))
+  const previousSet = new Set(previous)
+  const currentSet = new Set(current)
+
+  return {
+    added: current.filter((line) => !previousSet.has(line)),
+    removed: previous.filter((line) => !currentSet.has(line)),
+  }
+}
+
 // ─── Event row ────────────────────────────────────────────────────────────────
 function EventRow({ evt, index }: { evt: WBEvent; index: number }) {
   const [expanded, setExpanded] = useState(false)
@@ -495,10 +511,11 @@ export default function WorkbenchSessionPage() {
   const [showCommandLog, setShowCommandLog] = useState(false)
   const [rightPanelTab, setRightPanelTab] = useState<'files' | 'agent'>('files')
   const [selectedMonitorEvent, setSelectedMonitorEvent] = useState<number | null>(null)
-  const [monitorView, setMonitorView] = useState<'timeline' | 'transcript'>('timeline')
+  const [monitorView, setMonitorView] = useState<'timeline' | 'transcript' | 'prompt'>('timeline')
   const [monitorSearch, setMonitorSearch] = useState('')
   const [monitorStateFilter, setMonitorStateFilter] = useState('all')
   const [monitorTypeFilter, setMonitorTypeFilter] = useState('all')
+  const [selectedPromptTurnIndex, setSelectedPromptTurnIndex] = useState<number | null>(null)
 
   const streamRef = useRef<EventSource | null>(null)
   const streamEndRef = useRef<HTMLDivElement>(null)
@@ -680,7 +697,7 @@ export default function WorkbenchSessionPage() {
     if (panel === 'agent' || panel === 'files') {
       setRightPanelTab(panel)
     }
-    if (monitorViewParam === 'timeline' || monitorViewParam === 'transcript') {
+    if (monitorViewParam === 'timeline' || monitorViewParam === 'transcript' || monitorViewParam === 'prompt') {
       setMonitorView(monitorViewParam)
     }
     if (Number.isInteger(deepLinkEvent) && deepLinkEvent >= 0) {
@@ -953,6 +970,60 @@ export default function WorkbenchSessionPage() {
       })
   }, [mergedTurns, monitorSearch])
 
+  const promptInspectorTurns = useMemo(() => {
+    return mergedTurns.map((turn, index) => {
+      const previous = index > 0 ? mergedTurns[index - 1] : null
+      const contextInjected = uniqueNonEmpty([
+        session?.project_id ? `Project ID: ${session.project_id}` : null,
+        session?.project_path ? `Project path: ${session.project_path}` : null,
+        session?.model ? `Model: ${session.model}` : null,
+        turn.role ? `Agent role: ${turn.role}` : null,
+        turn.filesTouched.length > 0 ? `Files touched this turn: ${turn.filesTouched.join(', ')}` : null,
+        previous?.agentReply ? `Previous agent output: ${previous.agentReply.slice(0, 220)}` : null,
+      ])
+
+      const systemPrompt = session?.task || 'No explicit system prompt persisted for this session.'
+      const userPrompt = turn.userMessage || '(empty user turn)'
+      const rawPrompt = [
+        'SYSTEM PROMPT',
+        systemPrompt,
+        '',
+        'CONTEXT INJECTED',
+        ...(contextInjected.length > 0 ? contextInjected.map((line) => `- ${line}`) : ['- (none captured)']),
+        '',
+        'USER REQUEST FOR THIS TURN',
+        userPrompt,
+      ].join('\n')
+
+      return {
+        index,
+        role: turn.role || 'agent',
+        systemPrompt,
+        userPrompt,
+        contextInjected,
+        rawPrompt,
+      }
+    })
+  }, [mergedTurns, session?.model, session?.project_id, session?.project_path, session?.task])
+
+  const selectedPromptTurn = selectedPromptTurnIndex != null
+    ? promptInspectorTurns[selectedPromptTurnIndex] || null
+    : promptInspectorTurns[promptInspectorTurns.length - 1] || null
+
+  const selectedPromptDiff = useMemo(() => {
+    if (!selectedPromptTurn) {
+      return { added: [] as string[], removed: [] as string[] }
+    }
+    if (selectedPromptTurn.index <= 0) {
+      return { added: uniqueNonEmpty(selectedPromptTurn.rawPrompt.split('\n')), removed: [] }
+    }
+    const previous = promptInspectorTurns[selectedPromptTurn.index - 1]
+    if (!previous) {
+      return { added: uniqueNonEmpty(selectedPromptTurn.rawPrompt.split('\n')), removed: [] }
+    }
+    return diffPromptLines(previous.rawPrompt, selectedPromptTurn.rawPrompt)
+  }, [promptInspectorTurns, selectedPromptTurn])
+
   const currentAgentState = useMemo(() => {
     if (agentTimeline.length === 0) {
       if (status === 'running') return 'EXECUTING'
@@ -997,6 +1068,17 @@ export default function WorkbenchSessionPage() {
     }
     window.history.replaceState({}, '', url.toString())
   }, [rightPanelTab, selectedMonitorEvent, monitorView])
+
+  useEffect(() => {
+    if (promptInspectorTurns.length === 0) {
+      setSelectedPromptTurnIndex(null)
+      return
+    }
+    if (selectedPromptTurnIndex == null) return
+    if (selectedPromptTurnIndex < 0 || selectedPromptTurnIndex >= promptInspectorTurns.length) {
+      setSelectedPromptTurnIndex(promptInspectorTurns.length - 1)
+    }
+  }, [promptInspectorTurns, selectedPromptTurnIndex])
 
   const downloadTextFile = useCallback((filename: string, content: string, mimeType: string) => {
     if (typeof window === 'undefined') return
@@ -1252,7 +1334,7 @@ export default function WorkbenchSessionPage() {
                 <TurnBubble
                   key={i}
                   turn={turn}
-                  isLast={i === turns.length - 1}
+                  isLast={i === mergedTurns.length - 1}
                   isActive={isActive}
                 />
               ))
@@ -1486,7 +1568,7 @@ export default function WorkbenchSessionPage() {
                 </div>
 
                 <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-2 space-y-2">
-                  <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-100 dark:bg-gray-800 p-1">
+                  <div className="grid grid-cols-3 gap-1 rounded-lg bg-gray-100 dark:bg-gray-800 p-1">
                     <button
                       onClick={() => setMonitorView('timeline')}
                       className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
@@ -1506,6 +1588,16 @@ export default function WorkbenchSessionPage() {
                       }`}
                     >
                       Transcript
+                    </button>
+                    <button
+                      onClick={() => setMonitorView('prompt')}
+                      className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
+                        monitorView === 'prompt'
+                          ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                          : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                      }`}
+                    >
+                      Prompt Inspector
                     </button>
                   </div>
                   <div className="flex items-center gap-1.5">
@@ -1602,7 +1694,7 @@ export default function WorkbenchSessionPage() {
                     )}
                   </div>
                 </div>
-                ) : (
+                ) : monitorView === 'transcript' ? (
                   <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
                     <div className="px-2 py-1.5 bg-gray-50 dark:bg-gray-800/50 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                       Transcript
@@ -1654,6 +1746,99 @@ export default function WorkbenchSessionPage() {
                     <pre className="p-2 text-[11px] font-mono whitespace-pre-wrap break-all text-gray-700 dark:text-gray-300 max-h-56 overflow-auto">
                       {JSON.stringify(selectedAgentEvent, null, 2)}
                     </pre>
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+                    <div className="px-2 py-1.5 bg-gray-50 dark:bg-gray-800/50 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                      Prompt Inspector
+                    </div>
+                    {promptInspectorTurns.length === 0 || !selectedPromptTurn ? (
+                      <div className="px-2 py-3 text-xs text-gray-400">No turns available yet for prompt inspection.</div>
+                    ) : (
+                      <>
+                        <div className="p-2 border-y border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 space-y-2">
+                          <div className="grid grid-cols-[1fr_auto] gap-1.5 items-center">
+                            <select
+                              value={selectedPromptTurn.index}
+                              onChange={(e) => setSelectedPromptTurnIndex(Number(e.target.value))}
+                              className="rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-xs px-2 py-1 text-gray-700 dark:text-gray-200"
+                            >
+                              {promptInspectorTurns.map((turn) => (
+                                <option key={turn.index} value={turn.index}>
+                                  Turn {turn.index + 1} · {turn.role}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={async () => {
+                                try {
+                                  await navigator.clipboard.writeText(selectedPromptTurn.rawPrompt)
+                                } catch {
+                                  // Clipboard access can fail on restricted contexts.
+                                }
+                              }}
+                              className="px-2 py-1 text-[10px] rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                            >
+                              Copy Raw
+                            </button>
+                          </div>
+                          <div className="text-[10px] text-gray-500">
+                            Turn {selectedPromptTurn.index + 1} · role {selectedPromptTurn.role}
+                          </div>
+                        </div>
+                        <div className="max-h-96 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
+                          <div className="p-2 space-y-1.5">
+                            <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">System Prompt</div>
+                            <pre className="text-[11px] whitespace-pre-wrap break-all text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/50 rounded p-2">{selectedPromptTurn.systemPrompt}</pre>
+                          </div>
+                          <div className="p-2 space-y-1.5">
+                            <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Context Injected</div>
+                            {selectedPromptTurn.contextInjected.length === 0 ? (
+                              <div className="text-[11px] text-gray-400">No context metadata captured for this turn.</div>
+                            ) : (
+                              <ul className="space-y-1 text-[11px] text-gray-700 dark:text-gray-300">
+                                {selectedPromptTurn.contextInjected.map((line, idx) => (
+                                  <li key={`${line}-${idx}`} className="bg-gray-50 dark:bg-gray-800/50 rounded px-2 py-1">{line}</li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                          <div className="p-2 space-y-1.5">
+                            <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Prompt Diff vs Previous Turn</div>
+                            <div className="grid grid-cols-2 gap-1.5">
+                              <div className="rounded border border-green-200 bg-green-50 p-1.5">
+                                <div className="text-[10px] font-semibold text-green-700 mb-1">Added ({selectedPromptDiff.added.length})</div>
+                                <div className="max-h-28 overflow-auto space-y-1">
+                                  {selectedPromptDiff.added.length === 0 ? (
+                                    <div className="text-[10px] text-green-700/70">None</div>
+                                  ) : (
+                                    selectedPromptDiff.added.slice(0, 40).map((line, idx) => (
+                                      <div key={`added-${idx}`} className="text-[10px] text-green-800">+ {line}</div>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                              <div className="rounded border border-red-200 bg-red-50 p-1.5">
+                                <div className="text-[10px] font-semibold text-red-700 mb-1">Removed ({selectedPromptDiff.removed.length})</div>
+                                <div className="max-h-28 overflow-auto space-y-1">
+                                  {selectedPromptDiff.removed.length === 0 ? (
+                                    <div className="text-[10px] text-red-700/70">None</div>
+                                  ) : (
+                                    selectedPromptDiff.removed.slice(0, 40).map((line, idx) => (
+                                      <div key={`removed-${idx}`} className="text-[10px] text-red-800">- {line}</div>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="p-2 space-y-1.5">
+                            <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Raw Prompt</div>
+                            <pre className="text-[11px] whitespace-pre-wrap break-all text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/50 rounded p-2">{selectedPromptTurn.rawPrompt}</pre>
+                          </div>
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
               </div>
