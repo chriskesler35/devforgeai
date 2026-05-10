@@ -73,20 +73,17 @@ Scope source: REQUIREMENTS.md acceptance criteria for Pattern 1, Pattern 2, Patt
 
 ## Pattern 2 Acceptance Matrix (Methods-First Workflows)
 
-1. PARTIAL - Method selector shows Chat, GSD, BMAD, gtrack, Custom, Marketplace options
-- Evidence: frontend/src/app/(main)/methods/page.tsx, frontend/src/app/(main)/workbench/page.tsx, frontend/src/app/(main)/marketplace/page.tsx
-- Gap: still fragmented across pages; not one cohesive requirement-matching selector experience.
+1. DONE - Method selector shows Chat, GSD, BMAD, gtrack, Custom, Marketplace options
+- Evidence: frontend/src/app/(main)/page.tsx (single method picker surface with all required options and direct launch links), frontend/src/app/(main)/methods/page.tsx, frontend/src/app/(main)/marketplace/page.tsx
 
 2. DONE - Method cards display icon, description, duration, required context, sample roadmap
 - Evidence: frontend/src/app/(main)/page.tsx (Method Picker cards include icon, description, duration, required context, and sample roadmap), frontend/src/app/(main)/methods/page.tsx
 
-3. PARTIAL - Chat method is immediate with no Run/Session overhead
-- Evidence: frontend/src/app/chat/page.tsx
-- Gap: entry architecture still strongly centered around workbench/session pathways in broader UX.
+3. DONE - Chat method is immediate with no Run/Session overhead
+- Evidence: frontend/src/app/chat/page.tsx, frontend/src/app/(main)/page.tsx (Chat CTA routes directly to chat surface)
 
-4. PARTIAL - GSD flow: context gather -> roadmap -> review -> phase execution
-- Evidence: backend/app/services/phase_templates.py (GSD-style phases), frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx
-- Gap: dedicated end-user GSD flow contract is not fully explicit across all required UX steps.
+4. DONE - GSD flow: context gather -> roadmap -> review -> phase execution
+- Evidence: frontend/src/app/(main)/gsd/page.tsx (3-5 question intake + incremental roadmap build + Yes/Modify/Restart review + phase controls), backend/app/services/phase_templates.py, frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx
 
 5. DONE - BMAD flow: discovery -> ideation -> planning -> handoff -> dev
 - Evidence: backend/app/services/phase_templates.py, frontend/src/app/(main)/bmad/page.tsx (explicit BMAD stage panels), frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx
@@ -94,16 +91,14 @@ Scope source: REQUIREMENTS.md acceptance criteria for Pattern 1, Pattern 2, Patt
 6. DONE - gtrack flow: import issue -> map to agents -> execute
 - Evidence: frontend/src/app/(main)/gtrack/page.tsx (issue import + mapping + execute selected into gtrack pipeline)
 
-7. PARTIAL - Custom chains (2+ methods) with clear handoff points
-- Evidence: frontend/src/app/(main)/methods/page.tsx (stacking), frontend/src/app/(main)/workbench/page.tsx (stack/runtime method behavior)
-- Gap: explicit handoff visualization and guarantees are not fully surfaced as acceptance asks.
+7. DONE - Custom chains (2+ methods) with clear handoff points
+- Evidence: frontend/src/app/(main)/methods/page.tsx (stacking + explicit chain handoff point visualization), frontend/src/app/(main)/workbench/page.tsx
 
 8. DONE - Chat UI is direct text in/out without mandatory workbench agent controls
 - Evidence: frontend/src/app/chat/page.tsx
 
-9. PARTIAL - GSD UI shape (roadmap sidebar, main phase panel, right monitor)
-- Evidence: frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx (timeline/phase controls/monitor-like areas)
-- Gap: layout is close but not a strict dedicated GSD-only surface.
+9. DONE - GSD UI shape (roadmap sidebar, main phase panel, right monitor)
+- Evidence: frontend/src/app/(main)/gsd/page.tsx (left roadmap sidebar, center phase/intake panel, right agent monitor/next steps)
 
 10. DONE - BMAD UI shape as explicit multi-panel stage navigator
 - Evidence: frontend/src/app/(main)/bmad/page.tsx (Discovery/Ideation/Planning/Handoff/Dev panel navigation + prev/next controls + right monitor panel)
@@ -117,24 +112,20 @@ Scope source: REQUIREMENTS.md acceptance criteria for Pattern 1, Pattern 2, Patt
 13. DONE - Method picker has search + installed + marketplace segmentation
 - Evidence: frontend/src/app/(main)/page.tsx (Method Picker search + Installed and Marketplace segmented lists), frontend/src/app/(main)/marketplace/page.tsx
 
-14. PARTIAL - Method -> project creation is interactive with rich Q&A
-- Evidence: frontend/src/app/(main)/workbench/page.tsx (guided/pro launch + recommendations), frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx (discovery continuation/handoff)
-- Gap: richer intake UX (uploads/repo selector/breadcrumbed wizard) is incomplete.
+14. DONE - Method -> project creation is interactive with rich Q&A
+- Evidence: frontend/src/app/(main)/gsd/page.tsx (interactive wizard intake with goal/scope/constraints + repo URL + file uploads), frontend/src/app/(main)/workbench/page.tsx
 
-15. PARTIAL - Roadmap builds in real-time
-- Evidence: frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx (SSE-driven phase progress and timeline)
-- Gap: not consistently method-specific roadmap UX across all methods.
+15. DONE - Roadmap builds in real-time
+- Evidence: frontend/src/app/(main)/gsd/page.tsx (incremental roadmap phase reveal during build), frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx
 
 16. DONE - Progress indicator visible and accurate
 - Evidence: frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx (phase index/status/progress controls)
 
-17. PARTIAL - Breadcrumb shows current context
-- Evidence: frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx (Workbench / Pipeline / method status context)
-- Gap: requirement expects stronger cross-flow breadcrumb continuity.
+17. DONE - Breadcrumb shows current context
+- Evidence: frontend/src/app/(main)/gsd/page.tsx, frontend/src/app/(main)/bmad/page.tsx, frontend/src/app/(main)/gtrack/page.tsx (context breadcrumb bars)
 
-18. PARTIAL - Next Steps preview shows what is coming
-- Evidence: frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx (discovery handoff + launch guidance)
-- Gap: generalized next-step preview is not consistently present across methods.
+18. DONE - Next Steps preview shows what is coming
+- Evidence: frontend/src/app/(main)/gsd/page.tsx, frontend/src/app/(main)/bmad/page.tsx, frontend/src/app/(main)/gtrack/page.tsx (What Happens Next panels)
 
 19. DONE - Method switching mid-project works with context handoff guarantees
 - Evidence: backend/app/routes/pipelines.py (POST /v1/workbench/pipelines/{pipeline_id}/switch-method), frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx (Switch Method With Context Handoff UI)
@@ -147,8 +138,8 @@ Scope source: REQUIREMENTS.md acceptance criteria for Pattern 1, Pattern 2, Patt
 
 ### Pattern 2 Summary
 
-- DONE: 12
-- PARTIAL: 9
+- DONE: 21
+- PARTIAL: 0
 - MISSING: 0
 
 ## Pattern 3 Acceptance Matrix (Deterministic Model Reliability)
@@ -166,9 +157,9 @@ Status: DONE across documented acceptance criteria in this repository snapshot.
 
 ## Remaining High-Impact Gaps (Priority)
 
-1. Unify method selection into a single launch flow that directly satisfies item 1 without page fragmentation.
-2. Tighten method-specific flow fidelity for GSD (item 4) and intake richness (item 14).
-3. Upgrade Pattern 1 execution graph from linear handoff visualization to true DAG parent-child model (Pattern 1 items 2, 14).
+1. Upgrade Pattern 1 execution graph from linear handoff visualization to true DAG parent-child model (Pattern 1 items 2, 14).
+2. Expand Pattern 1 monitoring scope from session-centric views to a global all-agent monitor surface (Pattern 1 items 1, 12).
+3. Strengthen Pattern 1 live feed deep-linking and strict operational guarantees for pause/confidence flows (Pattern 1 items 5, 10, 15).
 
 ## Definition of Fully Completed
 

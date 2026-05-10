@@ -62,6 +62,7 @@ export default function GtrackPage() {
   const [error, setError] = useState<string | null>(null)
 
   const selectedIssues = issues.filter((i) => i.selected)
+  const nextAction = selectedIssues.length === 0 ? 'Import and select issues' : 'Execute selected issues'
 
   const importIssues = () => {
     const rows = rawIssues
@@ -127,6 +128,13 @@ export default function GtrackPage() {
 
   return (
     <div className="space-y-6">
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-4 py-3">
+        <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">Context</div>
+        <div className="mt-1 text-sm text-gray-700 dark:text-gray-200">
+          Home {'>'} Pick Method {'>'} gtrack {'>'} Issue Mapping
+        </div>
+      </div>
+
       <div>
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">gtrack Issue Flow</h1>
         <p className="text-sm text-gray-600 dark:text-gray-300">Import issues, map to agents, and execute with bulk actions.</p>
@@ -221,6 +229,13 @@ export default function GtrackPage() {
           >
             Open Workbench
           </button>
+
+          <div className="rounded border border-gray-200 px-2 py-2 text-xs text-gray-700 dark:text-gray-300 space-y-1">
+            <div className="font-semibold">What Happens Next?</div>
+            <div>Next step: {nextAction}</div>
+            <div>Expected duration: 5-20 minutes for mapping and kickoff.</div>
+            <div>User input needed: issue scope confirmations and priority order.</div>
+          </div>
         </div>
       </div>
     </div>

@@ -349,6 +349,25 @@ export default function MethodsPage() {
             })}
           </div>
 
+          {stackMethods.length > 1 && (
+            <div className="mt-3 rounded-lg border border-indigo-200 dark:border-indigo-700 bg-indigo-50/60 dark:bg-indigo-900/20 px-3 py-2">
+              <div className="text-xs font-semibold uppercase tracking-wider text-indigo-700 dark:text-indigo-300">Chain handoff points</div>
+              <div className="mt-2 space-y-1.5">
+                {stackMethods.slice(0, -1).map((method, idx) => {
+                  const next = stackMethods[idx + 1]
+                  return (
+                    <div key={`${method.id}-handoff-${next.id}`} className="rounded border border-indigo-200 dark:border-indigo-700 bg-white/80 dark:bg-gray-900/30 px-2 py-1.5 text-xs">
+                      <div className="font-semibold text-indigo-800 dark:text-indigo-300">{method.name} -> {next.name}</div>
+                      <div className="text-[11px] text-indigo-700 dark:text-indigo-200 mt-0.5">
+                        Handoff includes produced artifacts, phase state, and unresolved decisions.
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
           {stackCompatibility && (
             <div className="mt-3 rounded-lg border border-purple-200 dark:border-purple-700 bg-white/80 dark:bg-gray-900/30 px-3 py-2 text-xs text-purple-900 dark:text-purple-200">
               <div className="font-semibold">Compatibility score: {stackCompatibility.compatibility_score}</div>

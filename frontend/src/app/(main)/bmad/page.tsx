@@ -174,9 +174,17 @@ export default function BmadPage() {
   }
 
   const activeStageIndex = BMAD_STAGES.findIndex((s) => s.key === activeStage)
+  const nextStage = BMAD_STAGES[Math.min(BMAD_STAGES.length - 1, activeStageIndex + 1)]
 
   return (
     <div className="space-y-6">
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-4 py-3">
+        <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">Context</div>
+        <div className="mt-1 text-sm text-gray-700 dark:text-gray-200">
+          Home {'>'} Pick Method {'>'} BMAD {'>'} {BMAD_STAGES[activeStageIndex]?.label}
+        </div>
+      </div>
+
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">BMAD Flow</h1>
@@ -303,6 +311,13 @@ export default function BmadPage() {
               </button>
             </div>
           )}
+
+          <div className="rounded border border-gray-200 dark:border-gray-700 px-2 py-2 text-xs text-gray-700 dark:text-gray-300 space-y-1">
+            <div className="font-semibold">What Happens Next?</div>
+            <div>Next stage: {nextStage?.label}</div>
+            <div>Expected action: {nextStage?.hint}</div>
+            <div>User input needed: choose artifacts to export or launch next stage work.</div>
+          </div>
         </div>
       </div>
     </div>

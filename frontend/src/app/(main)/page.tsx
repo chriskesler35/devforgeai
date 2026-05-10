@@ -95,7 +95,7 @@ const METHOD_CARDS: MethodCard[] = [
     duration: '30 min-4 hours',
     requiredContext: 'Goal + codebase',
     roadmap: ['Context gather', 'Roadmap build', 'Phase execution', 'Verification'],
-    href: '/workbench?new=1',
+    href: '/gsd',
     icon: 'G',
     group: 'installed',
   },
