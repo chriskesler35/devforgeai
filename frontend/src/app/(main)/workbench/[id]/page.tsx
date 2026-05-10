@@ -10,7 +10,7 @@ import { filterModelsByCatalogFeature } from '@/lib/modelCatalog'
 import { renderMarkdown } from '@/lib/markdown'
 import { RunPanel } from '@/components/RunPanel'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 
 
@@ -59,6 +59,34 @@ const EVENT_STYLE: Record<string, { icon: string; color: string; label: string }
   info:          { icon: 'ℹ️',  color: 'text-gray-500 dark:text-gray-400',      label: 'Info'         },
   done:          { icon: '✅', color: 'text-green-600 dark:text-green-400',    label: 'Done'         },
   ping:          { icon: '·',  color: 'text-gray-300',                          label: ''             },
+}
+
+const AGENT_STATE_STYLE: Record<string, string> = {
+  IDLE: 'bg-gray-100 text-gray-700 border-gray-200',
+  THINKING: 'bg-indigo-100 text-indigo-700 border-indigo-200',
+  WAITING_FOR_TOOL: 'bg-blue-100 text-blue-700 border-blue-200',
+  YIELDED: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+  ERROR: 'bg-red-100 text-red-700 border-red-200',
+  PAUSED: 'bg-amber-100 text-amber-700 border-amber-200',
+  KILLED: 'bg-gray-200 text-gray-700 border-gray-300',
+  EXECUTING: 'bg-violet-100 text-violet-700 border-violet-200',
+  AWAITING_APPROVAL: 'bg-orange-100 text-orange-700 border-orange-200',
+  COMPLETED: 'bg-green-100 text-green-700 border-green-200',
+  FAILED: 'bg-red-100 text-red-700 border-red-200',
+  CANCELLED: 'bg-gray-100 text-gray-700 border-gray-200',
+}
+
+function getAgentStateFromEvent(evt: WBEvent): string {
+  const explicit = String(evt.canonical_state || '').trim().toUpperCase()
+  if (explicit) return explicit
+
+  const type = getEventType(evt)
+  if (type === 'agent_thought' || type === 'info' || type === 'phase_progress' || type === 'phase_thinking') return 'THINKING'
+  if (type === 'tool_call' || type === 'command_running') return 'WAITING_FOR_TOOL'
+  if (type === 'agent_reply' || type === 'done') return 'YIELDED'
+  if (type === 'error' || type === 'phase_failed') return 'ERROR'
+  if (type === 'waiting' || type === 'awaiting_approval' || type === 'command_awaiting_approval') return 'AWAITING_APPROVAL'
+  return 'IDLE'
 }
 
 // ─── Event row ────────────────────────────────────────────────────────────────
@@ -465,6 +493,8 @@ export default function WorkbenchSessionPage() {
   const [bypassMode, setBypassMode] = useState<boolean>(false)
   const [showBypassWarning, setShowBypassWarning] = useState(false)
   const [showCommandLog, setShowCommandLog] = useState(false)
+  const [rightPanelTab, setRightPanelTab] = useState<'files' | 'agent'>('files')
+  const [selectedMonitorEvent, setSelectedMonitorEvent] = useState<number | null>(null)
 
   const streamRef = useRef<EventSource | null>(null)
   const streamEndRef = useRef<HTMLDivElement>(null)
@@ -819,6 +849,41 @@ export default function WorkbenchSessionPage() {
 
   const isActive = status === 'running' || status === 'pending' || status === 'waiting'
 
+  const agentTimeline = useMemo(() => {
+    return events
+      .filter((evt) => {
+        const t = getEventType(evt)
+        return t !== 'ping' && t !== 'init'
+      })
+      .map((evt) => {
+        const eventType = getEventType(evt)
+        const state = getAgentStateFromEvent(evt)
+        const summary = evt.payload?.message || evt.payload?.thought || evt.payload?.error || evt.payload?.path || eventType
+        return {
+          evt,
+          eventType,
+          state,
+          summary: String(summary || eventType),
+        }
+      })
+  }, [events])
+
+  const currentAgentState = useMemo(() => {
+    if (agentTimeline.length === 0) {
+      if (status === 'running') return 'EXECUTING'
+      if (status === 'waiting') return 'AWAITING_APPROVAL'
+      if (status === 'completed') return 'COMPLETED'
+      if (status === 'failed' || status === 'error') return 'FAILED'
+      if (status === 'cancelled') return 'CANCELLED'
+      return 'IDLE'
+    }
+    return agentTimeline[agentTimeline.length - 1].state
+  }, [agentTimeline, status])
+
+  const selectedAgentEvent = selectedMonitorEvent != null
+    ? agentTimeline[selectedMonitorEvent]?.evt || null
+    : null
+
   return (
     <div className="flex flex-col h-full -m-6 lg:-m-10">
 
@@ -1153,34 +1218,136 @@ export default function WorkbenchSessionPage() {
           </div>
         </div>
 
-        {/* RIGHT: File preview */}
+        {/* RIGHT: File preview + agent monitor */}
         <div className="w-80 flex-shrink-0 border-l border-gray-200 dark:border-gray-700 flex flex-col bg-white dark:bg-gray-900">
-          <div className="px-3 py-2 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider truncate">
-              {selectedFile ? selectedFile.path : 'File Preview'}
-            </p>
-            {selectedFile && (
-              <button onClick={() => setSelectedFile(null)} className="text-gray-400 hover:text-gray-600 text-xs ml-2">✕</button>
+          <div className="px-3 py-2 border-b border-gray-200 dark:border-gray-700 space-y-2">
+            <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-100 dark:bg-gray-800 p-1">
+              <button
+                onClick={() => setRightPanelTab('files')}
+                className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
+                  rightPanelTab === 'files'
+                    ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                }`}
+              >
+                File Preview
+              </button>
+              <button
+                onClick={() => setRightPanelTab('agent')}
+                className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
+                  rightPanelTab === 'agent'
+                    ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                }`}
+              >
+                Agent Monitor
+              </button>
+            </div>
+
+            {rightPanelTab === 'files' ? (
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider truncate">
+                  {selectedFile ? selectedFile.path : 'File Preview'}
+                </p>
+                {selectedFile && (
+                  <button onClick={() => setSelectedFile(null)} className="text-gray-400 hover:text-gray-600 text-xs ml-2">✕</button>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Agent State</p>
+                  <span className={`px-2 py-0.5 rounded-full border text-[10px] font-semibold ${AGENT_STATE_STYLE[currentAgentState] || AGENT_STATE_STYLE.IDLE}`}>
+                    {currentAgentState}
+                  </span>
+                </div>
+                <div className="text-[10px] text-gray-500 dark:text-gray-400">
+                  {session?.agent_type || 'agent'} · {session?.model || 'unknown model'}
+                </div>
+              </div>
             )}
           </div>
           <div className="flex-1 overflow-auto p-3">
-            {!selectedFile ? (
-              <div className="flex items-center justify-center h-full text-center">
-                <div className="text-gray-400">
-                  <div className="text-3xl mb-2">📄</div>
-                  <p className="text-xs">Click a file in the tree to preview it</p>
+            {rightPanelTab === 'files' ? (
+              !selectedFile ? (
+                <div className="flex items-center justify-center h-full text-center">
+                  <div className="text-gray-400">
+                    <div className="text-3xl mb-2">📄</div>
+                    <p className="text-xs">Click a file in the tree to preview it</p>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <pre className="text-xs font-mono text-gray-700 dark:text-gray-300 whitespace-pre-wrap break-all">
+                  {selectedFile.diff
+                    ? selectedFile.diff.split('\n').map((line, i) => (
+                        <span key={i} className={`block ${line.startsWith('+') ? 'text-green-600 bg-green-50 dark:bg-green-900/20' : line.startsWith('-') ? 'text-red-600 bg-red-50 dark:bg-red-900/20' : ''}`}>
+                          {line}
+                        </span>
+                      ))
+                    : selectedFile.content || '(empty)'}
+                </pre>
+              )
             ) : (
-              <pre className="text-xs font-mono text-gray-700 dark:text-gray-300 whitespace-pre-wrap break-all">
-                {selectedFile.diff
-                  ? selectedFile.diff.split('\n').map((line, i) => (
-                      <span key={i} className={`block ${line.startsWith('+') ? 'text-green-600 bg-green-50 dark:bg-green-900/20' : line.startsWith('-') ? 'text-red-600 bg-red-50 dark:bg-red-900/20' : ''}`}>
-                        {line}
-                      </span>
-                    ))
-                  : selectedFile.content || '(empty)'}
-              </pre>
+              <div className="space-y-3">
+                <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-2">
+                  <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Agent Detail</div>
+                  <div className="text-xs text-gray-700 dark:text-gray-300 space-y-1">
+                    <div>Session: <span className="font-mono">{id}</span></div>
+                    <div>Status: <span className="font-semibold">{status}</span></div>
+                    <div>Turns: <span className="font-semibold">{events.filter(e => getEventType(e) === 'user_message').length + (session?.task ? 1 : 0)}</span></div>
+                    <div>Events: <span className="font-semibold">{agentTimeline.length}</span></div>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+                  <div className="px-2 py-1.5 bg-gray-50 dark:bg-gray-800/50 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                    Lifecycle Timeline
+                  </div>
+                  <div className="max-h-64 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
+                    {agentTimeline.length === 0 ? (
+                      <div className="px-2 py-3 text-xs text-gray-400">No lifecycle events yet.</div>
+                    ) : (
+                      agentTimeline.slice(-40).map((item, idx) => {
+                        const absoluteIndex = Math.max(0, agentTimeline.length - 40) + idx
+                        const selected = selectedMonitorEvent === absoluteIndex
+                        return (
+                          <button
+                            key={`${item.evt.ts}-${idx}`}
+                            onClick={() => setSelectedMonitorEvent(absoluteIndex)}
+                            className={`w-full text-left px-2 py-2 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors ${selected ? 'bg-indigo-50 dark:bg-indigo-900/20' : ''}`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[10px] font-mono text-gray-500">{new Date(item.evt.ts).toLocaleTimeString()}</span>
+                              <span className={`px-1.5 py-0.5 rounded border text-[9px] font-semibold ${AGENT_STATE_STYLE[item.state] || AGENT_STATE_STYLE.IDLE}`}>
+                                {item.state}
+                              </span>
+                            </div>
+                            <div className="mt-1 text-[11px] text-gray-800 dark:text-gray-200 truncate">{item.summary}</div>
+                            <div className="text-[10px] text-gray-400">{item.eventType}</div>
+                          </button>
+                        )
+                      })
+                    )}
+                  </div>
+                </div>
+
+                {selectedAgentEvent && (
+                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+                    <div className="px-2 py-1.5 bg-gray-50 dark:bg-gray-800/50 flex items-center justify-between">
+                      <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Event Payload</span>
+                      <button
+                        onClick={() => setSelectedMonitorEvent(null)}
+                        className="text-[10px] text-gray-500 hover:text-gray-700"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    <pre className="p-2 text-[11px] font-mono whitespace-pre-wrap break-all text-gray-700 dark:text-gray-300 max-h-56 overflow-auto">
+                      {JSON.stringify(selectedAgentEvent, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         </div>
