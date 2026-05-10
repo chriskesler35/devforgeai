@@ -12,6 +12,8 @@ export interface SkillCardProps {
   complexity: string;
   trustLevel: string;
   isInstalled?: boolean;
+  canInstall?: boolean;
+  installBlockedReason?: string;
   onSelect: (skillId: string) => void;
   onInstallClick: (skillId: string) => void;
   onRemoveClick: (skillId: string) => void;
@@ -44,6 +46,8 @@ export function SkillCard({
   complexity,
   trustLevel,
   isInstalled = false,
+  canInstall = true,
+  installBlockedReason,
   onSelect,
   onInstallClick,
   onRemoveClick,
@@ -162,10 +166,12 @@ export function SkillCard({
         ) : (
           <Button
             onClick={handleInstallClick}
+            disabled={!canInstall}
             size="sm"
             className="flex-1"
+            title={canInstall ? undefined : installBlockedReason || 'Install is blocked for this skill'}
           >
-            Install
+            {canInstall ? 'Install' : 'Verified Only'}
           </Button>
         )}
       </CardFooter>

@@ -16,6 +16,8 @@ export interface SkillDetailPaneProps {
   installUrl: string;
   manifestUrl: string;
   isInstalled?: boolean;
+  canInstall?: boolean;
+  installBlockedReason?: string;
   onClose: () => void;
   onInstallClick: () => void;
   onRemoveClick: () => void;
@@ -33,6 +35,8 @@ export function SkillDetailPane({
   installUrl,
   manifestUrl,
   isInstalled = false,
+  canInstall = true,
+  installBlockedReason,
   onClose,
   onInstallClick,
   onRemoveClick,
@@ -124,6 +128,12 @@ export function SkillDetailPane({
             </a>
           )}
         </div>
+
+        {!isInstalled && !canInstall && (
+          <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            {installBlockedReason || 'Only verified marketplace skills are installable.'}
+          </div>
+        )}
       </CardContent>
 
       <div className="border-t p-4 mt-4">
@@ -149,10 +159,12 @@ export function SkillDetailPane({
         ) : (
           <Button
             onClick={onInstallClick}
+            disabled={!canInstall}
             size="sm"
             className="w-full"
+            title={canInstall ? undefined : installBlockedReason || 'Install is blocked for this skill'}
           >
-            Install
+            {canInstall ? 'Install' : 'Verified Only'}
           </Button>
         )}
       </div>

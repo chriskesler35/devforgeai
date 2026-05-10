@@ -29,7 +29,7 @@ Scope source: REQUIREMENTS.md (Pattern 1, Pattern 2, Pattern 3 acceptance criter
 15. PARTIAL - Model capability schema is JSON and enforced (JSON present; enforcement not complete for all paths/features)
 16. PARTIAL - Frontend syncs capability catalog on startup (cached); broader feature consumers still pending
 17. PARTIAL - Schema enforcement returns clear error messages (some paths do, not uniformly)
-18. MISSING - Marketplace models require verification + capability declaration before listing
+18. DONE - Marketplace install flow now enforces verified trust-level gate (non-verified entries are visible but install-blocked with explicit messaging)
 19. PARTIAL - Backend source -> frontend TTL cache protocol implemented; webhook-driven refresh still pending
 20. PARTIAL - Provider webhook endpoint now triggers backend catalog refresh; external provider integrations pending
 

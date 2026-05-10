@@ -7,10 +7,12 @@ import os
 import uuid
 import time
 from typing import Optional, List, Dict
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/v1/marketplace", tags=["marketplace"])
+
+_INSTALL_ALLOWED_TRUST_LEVELS = {"verified"}
 
 # Load skills catalog on startup
 _SKILLS_CATALOG: Optional[List[dict]] = None
@@ -229,8 +231,17 @@ async def start_install(skill_id: str):
 
     skill = next((s for s in _SKILLS_CATALOG if s.get("skill_id") == skill_id), None)
     if not skill:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found")
+
+    trust_level = str(skill.get("trust_level") or "").strip().lower()
+    if trust_level not in _INSTALL_ALLOWED_TRUST_LEVELS:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Skill '{skill_id}' has trust_level='{skill.get('trust_level')}' and cannot be installed. "
+                "Only verified marketplace skills are installable."
+            ),
+        )
 
     # Perform the real install: write into data/installed_skills.json
     from app.routes.skills import _find_catalog_skill, _normalize_installed_skill, _read_installed_skills, _write_installed_skills

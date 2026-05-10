@@ -41,6 +41,17 @@ const SKILL_METHOD_BRIDGE: Record<string, string> = {
   'superpowers': 'superpowers',
 };
 
+const VERIFIED_TRUST_LEVEL = 'verified';
+
+function canInstallSkill(skill: Skill | null | undefined): boolean {
+  return String(skill?.trust_level || '').toLowerCase() === VERIFIED_TRUST_LEVEL;
+}
+
+function installBlockedReason(skill: Skill | null | undefined): string {
+  if (!skill) return 'Only verified marketplace skills are installable.';
+  return `Install blocked: ${skill.name} is '${skill.trust_level}' trust level. Only verified marketplace skills are installable.`;
+}
+
 export default function MarketplacePage() {
   const { addToast } = useToast();
   const {
@@ -154,6 +165,16 @@ export default function MarketplacePage() {
 
   // Handle install click
   const handleInstallClick = (skillId: string) => {
+    const skill = skills.find((s) => s.skill_id === skillId) || selectedSkill;
+    if (!canInstallSkill(skill)) {
+      addToast({
+        type: 'error',
+        title: 'Install blocked',
+        message: installBlockedReason(skill),
+        autoClose: 5000,
+      });
+      return;
+    }
     setInstallingSkillId(skillId);
     setShowInstallWizard(true);
   };
@@ -265,6 +286,7 @@ export default function MarketplacePage() {
         <div className="mb-8">
           <h1 className="text-4xl font-bold mb-2">Skills & Tools Marketplace</h1>
           <p className="text-gray-600">Discover and install tools, frameworks, and methods to enhance your workflow.</p>
+          <p className="mt-2 text-sm text-amber-700">Install policy: only skills marked <strong>verified</strong> can be installed.</p>
         </div>
 
         {/* Search Bar */}
@@ -348,6 +370,8 @@ export default function MarketplacePage() {
                             complexity={skill.complexity}
                             trustLevel={skill.trust_level}
                             isInstalled={installedSkillIds.includes(skill.skill_id)}
+                            canInstall={canInstallSkill(skill)}
+                            installBlockedReason={installBlockedReason(skill)}
                             onSelect={handleSelectSkill}
                             onInstallClick={handleInstallClick}
                             onRemoveClick={handleRemoveClick}
@@ -373,6 +397,8 @@ export default function MarketplacePage() {
                       installUrl={selectedSkill.install_url}
                       manifestUrl={selectedSkill.manifest_url}
                       isInstalled={installedSkillIds.includes(selectedSkill.skill_id)}
+                      canInstall={canInstallSkill(selectedSkill)}
+                      installBlockedReason={installBlockedReason(selectedSkill)}
                       onClose={() => setSelectedSkill(null)}
                       onInstallClick={() => handleInstallClick(selectedSkill.skill_id)}
                       onRemoveClick={() => handleRemoveClick(selectedSkill.skill_id)}
