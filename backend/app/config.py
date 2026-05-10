@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     ollama_cloud_base_url: Optional[str] = None
     ollama_cloud_api_key: Optional[str] = None
     model_routing_auto_enabled: bool = False
+    model_catalog_webhook_secret: Optional[str] = None
 
     # JWT auth (multi-user collaboration)
     jwt_secret: str = "change-me-in-production-this-is-not-secure"

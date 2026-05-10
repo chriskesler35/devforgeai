@@ -5,13 +5,16 @@ from uuid import UUID
 from datetime import datetime
 import hashlib
 import json
+import hmac
+from time import time
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from pydantic import BaseModel
 
 from app.database import get_db
+from app.config import settings
 from app.models import Model, Provider, ModelSelectionLog, ModelVerification, ProviderHealth, SessionModelPin
 from app.middleware.auth import verify_api_key
 from app.services.model_verification import ModelVerificationService
@@ -22,6 +25,83 @@ router = APIRouter(
     tags=["verification"],
     dependencies=[Depends(verify_api_key)]
 )
+
+
+_WEBHOOK_PROVIDER_ALIASES = {
+    "openai": "openai",
+    "openai-codex": "openai-codex",
+    "codex": "openai-codex",
+    "github": "github-copilot",
+    "github-copilot": "github-copilot",
+    "copilot": "github-copilot",
+    "openrouter": "openrouter",
+    "anthropic": "anthropic",
+    "google": "google",
+    "gemini": "google",
+    "ollama": "ollama",
+}
+
+_RECENT_WEBHOOK_EVENTS: dict[str, float] = {}
+_WEBHOOK_EVENT_TTL_SECONDS = 3600
+_WEBHOOK_EVENT_CACHE_MAX = 2000
+
+
+def _cleanup_webhook_event_cache(now_ts: float) -> None:
+    stale = [k for k, ts in _RECENT_WEBHOOK_EVENTS.items() if (now_ts - ts) > _WEBHOOK_EVENT_TTL_SECONDS]
+    for key in stale:
+        _RECENT_WEBHOOK_EVENTS.pop(key, None)
+
+    # Bound memory in bursty webhook scenarios.
+    if len(_RECENT_WEBHOOK_EVENTS) > _WEBHOOK_EVENT_CACHE_MAX:
+        oldest = sorted(_RECENT_WEBHOOK_EVENTS.items(), key=lambda item: item[1])
+        remove_count = len(_RECENT_WEBHOOK_EVENTS) - _WEBHOOK_EVENT_CACHE_MAX
+        for key, _ in oldest[:remove_count]:
+            _RECENT_WEBHOOK_EVENTS.pop(key, None)
+
+
+def _normalize_webhook_provider(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    token = raw.strip().lower()
+    if not token:
+        return None
+    return _WEBHOOK_PROVIDER_ALIASES.get(token, token)
+
+
+def _provider_from_changed_models(changed_models: list[str]) -> Optional[str]:
+    providers: set[str] = set()
+    for ref in changed_models:
+        if not ref or "/" not in ref:
+            continue
+        provider = _normalize_webhook_provider(ref.split("/", 1)[0])
+        if provider:
+            providers.add(provider)
+    if len(providers) == 1:
+        return next(iter(providers))
+    return None
+
+
+def _extract_webhook_token(request: Request) -> str:
+    auth = request.headers.get("authorization", "").strip()
+    bearer = ""
+    if auth.lower().startswith("bearer "):
+        bearer = auth.split(" ", 1)[1].strip()
+    return (
+        request.headers.get("x-modelmesh-webhook-secret", "").strip()
+        or request.headers.get("x-webhook-secret", "").strip()
+        or bearer
+    )
+
+
+def _validate_catalog_webhook_auth(request: Request) -> None:
+    expected = (settings.model_catalog_webhook_secret or "").strip()
+    if not expected:
+        # Backward-compatible default for local/dev where secret may not be configured.
+        return
+
+    provided = _extract_webhook_token(request)
+    if not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="Invalid webhook authentication")
 
 
 # ============================================================================
@@ -119,7 +199,12 @@ class ModelCatalogDTO(BaseModel):
 
 class CatalogWebhookRequest(BaseModel):
     provider: Optional[str] = None
+    source: Optional[str] = None
+    event_id: Optional[str] = None
+    event_type: Optional[str] = None
+    changed_models: list[str] = []
     reason: Optional[str] = None
+    payload: dict = {}
 
 
 # ============================================================================
@@ -390,23 +475,60 @@ async def get_model_capability_catalog(
 
 @router.post("/models/catalog/webhook")
 async def refresh_catalog_from_webhook(
+    request: Request,
     body: CatalogWebhookRequest,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Webhook trigger for provider catalog updates -> refresh backend model catalog."""
-    from app.routes.model_sync import run_model_sync
+    from app.routes.model_sync import run_model_sync, PROVIDER_DEFAULT_MODELS
 
-    provider_filter = (body.provider or "").strip().lower() or None
+    _validate_catalog_webhook_auth(request)
+
+    now_ts = time()
+    _cleanup_webhook_event_cache(now_ts)
+
+    dedupe_key = (body.event_id or "").strip()
+    if dedupe_key and dedupe_key in _RECENT_WEBHOOK_EVENTS:
+        return {
+            "ok": True,
+            "duplicate": True,
+            "event_id": dedupe_key,
+            "provider": _normalize_webhook_provider(body.provider) or _normalize_webhook_provider(body.source),
+            "message": "Duplicate webhook event ignored.",
+        }
+
+    provider_filter = (
+        _normalize_webhook_provider(body.provider)
+        or _normalize_webhook_provider(body.source)
+        or _provider_from_changed_models(body.changed_models)
+    )
+
+    if provider_filter:
+        valid_providers = set(PROVIDER_DEFAULT_MODELS.keys()) | {"ollama"}
+        if provider_filter not in valid_providers:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported provider '{provider_filter}' for catalog webhook",
+            )
+
     sync_result = await run_model_sync(
         db,
         deduplicate_existing=False,
         provider_filter=provider_filter,
     )
 
+    if dedupe_key:
+        _RECENT_WEBHOOK_EVENTS[dedupe_key] = now_ts
+
     return {
         "ok": True,
+        "duplicate": False,
+        "event_id": dedupe_key or None,
+        "event_type": body.event_type,
         "provider": provider_filter,
+        "source": body.source,
         "reason": body.reason,
+        "changed_models": len(body.changed_models or []),
         "added": len(sync_result.get("added", [])),
         "updated": len(sync_result.get("updated", [])),
         "deactivated": len(sync_result.get("deactivated", [])),
