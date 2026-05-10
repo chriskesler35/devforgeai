@@ -11,10 +11,12 @@
 
 import { useEffect } from 'react'
 import { probeAndCacheApiBase } from '@/lib/config'
+import { syncModelCatalogOnStartup } from '@/lib/modelCatalog'
 
 export default function BackendProbe() {
   useEffect(() => {
     probeAndCacheApiBase().catch(() => { /* silent — fallback already set */ })
+    syncModelCatalogOnStartup().catch(() => { /* silent — cache is opportunistic */ })
   }, [])
   return null
 }

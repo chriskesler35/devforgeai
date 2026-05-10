@@ -27,10 +27,10 @@ Scope source: REQUIREMENTS.md (Pattern 1, Pattern 2, Pattern 3 acceptance criter
 13. PARTIAL - Degraded provider auto-disabled in model selection (auto-deactivation exists; policy thresholding and observability incomplete)
 14. MISSING - Credential failure shows alert + fix action in UI
 15. PARTIAL - Model capability schema is JSON and enforced (JSON present; enforcement not complete for all paths/features)
-16. MISSING - Frontend syncs capability catalog on startup
+16. PARTIAL - Frontend syncs capability catalog on startup (cached); broader feature consumers still pending
 17. PARTIAL - Schema enforcement returns clear error messages (some paths do, not uniformly)
 18. MISSING - Marketplace models require verification + capability declaration before listing
-19. MISSING - Catalog sync protocol works (backend source -> frontend cache with TTL)
+19. PARTIAL - Backend source -> frontend TTL cache protocol implemented; webhook-driven refresh still pending
 20. MISSING - Provider webhook triggers catalog update
 
 ### Pattern 3 Remaining Work Packs

@@ -3,6 +3,8 @@
 from typing import Optional
 from uuid import UUID
 from datetime import datetime
+import hashlib
+import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -93,6 +95,26 @@ class SessionModelPinDTO(BaseModel):
     pinned_by: Optional[str] = None
     notes: Optional[str] = None
     updated_at: Optional[datetime] = None
+
+
+class ModelCatalogModelDTO(BaseModel):
+    model_id: UUID
+    provider_id: UUID
+    provider: str
+    model_ref: str
+    display_name: str
+    verification_status: str
+    capabilities: dict
+    limits: dict
+
+
+class ModelCatalogDTO(BaseModel):
+    source: str
+    generated_at: datetime
+    ttl_seconds: int
+    version: str
+    count: int
+    models: list[ModelCatalogModelDTO]
 
 
 # ============================================================================
@@ -290,6 +312,75 @@ async def get_model_selection_log(
         )
         for row in rows
     ]
+
+
+@router.get("/models/catalog")
+async def get_model_capability_catalog(
+    active_only: bool = Query(default=True),
+    db: AsyncSession = Depends(get_db),
+) -> ModelCatalogDTO:
+    """Backend source-of-truth capability catalog for frontend startup sync/cache."""
+    stmt = (
+        select(Model, Provider, ModelVerification)
+        .join(Provider, Model.provider_id == Provider.id)
+        .outerjoin(ModelVerification, Model.id == ModelVerification.model_id)
+    )
+    if active_only:
+        stmt = stmt.where(Model.is_active == True).where(Provider.is_active == True)
+
+    rows = (await db.execute(stmt)).all()
+
+    models: list[ModelCatalogModelDTO] = []
+    version_input: list[dict] = []
+
+    for model, provider, verification in rows:
+        capabilities = (
+            dict((verification.capabilities or {}))
+            if verification and verification.capabilities
+            else dict((model.capabilities or {}))
+        )
+        verification_status = (
+            verification.verification_status
+            if verification and verification.verification_status
+            else "unverified"
+        )
+        model_ref = f"{provider.name}/{model.model_id}"
+        limits = {
+            "context_window": model.context_window,
+        }
+
+        dto = ModelCatalogModelDTO(
+            model_id=model.id,
+            provider_id=provider.id,
+            provider=provider.name,
+            model_ref=model_ref,
+            display_name=model.display_name or model.model_id,
+            verification_status=verification_status,
+            capabilities=capabilities,
+            limits=limits,
+        )
+        models.append(dto)
+        version_input.append(
+            {
+                "model_ref": model_ref,
+                "verification_status": verification_status,
+                "capabilities": capabilities,
+                "limits": limits,
+            }
+        )
+
+    # Stable version hash over sorted semantic content.
+    version_payload = json.dumps(sorted(version_input, key=lambda x: x["model_ref"]), sort_keys=True)
+    version = hashlib.sha256(version_payload.encode("utf-8")).hexdigest()[:16]
+
+    return ModelCatalogDTO(
+        source="backend",
+        generated_at=datetime.utcnow(),
+        ttl_seconds=1800,
+        version=version,
+        count=len(models),
+        models=models,
+    )
 
 
 @router.post("/models/{model_id}/pin-session/{session_id}")
