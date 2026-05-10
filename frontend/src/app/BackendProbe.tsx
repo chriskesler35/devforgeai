@@ -11,12 +11,28 @@
 
 import { useEffect } from 'react'
 import { probeAndCacheApiBase } from '@/lib/config'
-import { syncModelCatalogOnStartup } from '@/lib/modelCatalog'
+import { syncModelCatalogIfVersionChanged, syncModelCatalogOnStartup } from '@/lib/modelCatalog'
 
 export default function BackendProbe() {
   useEffect(() => {
     probeAndCacheApiBase().catch(() => { /* silent — fallback already set */ })
     syncModelCatalogOnStartup().catch(() => { /* silent — cache is opportunistic */ })
+
+    const interval = window.setInterval(() => {
+      syncModelCatalogIfVersionChanged().catch(() => { /* silent */ })
+    }, 60_000)
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        syncModelCatalogIfVersionChanged().catch(() => { /* silent */ })
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+
+    return () => {
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
   }, [])
   return null
 }

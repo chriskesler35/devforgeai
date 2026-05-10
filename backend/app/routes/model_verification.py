@@ -197,6 +197,14 @@ class ModelCatalogDTO(BaseModel):
     models: list[ModelCatalogModelDTO]
 
 
+class ModelCatalogVersionDTO(BaseModel):
+    source: str
+    generated_at: datetime
+    ttl_seconds: int
+    version: str
+    count: int
+
+
 class CatalogWebhookRequest(BaseModel):
     provider: Optional[str] = None
     source: Optional[str] = None
@@ -205,6 +213,52 @@ class CatalogWebhookRequest(BaseModel):
     changed_models: list[str] = []
     reason: Optional[str] = None
     payload: dict = {}
+
+
+async def _compute_catalog_version(
+    db: AsyncSession,
+    *,
+    active_only: bool,
+) -> tuple[str, int]:
+    """Compute stable catalog version hash from semantic model capability content."""
+    stmt = (
+        select(Model, Provider, ModelVerification)
+        .join(Provider, Model.provider_id == Provider.id)
+        .outerjoin(ModelVerification, Model.id == ModelVerification.model_id)
+    )
+    if active_only:
+        stmt = stmt.where(Model.is_active == True).where(Provider.is_active == True)
+
+    rows = (await db.execute(stmt)).all()
+
+    version_input: list[dict] = []
+    for model, provider, verification in rows:
+        capabilities = (
+            dict((verification.capabilities or {}))
+            if verification and verification.capabilities
+            else dict((model.capabilities or {}))
+        )
+        verification_status = (
+            verification.verification_status
+            if verification and verification.verification_status
+            else "unverified"
+        )
+        model_ref = f"{provider.name}/{model.model_id}"
+        limits = {
+            "context_window": model.context_window,
+        }
+        version_input.append(
+            {
+                "model_ref": model_ref,
+                "verification_status": verification_status,
+                "capabilities": capabilities,
+                "limits": limits,
+            }
+        )
+
+    version_payload = json.dumps(sorted(version_input, key=lambda x: x["model_ref"]), sort_keys=True)
+    version = hashlib.sha256(version_payload.encode("utf-8")).hexdigest()[:16]
+    return version, len(version_input)
 
 
 # ============================================================================
@@ -470,6 +524,22 @@ async def get_model_capability_catalog(
         version=version,
         count=len(models),
         models=models,
+    )
+
+
+@router.get("/models/catalog/version")
+async def get_model_capability_catalog_version(
+    active_only: bool = Query(default=True),
+    db: AsyncSession = Depends(get_db),
+) -> ModelCatalogVersionDTO:
+    """Lightweight version metadata for frontend cache invalidation checks."""
+    version, count = await _compute_catalog_version(db, active_only=active_only)
+    return ModelCatalogVersionDTO(
+        source="backend",
+        generated_at=datetime.utcnow(),
+        ttl_seconds=1800,
+        version=version,
+        count=count,
     )
 
 

@@ -30,7 +30,7 @@ Scope source: REQUIREMENTS.md (Pattern 1, Pattern 2, Pattern 3 acceptance criter
 16. PARTIAL - Frontend syncs capability catalog on startup (cached); broader feature consumers still pending
 17. PARTIAL - Schema enforcement returns clear error messages (some paths do, not uniformly)
 18. DONE - Marketplace install flow now enforces verified trust-level gate (non-verified entries are visible but install-blocked with explicit messaging)
-19. PARTIAL - Backend source -> frontend TTL cache protocol implemented; webhook-driven refresh still pending
+19. DONE - Frontend now performs version-based cache invalidation (periodic + on-focus) against backend catalog version metadata, so webhook-triggered backend updates propagate without waiting full TTL
 20. DONE - Provider webhook ingestion now supports external integration hardening (auth token, provider/source normalization, idempotent event handling) with incremental provider refresh
 
 ### Pattern 3 Remaining Work Packs

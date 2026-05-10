@@ -22,6 +22,14 @@ export interface ModelCatalog {
   models: ModelCatalogEntry[]
 }
 
+export interface ModelCatalogVersion {
+  source: string
+  generated_at: string
+  ttl_seconds: number
+  version: string
+  count: number
+}
+
 interface CachedModelCatalog {
   cached_at_ms: number
   expires_at_ms: number
@@ -61,9 +69,9 @@ export function getCachedModelCatalog(): ModelCatalog | null {
   return readCachedCatalog()?.payload ?? null
 }
 
-export async function syncModelCatalogOnStartup(): Promise<ModelCatalog | null> {
+export async function syncModelCatalogOnStartup(forceRefresh = false): Promise<ModelCatalog | null> {
   const existing = readCachedCatalog()
-  if (existing) return existing.payload
+  if (existing && !forceRefresh) return existing.payload
 
   try {
     const base = getApiBase()
@@ -82,6 +90,35 @@ export async function syncModelCatalogOnStartup(): Promise<ModelCatalog | null> 
     return payload
   } catch {
     return null
+  }
+}
+
+export async function syncModelCatalogIfVersionChanged(): Promise<ModelCatalog | null> {
+  const cached = readCachedCatalog()
+  if (!cached) {
+    return syncModelCatalogOnStartup(false)
+  }
+
+  try {
+    const base = getApiBase()
+    const res = await fetch(`${base}/v1/models/catalog/version`, {
+      signal: AbortSignal.timeout(4000),
+      headers: {
+        Authorization: `Bearer ${getAuthToken()}`,
+      },
+    })
+    if (!res.ok) return cached.payload
+
+    const meta = (await res.json()) as ModelCatalogVersion
+    if (!meta?.version) return cached.payload
+
+    if (meta.version === cached.payload.version) {
+      return cached.payload
+    }
+
+    return await syncModelCatalogOnStartup(true)
+  } catch {
+    return cached.payload
   }
 }
 
