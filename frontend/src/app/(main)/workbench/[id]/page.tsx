@@ -18,6 +18,36 @@ interface WBEvent {
   type: string
   payload: Record<string, any>
   ts: string
+  canonical_type?: string
+  canonical_state?: string | null
+  canonical_severity?: string
+  canonical_source?: string
+  canonical_version?: string
+}
+
+const CANONICAL_EVENT_ALIAS: Record<string, string> = {
+  'lifecycle.init': 'init',
+  'lifecycle.ping': 'ping',
+  'system.info': 'info',
+  'system.warning': 'warning',
+  'run.error': 'error',
+  'run.done': 'done',
+  'run.waiting': 'waiting',
+  'run.model_changed': 'model_changed',
+  'user.message': 'user_message',
+  'agent.role_change': 'role_change',
+  'agent.thought': 'agent_thought',
+  'agent.reply': 'agent_reply',
+  'artifact.file_created': 'file_created',
+  'artifact.file_modified': 'file_modified',
+  'command.awaiting_approval': 'command_awaiting_approval',
+  'command.approved': 'command_approved',
+  'command.rejected': 'command_rejected',
+  'command.completed': 'command_completed',
+}
+
+function getEventType(evt: WBEvent): string {
+  return CANONICAL_EVENT_ALIAS[evt.canonical_type || ''] || evt.type
 }
 
 interface ModelOption {
@@ -54,14 +84,15 @@ const EVENT_STYLE: Record<string, { icon: string; color: string; label: string }
 // ─── Event row ────────────────────────────────────────────────────────────────
 function EventRow({ evt, index }: { evt: WBEvent; index: number }) {
   const [expanded, setExpanded] = useState(false)
-  const cfg = EVENT_STYLE[evt.type] || EVENT_STYLE.info
-  if (evt.type === 'ping' || evt.type === 'init') return null
+  const type = getEventType(evt)
+  const cfg = EVENT_STYLE[type] || EVENT_STYLE.info
+  if (type === 'ping' || type === 'init') return null
 
   const hasDetail = evt.payload.content || evt.payload.diff || evt.payload.result || evt.payload.args
 
   const summary = (() => {
     const p = evt.payload
-    switch (evt.type) {
+    switch (type) {
       case 'agent_thought': return p.thought
       case 'tool_call':     return `${p.tool}(${JSON.stringify(p.args || {}).slice(0, 60)}) → ${p.result || '...'}`
       case 'file_created':  return p.path
@@ -77,7 +108,7 @@ function EventRow({ evt, index }: { evt: WBEvent; index: number }) {
   })()
 
   return (
-    <div className={`flex gap-3 py-2 px-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800/50 group transition-colors ${evt.type === 'error' ? 'bg-red-50 dark:bg-red-900/10' : ''} ${evt.type === 'waiting' ? 'bg-orange-50 dark:bg-orange-900/10 border border-orange-200 dark:border-orange-800' : ''}`}>
+    <div className={`flex gap-3 py-2 px-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800/50 group transition-colors ${type === 'error' ? 'bg-red-50 dark:bg-red-900/10' : ''} ${type === 'waiting' ? 'bg-orange-50 dark:bg-orange-900/10 border border-orange-200 dark:border-orange-800' : ''}`}>
       <div className="flex-shrink-0 w-6 text-center mt-0.5 text-base">{cfg.icon}</div>
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-2">
@@ -268,8 +299,9 @@ function buildTurns(events: WBEvent[], initialTask: string | null): Turn[] {
   }
 
   for (const evt of events) {
+    const type = getEventType(evt)
     const p = evt.payload || {}
-    if (evt.type === 'user_message') {
+    if (type === 'user_message') {
       // Close out current turn (if any) and start a new one
       if (current) turns.push(current)
       current = {
@@ -282,24 +314,24 @@ function buildTurns(events: WBEvent[], initialTask: string | null): Turn[] {
         turnStatus: 'running',
         error: null,
       }
-    } else if (evt.type === 'role_change') {
+    } else if (type === 'role_change') {
       if (current) current.role = p.role || null
-    } else if (evt.type === 'agent_thought') {
+    } else if (type === 'agent_thought') {
       if (current) current.agentActivities.push(p.thought || '')
-    } else if (evt.type === 'info') {
+    } else if (type === 'info') {
       if (current) current.agentActivities.push(p.message || '')
-    } else if (evt.type === 'file_created') {
+    } else if (type === 'file_created') {
       if (current) current.filesTouched.push(p.path || '')
-    } else if (evt.type === 'file_modified') {
+    } else if (type === 'file_modified') {
       if (current) current.filesTouched.push(p.path || '')
-    } else if (evt.type === 'agent_reply') {
+    } else if (type === 'agent_reply') {
       if (current) current.agentReply = p.message || ''
-    } else if (evt.type === 'done') {
+    } else if (type === 'done') {
       if (current) {
         current.turnStatus = p.status === 'waiting' || p.status === 'completed' ? 'done' : 'error'
         if (!current.agentReply) current.agentReply = p.message || ''
       }
-    } else if (evt.type === 'error') {
+    } else if (type === 'error') {
       if (current) {
         current.turnStatus = 'error'
         current.error = p.message || p.error || 'Error'
@@ -510,11 +542,12 @@ export default function WorkbenchSessionPage() {
     es.onmessage = (e) => {
       try {
         const evt: WBEvent = JSON.parse(e.data)
+        const type = getEventType(evt)
 
-        if (evt.type === 'init') {
+        if (type === 'init') {
           setSession(evt.payload)
           setModelDraft(String(evt.payload?.model || ''))
-          setStatus(evt.payload.status || 'running')
+          setStatus(evt.payload.status || evt.canonical_state || 'running')
           setBypassMode(!!evt.payload.bypass_approvals)
           // Clear local event state — the stream will replay events_log from DB.
           // Without this, page refreshes / reconnects cause events to pile up
@@ -526,11 +559,11 @@ export default function WorkbenchSessionPage() {
           return
         }
 
-        if (evt.type === 'ping') return
+        if (type === 'ping') return
 
         setEvents(prev => [...prev, evt])
 
-        if (evt.type === 'file_created') {
+        if (type === 'file_created') {
           setFiles(prev => {
             const existingIdx = prev.findIndex(f => f.path === evt.payload.path)
             const entry = { path: evt.payload.path, status: 'created' as const, content: evt.payload.content }
@@ -550,19 +583,19 @@ export default function WorkbenchSessionPage() {
             return current
           })
         }
-        if (evt.type === 'file_modified') {
+        if (type === 'file_modified') {
           setFiles(prev => prev.map(f =>
             f.path === evt.payload.path ? { ...f, status: 'modified' as const, diff: evt.payload.diff } : f
           ).concat(prev.find(f => f.path === evt.payload.path) ? [] : [{ path: evt.payload.path, status: 'modified' as const, diff: evt.payload.diff }])
           )
         }
-        if (evt.type === 'waiting') {
+        if (type === 'waiting') {
           setWaitingForHuman(true)
           setStatus('waiting')
           inputRef.current?.focus()
         }
-        if (evt.type === 'done') {
-          const newStatus = evt.payload.status || 'completed'
+        if (type === 'done') {
+          const newStatus = evt.payload.status || evt.canonical_state || 'completed'
           setStatus(newStatus)
           // 'waiting' means turn finished but session stays open for follow-ups.
           // Keep the SSE stream alive so the next turn's events flow in.
@@ -574,24 +607,24 @@ export default function WorkbenchSessionPage() {
             es.close()
           }
         }
-        if (evt.type === 'error') {
-          setStatus('error')
+        if (type === 'error') {
+          setStatus(evt.canonical_state || 'error')
         }
-        if (evt.type === 'model_changed') {
+        if (type === 'model_changed') {
           const nextModel = String(evt.payload?.model || '')
           setSession((prev: any) => prev ? { ...prev, model: nextModel } : prev)
           setModelDraft(nextModel)
         }
 
         // Command execution events
-        if (evt.type === 'command_awaiting_approval') {
+        if (type === 'command_awaiting_approval') {
           const p = evt.payload
           setPendingCommands(prev => [...prev, { id: p.command_id, command: p.command, tier: p.tier, tier_label: p.tier_label }])
         }
-        if (evt.type === 'command_approved' || evt.type === 'command_rejected') {
+        if (type === 'command_approved' || type === 'command_rejected') {
           setPendingCommands(prev => prev.filter(c => c.id !== evt.payload.command_id))
         }
-        if (evt.type === 'command_completed') {
+        if (type === 'command_completed') {
           const p = evt.payload
           setPendingCommands(prev => prev.filter(c => c.id !== p.command_id))
           setCompletedCommands(prev => [...prev, {
@@ -941,9 +974,10 @@ export default function WorkbenchSessionPage() {
               // Latest agent_thought or info from the current turn
               for (let i = events.length - 1; i >= 0; i--) {
                 const e = events[i]
-                if (e.type === 'user_message') break
-                if (e.type === 'agent_thought') return e.payload.thought
-                if (e.type === 'info') return e.payload.message
+                const type = getEventType(e)
+                if (type === 'user_message') break
+                if (type === 'agent_thought') return e.payload.thought
+                if (type === 'info') return e.payload.message
               }
               return null
             })()}
@@ -951,12 +985,13 @@ export default function WorkbenchSessionPage() {
               // Most recent role_change event (since last user_message)
               for (let i = events.length - 1; i >= 0; i--) {
                 const e = events[i]
-                if (e.type === 'user_message') break
-                if (e.type === 'role_change') return e.payload.role
+                const type = getEventType(e)
+                if (type === 'user_message') break
+                if (type === 'role_change') return e.payload.role
               }
               return null
             })()}
-            turnCount={events.filter(e => e.type === 'user_message').length + (session?.task ? 1 : 0)}
+            turnCount={events.filter(e => getEventType(e) === 'user_message').length + (session?.task ? 1 : 0)}
             fileCount={files.length}
           />
 

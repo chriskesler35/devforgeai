@@ -32,6 +32,7 @@ from pydantic import BaseModel
 
 from app.middleware.auth import verify_api_key
 from app.database import get_db, AsyncSessionLocal
+from app.services.agentic_events import canonical_event_fields
 
 logger = logging.getLogger(__name__)
 
@@ -338,7 +339,12 @@ async def _build_phase_preview_rows(method_id: str) -> List[Dict[str, Any]]:
 
 # ─── Event helpers ────────────────────────────────────────────────────────────
 def _push(pipeline_id: str, type: str, **payload):
-    evt = {"type": type, "payload": payload, "ts": datetime.utcnow().isoformat()}
+    evt = {
+        "type": type,
+        "payload": payload,
+        "ts": datetime.utcnow().isoformat(),
+        **canonical_event_fields(type, payload, source="pipeline"),
+    }
     log = _event_logs.setdefault(pipeline_id, [])
     log.append(evt)
     if len(log) > 500:

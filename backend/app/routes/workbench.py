@@ -28,7 +28,7 @@ from app.services.runtime_model_resolver import (
 )
 from app.schemas.agentic import AgenticRunState
 from app.services.agentic_state_machine import AgenticStateMachine
-from app.services.agentic_events import build_agentic_event, compute_agentic_score
+from app.services.agentic_events import build_agentic_event, canonical_event_fields, compute_agentic_score
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,12 @@ class WorkbenchModelUpdate(BaseModel):
 
 # ─── Event helpers ────────────────────────────────────────────────────────────
 def _push(session_id: str, type: str, **payload):
-    evt = {"type": type, "payload": payload, "ts": datetime.utcnow().isoformat()}
+    evt = {
+        "type": type,
+        "payload": payload,
+        "ts": datetime.utcnow().isoformat(),
+        **canonical_event_fields(type, payload, source="workbench"),
+    }
     # Persist to in-memory event log for DB replay (capped at 500 events/session)
     log = _event_logs.setdefault(session_id, [])
     log.append(evt)

@@ -9,6 +9,115 @@ from typing import Any, Dict, Iterable, Optional
 from app.schemas.agentic import AgenticEvent, AgenticRunState, AgenticScore
 
 
+_CANONICAL_TYPE_MAP: Dict[str, str] = {
+    "init": "lifecycle.init",
+    "ping": "lifecycle.ping",
+    "info": "system.info",
+    "warning": "system.warning",
+    "error": "run.error",
+    "done": "run.done",
+    "user_message": "user.message",
+    "role_change": "agent.role_change",
+    "agent_thought": "agent.thought",
+    "agent_reply": "agent.reply",
+    "agentic_event": "agent.state",
+    "file_created": "artifact.file_created",
+    "file_modified": "artifact.file_modified",
+    "files_written": "artifact.files_written",
+    "tool_call": "tool.call",
+    "waiting": "run.waiting",
+    "model_changed": "run.model_changed",
+    "command_awaiting_approval": "command.awaiting_approval",
+    "command_approved": "command.approved",
+    "command_rejected": "command.rejected",
+    "command_running": "command.running",
+    "command_completed": "command.completed",
+    "command_blocked": "command.blocked",
+    "command_notice": "command.notice",
+    "phase_started": "phase.started",
+    "phase_progress": "phase.progress",
+    "phase_thinking": "phase.thinking",
+    "phase_completed": "phase.completed",
+    "phase_failed": "phase.failed",
+    "phase_retry": "phase.retry",
+    "phase_retry_exhausted": "phase.retry_exhausted",
+    "phase_skipped": "phase.skipped",
+    "phase_branch": "phase.branch",
+    "phase_model_changed": "phase.model_changed",
+    "phase_approved": "phase.approved",
+    "phase_rejected": "phase.rejected",
+    "awaiting_approval": "run.awaiting_approval",
+    "pipeline_created": "pipeline.created",
+    "pipeline_retry": "pipeline.retry",
+    "pipeline_done": "pipeline.done",
+}
+
+
+def _canonical_state_for_event(event_type: str, payload: Dict[str, Any]) -> Optional[str]:
+    if event_type == "agentic_event":
+        state = payload.get("state")
+        return str(state) if state else None
+
+    if event_type in {"error", "phase_failed", "phase_retry_exhausted"}:
+        return AgenticRunState.FAILED.value
+
+    if event_type in {"waiting", "awaiting_approval", "command_awaiting_approval"}:
+        return AgenticRunState.AWAITING_APPROVAL.value
+
+    if event_type in {
+        "agent_thought",
+        "agent_reply",
+        "role_change",
+        "phase_started",
+        "phase_progress",
+        "phase_thinking",
+        "command_running",
+        "command_completed",
+        "tool_call",
+    }:
+        return AgenticRunState.EXECUTING.value
+
+    if event_type in {"done", "pipeline_done"}:
+        status = str(payload.get("status") or "").strip().lower()
+        if status in {
+            AgenticRunState.COMPLETED.value,
+            AgenticRunState.FAILED.value,
+            AgenticRunState.CANCELLED.value,
+            AgenticRunState.AWAITING_APPROVAL.value,
+        }:
+            return status
+        return AgenticRunState.COMPLETED.value
+
+    return None
+
+
+def canonical_event_fields(event_type: str, payload: Optional[Dict[str, Any]] = None, *, source: str = "runtime") -> Dict[str, Any]:
+    """Return canonical event metadata while preserving legacy event types."""
+
+    data = payload or {}
+    severity = "info"
+    if event_type in {"error", "phase_failed", "phase_retry_exhausted"}:
+        severity = "error"
+    elif event_type in {
+        "warning",
+        "awaiting_approval",
+        "waiting",
+        "phase_retry",
+        "phase_rejected",
+        "command_awaiting_approval",
+        "command_rejected",
+    }:
+        severity = "warning"
+
+    return {
+        "canonical_version": "v1",
+        "canonical_type": _CANONICAL_TYPE_MAP.get(event_type, f"legacy.{event_type}"),
+        "canonical_state": _canonical_state_for_event(event_type, data),
+        "canonical_severity": severity,
+        "canonical_source": source,
+    }
+
+
 def build_agentic_event(
     run_id: str,
     state: AgenticRunState,
