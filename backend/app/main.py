@@ -118,6 +118,7 @@ from app.routes.runtime_capabilities import router as runtime_capabilities_route
 from app.routes.chat_attachments import router as chat_attachments_router
 from app.routes.tools import router as tools_router
 from app.routes.routing import router as routing_router
+from app.routes.model_verification import router as model_verification_router
 
 
 @asynccontextmanager
@@ -322,6 +323,7 @@ app.include_router(shares_public_router)
 app.include_router(hardware_router)
 app.include_router(api_keys_router)
 app.include_router(model_validate_router)
+app.include_router(model_verification_router)
 app.include_router(tasks_router)
 app.include_router(model_sync_router)
 app.include_router(context_router)

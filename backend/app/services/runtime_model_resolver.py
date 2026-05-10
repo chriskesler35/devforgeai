@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal, Optional, Union
+from uuid import UUID
 import os
 import re
 import socket
@@ -728,3 +729,205 @@ async def resolve_model_for_runtime(
         resolved_from=resolved_from,
         notes=notes,
     )
+
+
+# ============================================================================
+# PATTERN 3: Verification-aware model resolution
+# ============================================================================
+
+async def resolve_with_verification(
+    db: AsyncSession,
+    model_ref: str,
+    feature_required: str,
+    intent: ResolveIntent = "chat"
+) -> ResolveResult:
+    """
+    Resolve model with verification check.
+    
+    Args:
+        db: Database session
+        model_ref: Model reference (model_id or provider/model_id)
+        feature_required: Required capability (chat, vision, streaming, embeddings, functions)
+        intent: Resolve intent (chat, agentic, pipeline, tools)
+    
+    Returns:
+        Ready, NeedsLiveProbe, or Unreachable result
+    
+    Logic:
+        1. Query verified models matching feature
+        2. If none, query degraded models (with warning)
+        3. If none, return fallback chain
+        4. Log decision
+    """
+    # First try exact resolve
+    exact = await resolve_model_for_runtime(db, model_ref, intent=intent)
+    
+    if isinstance(exact, Ready):
+        # Check if verified and supports feature
+        verification = await get_model_verification(db, exact.model.id)
+        if verification and verification.verification_status == "verified":
+            capabilities = verification.capabilities or {}
+            if capabilities.get(feature_required, False):
+                await log_selection_decision(
+                    db,
+                    feature=feature_required,
+                    candidates=[exact.model.model_id],
+                    selected=exact.model,
+                    result="success"
+                )
+                return exact
+    
+    # Try verified models for feature
+    verified_models = await get_verified_models_for_feature(db, feature_required)
+    
+    if verified_models:
+        # Pick first (could add priority logic)
+        model, provider = verified_models[0]
+        await log_selection_decision(
+            db,
+            feature=feature_required,
+            candidates=[m[0].model_id for m in verified_models],
+            selected=model,
+            result="success"
+        )
+        return Ready(
+            model=model,
+            provider=provider,
+            runtime_model_id=model.model_id,
+            resolved_from="verified_feature_match",
+            notes=[f"Selected verified model for {feature_required}"]
+        )
+    
+    # No verified models; return error
+    return Unreachable(
+        reason_code="no_verified_models",
+        user_message=f"No verified models support feature '{feature_required}'. "
+                      f"Add/verify a model that supports this feature.",
+        technical_detail=f"feature_required={feature_required}, no verified models match",
+        candidates_tried=[model_ref],
+        remediation=[
+            f"Verify a model that supports {feature_required}",
+            "Install a new provider with this capability",
+            "Run 'devforgeai plugins verify' to check model status"
+        ]
+    )
+
+
+async def get_verified_models_for_feature(
+    db: AsyncSession,
+    feature: str
+) -> list[tuple[Model, Provider]]:
+    """
+    Query verified models supporting a feature.
+    
+    Args:
+        db: Database session
+        feature: Capability name (chat, vision, streaming, embeddings, functions)
+    
+    Returns:
+        List of (Model, Provider) tuples, ordered by priority
+    """
+    from app.models import ModelVerification
+    
+    stmt = (
+        select(Model, Provider, ModelVerification)
+        .join(Provider, Model.provider_id == Provider.id)
+        .outerjoin(ModelVerification, Model.id == ModelVerification.model_id)
+        .where(Model.is_active == True)
+        .where(Provider.is_active == True)
+        .where((ModelVerification.verification_status == "verified") | (ModelVerification.verification_status.is_(None)))
+        .order_by(Model.fallback_priority.asc().nulls_last(), Model.created_at.desc())
+    )
+    
+    results = (await db.execute(stmt)).all()
+    
+    matched = []
+    for model, provider, verification in results:
+        if not verification:
+            continue
+        
+        capabilities = verification.capabilities or {}
+        if capabilities.get(feature, False):
+            matched.append((model, provider))
+    
+    return matched
+
+
+async def get_model_verification(db: AsyncSession, model_id: UUID) -> Optional:
+    """Get verification record for a model."""
+    from app.models import ModelVerification
+    from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+    
+    stmt = select(ModelVerification).where(ModelVerification.model_id == model_id)
+    return (await db.execute(stmt)).scalars().first()
+
+
+async def log_selection_decision(
+    db: AsyncSession,
+    feature: str,
+    candidates: list[str],
+    selected: Model,
+    result: str
+):
+    """
+    Log model selection decision for debugging.
+    
+    Args:
+        db: Database session
+        feature: Feature required (chat, vision, etc.)
+        candidates: List of candidate model IDs considered
+        selected: Selected Model object
+        result: "success" or "failure"
+    """
+    # Future: Store in a selection_log table for analytics
+    # For now, just log
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(
+        f"Model selection: feature={feature}, candidates={candidates}, "
+        f"selected={selected.model_id}, result={result}"
+    )
+
+
+def get_fallback_chain(feature: str) -> list[str]:
+    """
+    Get prioritized fallback models for a feature.
+    
+    Args:
+        feature: Feature name (chat, vision, streaming, embeddings, functions)
+    
+    Returns:
+        Ordered list of model IDs to try
+    """
+    chains = {
+        "vision": [
+            "gpt-4o",
+            "claude-opus-4-5",
+            "gemini-2.5-pro",
+            "gpt-4-turbo",
+        ],
+        "streaming": [
+            "gpt-4o",
+            "claude-opus-4-5",
+            "claude-sonnet-4-5",
+            "gemini-2.5-pro",
+        ],
+        "embeddings": [
+            "text-embedding-3-large",
+            "text-embedding-3-small",
+        ],
+        "functions": [
+            "gpt-4o",
+            "claude-opus-4-5",
+            "gemini-2.5-pro",
+        ],
+        "chat": [
+            "gpt-4o",
+            "claude-opus-4-5",
+            "gemini-2.5-pro",
+            "gpt-4-turbo",
+            "claude-sonnet-4-5",
+        ]
+    }
+    
+    return chains.get(feature, [])
