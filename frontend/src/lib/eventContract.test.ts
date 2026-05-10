@@ -9,6 +9,9 @@ test('resolveEventType maps canonical values for shared aliases', () => {
   assert.equal(resolveEventType({ canonical_type: 'pipeline.done', type: 'legacy_pipeline_done' }), 'pipeline_done')
   assert.equal(resolveEventType({ canonical_type: 'artifact.files_written', type: 'legacy_files_written' }), 'files_written')
   assert.equal(resolveEventType({ canonical_type: 'session.killed', type: 'legacy_killed' }), 'session_killed')
+  assert.equal(resolveEventType({ canonical_type: 'run.spawn_requested', type: 'legacy_spawn_req' }), 'spawn_requested')
+  assert.equal(resolveEventType({ canonical_type: 'run.spawn_approved', type: 'legacy_spawn_ok' }), 'spawn_approved')
+  assert.equal(resolveEventType({ canonical_type: 'run.spawn_rejected', type: 'legacy_spawn_no' }), 'spawn_rejected')
   assert.equal(resolveEventType({ canonical_type: 'run.alternative_selected', type: 'legacy_alt' }), 'alternative_selected')
 })
 

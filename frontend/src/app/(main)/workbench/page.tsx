@@ -186,6 +186,7 @@ export default function WorkbenchListPage() {
   const [agentType, setAgentType] = useState('coder')
   const [model, setModel] = useState('')
   const [creating, setCreating] = useState(false)
+  const [requireSpawnApproval, setRequireSpawnApproval] = useState(false)
   const [projectId, setProjectId] = useState<string | null>(null)
   const [projectName, setProjectName] = useState<string>('')
   const [projects, setProjects] = useState<ProjectListItem[]>([])
@@ -558,6 +559,9 @@ export default function WorkbenchListPage() {
       const body: any = { task: task.trim(), agent_type: agentType }
       if (model) body.model = model
       body.project_id = launchProjectId
+      if (!asPipeline) {
+        body.require_spawn_approval = requireSpawnApproval
+      }
       const sessRes = await fetch(`${apiBase}/v1/workbench/sessions`, {
         method: 'POST', headers: authHeaders,
         body: JSON.stringify(body),
@@ -1357,6 +1361,22 @@ export default function WorkbenchListPage() {
                   </div>
                 )}
               </div>
+              {!asPipeline && (
+                <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 p-3">
+                  <label className="flex items-center gap-2 cursor-pointer text-sm font-medium text-amber-900 dark:text-amber-200">
+                    <input
+                      type="checkbox"
+                      checked={requireSpawnApproval}
+                      onChange={e => setRequireSpawnApproval(e.target.checked)}
+                      className="rounded text-amber-600 focus:ring-amber-400"
+                    />
+                    Require approval before spawning this agent
+                  </label>
+                  <div className="mt-1 text-[11px] text-amber-800 dark:text-amber-300 pl-6">
+                    You will review prompt + model in the session before execution starts.
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-3">
                 <div>

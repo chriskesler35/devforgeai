@@ -52,6 +52,7 @@ class WorkbenchCreate(BaseModel):
     model: Optional[str] = None
     project_path: Optional[str] = None
     project_id: Optional[str] = None
+    require_spawn_approval: bool = False
 
 
 class WorkbenchMessage(BaseModel):
@@ -78,6 +79,14 @@ class WorkbenchAlternativeBody(BaseModel):
 
 
 class WorkbenchKillBody(BaseModel):
+    reason: Optional[str] = None
+
+
+class WorkbenchSpawnApproveBody(BaseModel):
+    message: Optional[str] = None
+
+
+class WorkbenchSpawnRejectBody(BaseModel):
     reason: Optional[str] = None
 
 
@@ -1071,7 +1080,7 @@ async def create_session(body: WorkbenchCreate, db: AsyncSession = Depends(get_d
         model=model_id,
         project_id=body.project_id,
         project_path=str(project_path) if project_path else None,
-        status="pending",
+        status="awaiting_approval" if body.require_spawn_approval else "pending",
         files=[],
     )
     db.add(session)
@@ -1093,15 +1102,25 @@ async def create_session(body: WorkbenchCreate, db: AsyncSession = Depends(get_d
     _queues[session_id] = asyncio.Queue(maxsize=1000)
     _pending_messages[session_id] = []
 
-    # Kick off the first turn with the initial task
-    asyncio.create_task(_run_turn(
-        session_id=session_id,
-        user_message=body.task,
-        agent_type=body.agent_type,
-        model_id=model_id,
-        project_path=project_path,
-        history=[],
-    ))
+    if body.require_spawn_approval:
+        _push(
+            session_id,
+            "spawn_requested",
+            message=body.task,
+            agent_type=body.agent_type,
+            model=model_id,
+            status="awaiting_approval",
+        )
+    else:
+        # Kick off the first turn with the initial task
+        asyncio.create_task(_run_turn(
+            session_id=session_id,
+            user_message=body.task,
+            agent_type=body.agent_type,
+            model_id=model_id,
+            project_path=project_path,
+            history=[],
+        ))
 
     return session.to_dict()
 
@@ -1438,6 +1457,73 @@ async def complete_session(session_id: str):
     _queues.pop(session_id, None)
     _pending_messages.pop(session_id, None)
     return {"ok": True}
+
+
+@router.post("/sessions/{session_id}/spawn/approve", dependencies=[Depends(verify_api_key)])
+async def approve_session_spawn(session_id: str, body: Optional[WorkbenchSpawnApproveBody] = None):
+    """Approve a pending session spawn and optionally edit the launch prompt."""
+    from app.models.workbench import WorkbenchSession
+
+    async with AsyncSessionLocal() as db:
+        session = (await db.execute(
+            select(WorkbenchSession).where(WorkbenchSession.id == session_id)
+        )).scalar_one_or_none()
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if session.status != "awaiting_approval":
+            raise HTTPException(status_code=409, detail=f"Session is not awaiting approval (current status: '{session.status}')")
+
+        launch_message = (body.message or "").strip() if body else ""
+        if launch_message:
+            session.task = launch_message
+        await db.commit()
+        await db.refresh(session)
+
+    if session_id not in _queues:
+        _queues[session_id] = asyncio.Queue(maxsize=1000)
+    _pending_messages.setdefault(session_id, [])
+
+    launch_prompt = (body.message or "").strip() if body else ""
+    if not launch_prompt:
+        launch_prompt = (session.task or "").strip()
+    if not launch_prompt:
+        raise HTTPException(status_code=400, detail="Session has no launch prompt")
+
+    project_path = Path(session.project_path) if session.project_path else None
+    await _db_update(session_id, status="pending")
+    _push(session_id, "spawn_approved", message=launch_prompt, status="pending")
+    asyncio.create_task(_run_turn(
+        session_id=session_id,
+        user_message=launch_prompt,
+        agent_type=session.agent_type or "coder",
+        model_id=session.model or "llama3.1:8b",
+        project_path=project_path,
+        history=session.messages or [],
+    ))
+
+    return {"ok": True, "status": "pending"}
+
+
+@router.post("/sessions/{session_id}/spawn/reject", dependencies=[Depends(verify_api_key)])
+async def reject_session_spawn(session_id: str, body: Optional[WorkbenchSpawnRejectBody] = None):
+    """Reject a pending session spawn and cancel session launch."""
+    from app.models.workbench import WorkbenchSession
+
+    async with AsyncSessionLocal() as db:
+        session = (await db.execute(
+            select(WorkbenchSession).where(WorkbenchSession.id == session_id)
+        )).scalar_one_or_none()
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if session.status != "awaiting_approval":
+            raise HTTPException(status_code=409, detail=f"Session is not awaiting approval (current status: '{session.status}')")
+
+    reason = (body.reason or "").strip() if body else ""
+    reason_txt = reason if reason else "No reason provided"
+    await _db_update(session_id, status="cancelled", completed_at=datetime.utcnow())
+    _push(session_id, "spawn_rejected", reason=reason_txt, status="cancelled")
+    _push(session_id, "done", message="Session spawn rejected by user.", status="cancelled")
+    return {"ok": True, "status": "cancelled"}
 
 
 @router.post("/sessions/{session_id}/pause", dependencies=[Depends(verify_api_key)])

@@ -76,6 +76,9 @@ const EVENT_STYLE: Record<string, { icon: string; color: string; label: string }
   session_paused:{ icon: '⏸️', color: 'text-amber-600 dark:text-amber-400',    label: 'Paused'       },
   session_resumed:{ icon: '▶️', color: 'text-blue-600 dark:text-blue-400',     label: 'Resumed'      },
   session_killed:{ icon: '🛑', color: 'text-red-700 dark:text-red-400',        label: 'Killed'       },
+  spawn_requested:{ icon: '📝', color: 'text-amber-700 dark:text-amber-400',   label: 'Spawn Requested' },
+  spawn_approved:{ icon: '✅', color: 'text-emerald-700 dark:text-emerald-400', label: 'Spawn Approved' },
+  spawn_rejected:{ icon: '🚫', color: 'text-red-700 dark:text-red-400',         label: 'Spawn Rejected' },
   retry_with_prompt:{ icon: '↻', color: 'text-indigo-600 dark:text-indigo-400', label: 'Retry'        },
   override_result:{ icon: '🛠️', color: 'text-emerald-600 dark:text-emerald-400', label: 'Override'    },
   ping:          { icon: '·',  color: 'text-gray-300',                          label: ''             },
@@ -571,6 +574,9 @@ export default function WorkbenchSessionPage() {
   const [killingSession, setKillingSession] = useState(false)
   const [killReason, setKillReason] = useState('')
   const [killImpact, setKillImpact] = useState<KillImpactPayload | null>(null)
+  const [spawnEditPrompt, setSpawnEditPrompt] = useState('')
+  const [approvingSpawn, setApprovingSpawn] = useState(false)
+  const [rejectingSpawn, setRejectingSpawn] = useState(false)
 
   const streamRef = useRef<EventSource | null>(null)
   const streamEndRef = useRef<HTMLDivElement>(null)
@@ -632,6 +638,7 @@ export default function WorkbenchSessionPage() {
 
         if (type === 'init') {
           setSession(evt.payload)
+          setSpawnEditPrompt(String(evt.payload?.task || ''))
           setModelDraft(String(evt.payload?.model || ''))
           setStatus(evt.payload.status || evt.canonical_state || 'running')
           setBypassMode(!!evt.payload.bypass_approvals)
@@ -1039,6 +1046,41 @@ export default function WorkbenchSessionPage() {
     }
   }
 
+  const approveSpawn = async () => {
+    setApprovingSpawn(true)
+    try {
+      const res = await fetch(`${API_BASE}/v1/workbench/sessions/${id}/spawn/approve`, {
+        method: 'POST',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify({ message: spawnEditPrompt.trim() || null }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setStatus('pending')
+    } catch (e: any) {
+      alert(`Failed to approve spawn: ${e.message}`)
+    } finally {
+      setApprovingSpawn(false)
+    }
+  }
+
+  const rejectSpawn = async () => {
+    const reason = prompt('Reason for rejecting spawn (optional):') || ''
+    setRejectingSpawn(true)
+    try {
+      const res = await fetch(`${API_BASE}/v1/workbench/sessions/${id}/spawn/reject`, {
+        method: 'POST',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify({ reason: reason.trim() || null }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setStatus('cancelled')
+    } catch (e: any) {
+      alert(`Failed to reject spawn: ${e.message}`)
+    } finally {
+      setRejectingSpawn(false)
+    }
+  }
+
   // Click file in the tree → fetch full content from disk (SSE payload is truncated)
   const selectFile = useCallback(async (f: FileEntry) => {
     // Show immediately with preview, then replace with full content
@@ -1058,6 +1100,7 @@ export default function WorkbenchSessionPage() {
     pending:      'bg-yellow-100 text-yellow-700',
     running:      'bg-blue-100 text-blue-700',
     waiting:      'bg-orange-100 text-orange-700',
+    awaiting_approval: 'bg-amber-100 text-amber-700',
     paused:       'bg-amber-100 text-amber-700',
     killed:       'bg-red-100 text-red-700',
     completed:    'bg-green-100 text-green-700',
@@ -1288,6 +1331,7 @@ export default function WorkbenchSessionPage() {
     if (agentTimeline.length === 0) {
       if (status === 'running') return 'EXECUTING'
       if (status === 'waiting') return 'AWAITING_APPROVAL'
+      if (status === 'awaiting_approval') return 'AWAITING_APPROVAL'
       if (status === 'completed') return 'COMPLETED'
       if (status === 'killed') return 'KILLED'
       if (status === 'failed' || status === 'error') return 'FAILED'
@@ -1540,6 +1584,9 @@ export default function WorkbenchSessionPage() {
           {pinNote && (
             <p className="mt-1 text-[10px] text-gray-500">{pinNote}</p>
           )}
+          {status === 'awaiting_approval' && (
+            <p className="mt-1 text-[10px] text-amber-700">Spawn approval required before this agent runs.</p>
+          )}
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">
@@ -1596,6 +1643,34 @@ export default function WorkbenchSessionPage() {
 
         {/* CENTER: Conversation timeline */}
         <div className="flex-1 flex flex-col min-w-0 min-h-0">
+          {status === 'awaiting_approval' && (
+            <div className="flex-shrink-0 border-b border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 space-y-2">
+              <div className="text-xs font-semibold text-amber-900 dark:text-amber-200">Approval gate: spawn this agent?</div>
+              <textarea
+                value={spawnEditPrompt}
+                onChange={(e) => setSpawnEditPrompt(e.target.value)}
+                rows={3}
+                className="w-full rounded border border-amber-300 dark:border-amber-700 bg-white dark:bg-gray-800 text-xs px-2 py-1.5 text-gray-700 dark:text-gray-200"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={approveSpawn}
+                  disabled={approvingSpawn || !spawnEditPrompt.trim()}
+                  className="px-3 py-1.5 text-xs font-medium rounded bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
+                >
+                  {approvingSpawn ? 'Approving…' : 'Approve'}
+                </button>
+                <button
+                  onClick={rejectSpawn}
+                  disabled={rejectingSpawn}
+                  className="px-3 py-1.5 text-xs font-medium rounded border border-red-300 text-red-700 hover:bg-red-50 disabled:opacity-50"
+                >
+                  {rejectingSpawn ? 'Rejecting…' : 'Reject'}
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Agent Card header */}
           <AgentCard
             agentType={session?.agent_type || 'coder'}
