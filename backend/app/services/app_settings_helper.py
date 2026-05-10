@@ -25,6 +25,7 @@ _DEFAULTS = {
     "remote_wireguard_backend_url": "",
     "remote_wireguard_comfyui_url": "",
     "runtime_fallback_order": "[]",
+    "runtime_provider_health_block_minutes": "90",
 }
 
 # Env var overrides (highest priority)

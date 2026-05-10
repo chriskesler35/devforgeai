@@ -24,11 +24,11 @@ Scope source: REQUIREMENTS.md (Pattern 1, Pattern 2, Pattern 3 acceptance criter
 10. DONE - Provider health check endpoint exists and works
 11. DONE - Provider credential management UI now shows live per-provider health status, credential/connectivity signals, and refresh action
 12. DONE - Background health monitoring runs periodically
-13. PARTIAL - Degraded provider auto-disabled in model selection (auto-deactivation exists; policy thresholding and observability incomplete)
+13. DONE - Degraded provider auto-disabled in model selection with freshness threshold policy and explicit runtime diagnostics/remediation
 14. DONE - Global provider-health warning banner includes direct Fix credentials action into Settings -> API Keys with provider focus
-15. PARTIAL - Model capability schema is JSON and enforced (JSON present; enforcement not complete for all paths/features)
+15. PARTIAL - Model capability schema is JSON and enforced for model CRUD with key/value validation; broader sync/import enforcement remains
 16. PARTIAL - Frontend syncs capability catalog on startup (cached); broader feature consumers still pending
-17. PARTIAL - Schema enforcement returns clear error messages (some paths do, not uniformly)
+17. PARTIAL - Schema enforcement now returns explicit capability key/type errors for model CRUD; some non-CRUD paths still need harmonized errors
 18. DONE - Marketplace install flow now enforces verified trust-level gate (non-verified entries are visible but install-blocked with explicit messaging)
 19. DONE - Frontend now performs version-based cache invalidation (periodic + on-focus) against backend catalog version metadata, so webhook-triggered backend updates propagate without waiting full TTL
 20. DONE - Provider webhook ingestion now supports external integration hardening (auth token, provider/source normalization, idempotent event handling) with incremental provider refresh

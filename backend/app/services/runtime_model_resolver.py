@@ -8,7 +8,7 @@ contract.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional, Union
 from uuid import UUID
 import logging
@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import AppSetting, Model, ModelSelectionLog, ModelVerification, Provider, SessionModelPin
+from app.models import AppSetting, Model, ModelSelectionLog, ModelVerification, Provider, ProviderHealth, SessionModelPin
 from app.services.github_copilot import get_copilot_auth_token, resolve_supported_copilot_model
 from app.services.provider_credentials import has_provider_api_key
 
@@ -543,6 +543,45 @@ def _provider_is_usable(provider: Provider | None) -> bool:
     return has_provider_api_key(provider_name)
 
 
+async def _provider_health_gate_window_minutes(db: AsyncSession) -> int:
+    """How recent provider health must be to enforce degraded-state blocking."""
+    row = (await db.execute(select(AppSetting).where(AppSetting.key == "runtime_provider_health_block_minutes"))).scalar_one_or_none()
+    if not row or not row.value:
+        return 90
+    try:
+        value = int(str(row.value).strip())
+        return max(5, min(1440, value))
+    except Exception:
+        return 90
+
+
+async def _provider_health_block_reason(db: AsyncSession, provider: Provider | None) -> str | None:
+    """Return a blocking reason when recent provider health indicates degraded runtime safety."""
+    if not provider:
+        return None
+
+    health = (await db.execute(select(ProviderHealth).where(ProviderHealth.provider_id == provider.id))).scalar_one_or_none()
+    if not health or not health.last_checked_at:
+        return None
+
+    now = datetime.now(health.last_checked_at.tzinfo) if health.last_checked_at.tzinfo else datetime.utcnow()
+    age = now - health.last_checked_at
+    freshness_window = timedelta(minutes=await _provider_health_gate_window_minutes(db))
+    if age > freshness_window:
+        return None
+
+    degraded = (health.health_status or "").strip().lower() in {"degraded", "failed"}
+    invalid_credentials = (health.credential_status or "").strip().lower() == "invalid"
+    bad_connectivity = (health.connectivity_status or "").strip().lower() == "error"
+
+    if degraded or invalid_credentials or bad_connectivity:
+        return (
+            f"health={health.health_status}, credentials={health.credential_status}, "
+            f"connectivity={health.connectivity_status}, last_checked_at={health.last_checked_at.isoformat()}"
+        )
+    return None
+
+
 async def _lookup_by_uuid(db: AsyncSession, ref: str) -> tuple[Optional[tuple[Model, Provider]], str]:
     try:
         model_uuid = uuid.UUID(str(ref))
@@ -738,6 +777,23 @@ async def resolve_model_for_runtime(
             technical_detail=f"provider unusable: {provider.name}",
             candidates_tried=[f"{provider.name}/{model.model_id}"],
             remediation=["Set provider API key", "Reconnect OAuth", "Verify local provider connectivity"],
+        )
+
+    health_block_reason = await _provider_health_block_reason(db, provider)
+    if health_block_reason:
+        return Unreachable(
+            reason_code="provider_health_blocked",
+            user_message=(
+                f"Provider '{provider.name}' is currently degraded/failed based on recent health checks, "
+                "so it is temporarily excluded from runtime selection."
+            ),
+            technical_detail=health_block_reason,
+            candidates_tried=[f"{provider.name}/{model.model_id}"],
+            remediation=[
+                "Refresh provider health checks from Models or Settings",
+                "Fix provider credentials/connectivity",
+                "Wait for provider recovery and retry",
+            ],
         )
 
     runtime_model_id = model.model_id or ""
