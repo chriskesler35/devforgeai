@@ -3,6 +3,7 @@
 import { getApiBase, getAuthHeaders } from '@/lib/config'
 import { featureFlags } from '@/lib/feature-flags'
 import { trackEvent } from '@/lib/analytics'
+import { getCachedModelCatalog } from '@/lib/modelCatalog'
 import WorkbenchSessionCard from '@/components/WorkbenchSessionCard'
 import SessionListToolbar, { SessionFilterKey, SessionSortKey } from '@/components/SessionListToolbar'
 
@@ -408,6 +409,24 @@ export default function WorkbenchListPage() {
     const fetchModels = async () => {
       setLoadingModels(true)
       try {
+        const catalog = getCachedModelCatalog()
+        const catalogByRef = new Map(
+          (catalog?.models || []).map((entry) => [entry.model_ref.toLowerCase(), entry]),
+        )
+
+        const supportsAgenticRuntime = (m: any): boolean => {
+          const provider = String(m.provider_name || '').trim().toLowerCase()
+          const modelId = String(m.model_id || '').trim()
+          if (!provider || !modelId || catalogByRef.size === 0) {
+            // Keep backward-compatible behavior when catalog isn't available.
+            return true
+          }
+          const ref = `${provider}/${modelId}`.toLowerCase()
+          const entry = catalogByRef.get(ref)
+          if (!entry) return true
+          return Boolean(entry.capabilities?.function_calling || entry.capabilities?.tools)
+        }
+
         const all: Model[] = []
         const limit = 250
         let offset = 0
@@ -419,7 +438,9 @@ export default function WorkbenchListPage() {
           )
           const d = await res.json().catch(() => ({ data: [] }))
           const page: Model[] = (d.data || []).filter((m: any) =>
-            m.capabilities?.chat !== false && !m.capabilities?.image_generation,
+            m.capabilities?.chat !== false
+            && !m.capabilities?.image_generation
+            && supportsAgenticRuntime(m),
           )
           all.push(...page)
 
