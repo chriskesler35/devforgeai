@@ -11,6 +11,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 
 const TERMINAL_PIPELINE_STATUSES = new Set(['completed', 'failed', 'cancelled'])
+const METHOD_SWITCH_OPTIONS = ['bmad', 'gsd', 'superpowers', 'specaudit', 'mvp-loop', 'gtrack', 'discovery']
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface PhaseDef {
@@ -1178,6 +1179,9 @@ export default function PipelinePage() {
   const [methodReview, setMethodReview] = useState('')
   const [submittingMethodFeedback, setSubmittingMethodFeedback] = useState(false)
   const [methodFeedbackSubmitted, setMethodFeedbackSubmitted] = useState(false)
+  const [switchMethodId, setSwitchMethodId] = useState('bmad')
+  const [switchMethodNote, setSwitchMethodNote] = useState('')
+  const [switchingMethod, setSwitchingMethod] = useState(false)
 
   // Escape closes the read-only artifact modal
   useEffect(() => {
@@ -1721,6 +1725,49 @@ export default function PipelinePage() {
     }
   }, [apiBase, authHeaders, methodRating, methodReview, pipeline])
 
+  const switchMethodWithHandoff = useCallback(async () => {
+    if (!pipeline || switchingMethod) return
+    if (pipeline.status === 'running') {
+      setActionError('Pause or complete the current pipeline before switching methods.')
+      return
+    }
+
+    const targetMethod = (switchMethodId || '').trim().toLowerCase()
+    if (!targetMethod) {
+      setActionError('Select a target method before switching.')
+      return
+    }
+    if (targetMethod === (pipeline.method_id || '').toLowerCase()) {
+      setActionError('Choose a different method to switch.')
+      return
+    }
+
+    setSwitchingMethod(true)
+    setActionError(null)
+    try {
+      const res = await fetch(`${apiBase}/v1/workbench/pipelines/${pipeline.id}/switch-method`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          method_id: targetMethod,
+          handoff_note: switchMethodNote.trim() || null,
+          interaction_mode: 'interactive',
+          delegate_qa_to_agent: false,
+          auto_approve: false,
+        }),
+      })
+      const payload = await readApiPayload(res)
+      if (!res.ok) throw new Error(getApiErrorMessage(payload, res.status))
+      const newPipelineId = payload?.pipeline?.id
+      if (!newPipelineId) throw new Error('Method switch created no target pipeline id')
+      router.push(`/workbench/pipelines/${newPipelineId}`)
+    } catch (e: any) {
+      setActionError(e.message || 'Failed to switch methods with handoff')
+    } finally {
+      setSwitchingMethod(false)
+    }
+  }, [apiBase, authHeaders, pipeline, router, switchMethodId, switchMethodNote, switchingMethod])
+
   const pipelineStatus = pipeline?.status || 'pending'
   const statusBadge = STATUS_STYLE[pipelineStatus] || STATUS_STYLE.pending
   const totalTokens = phaseRuns.reduce((sum, r) => sum + (r.input_tokens || 0) + (r.output_tokens || 0), 0)
@@ -2146,6 +2193,39 @@ export default function PipelinePage() {
               </button>
             </>
           )}
+        </div>
+      )}
+
+      {pipeline.status !== 'running' && (
+        <div className="rounded-2xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-900/20 px-4 py-3 space-y-2">
+          <div className="text-sm font-semibold text-indigo-900 dark:text-indigo-100">Switch Method With Context Handoff</div>
+          <div className="text-xs text-indigo-800 dark:text-indigo-200">
+            Start a new pipeline in the same project session. Prior phase artifacts and your note are passed into the new method kickoff.
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-[180px_1fr_auto] gap-2 items-center">
+            <select
+              value={switchMethodId}
+              onChange={(e) => setSwitchMethodId(e.target.value)}
+              className="rounded border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-gray-800 text-xs px-2 py-1.5 text-gray-700 dark:text-gray-200"
+            >
+              {METHOD_SWITCH_OPTIONS.map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+            <input
+              value={switchMethodNote}
+              onChange={(e) => setSwitchMethodNote(e.target.value)}
+              placeholder="Optional handoff note (what to preserve or change)"
+              className="w-full rounded border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-gray-800 text-xs px-2 py-1.5 text-gray-700 dark:text-gray-200"
+            />
+            <button
+              onClick={switchMethodWithHandoff}
+              disabled={switchingMethod || switchMethodId.toLowerCase() === (pipeline.method_id || '').toLowerCase()}
+              className="px-3 py-1.5 text-xs font-medium rounded bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50"
+            >
+              {switchingMethod ? 'Switching…' : 'Switch Method'}
+            </button>
+          </div>
         </div>
       )}
 

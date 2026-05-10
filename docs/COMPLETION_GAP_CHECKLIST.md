@@ -88,12 +88,11 @@ Scope source: REQUIREMENTS.md acceptance criteria for Pattern 1, Pattern 2, Patt
 - Evidence: backend/app/services/phase_templates.py (GSD-style phases), frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx
 - Gap: dedicated end-user GSD flow contract is not fully explicit across all required UX steps.
 
-5. PARTIAL - BMAD flow: discovery -> ideation -> planning -> handoff -> dev
-- Evidence: backend/app/services/phase_templates.py, frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx
-- Gap: requirement calls for explicit staged BMAD UX surfaces; current view is more generic supervisor UI.
+5. DONE - BMAD flow: discovery -> ideation -> planning -> handoff -> dev
+- Evidence: backend/app/services/phase_templates.py, frontend/src/app/(main)/bmad/page.tsx (explicit BMAD stage panels), frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx
 
-6. MISSING - gtrack flow: import issue -> map to agents -> execute
-- Evidence: no complete gtrack issue import/mapping UX matching acceptance contract found.
+6. DONE - gtrack flow: import issue -> map to agents -> execute
+- Evidence: frontend/src/app/(main)/gtrack/page.tsx (issue import + mapping + execute selected into gtrack pipeline)
 
 7. PARTIAL - Custom chains (2+ methods) with clear handoff points
 - Evidence: frontend/src/app/(main)/methods/page.tsx (stacking), frontend/src/app/(main)/workbench/page.tsx (stack/runtime method behavior)
@@ -106,11 +105,11 @@ Scope source: REQUIREMENTS.md acceptance criteria for Pattern 1, Pattern 2, Patt
 - Evidence: frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx (timeline/phase controls/monitor-like areas)
 - Gap: layout is close but not a strict dedicated GSD-only surface.
 
-10. MISSING - BMAD UI shape as explicit multi-panel stage navigator
-- Evidence: no dedicated BMAD stage panel UI found that matches requirement wording.
+10. DONE - BMAD UI shape as explicit multi-panel stage navigator
+- Evidence: frontend/src/app/(main)/bmad/page.tsx (Discovery/Ideation/Planning/Handoff/Dev panel navigation + prev/next controls + right monitor panel)
 
-11. MISSING - gtrack UI shape (sidebar issues, mapping view, bulk actions)
-- Evidence: no acceptance-matching gtrack surface found.
+11. DONE - gtrack UI shape (sidebar issues, mapping view, bulk actions)
+- Evidence: frontend/src/app/(main)/gtrack/page.tsx (sidebar import/list, mapping view, bulk execute actions)
 
 12. DONE - Home page has three big CTAs: Chat, Pick Method, Use Template
 - Evidence: frontend/src/app/(main)/page.tsx (StartAction cards for Chat, Pick a Method, Use Template)
@@ -137,8 +136,8 @@ Scope source: REQUIREMENTS.md acceptance criteria for Pattern 1, Pattern 2, Patt
 - Evidence: frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx (discovery handoff + launch guidance)
 - Gap: generalized next-step preview is not consistently present across methods.
 
-19. MISSING - Method switching mid-project works with context handoff guarantees
-- Evidence: no dedicated switch-method UX/contract found for active project flows.
+19. DONE - Method switching mid-project works with context handoff guarantees
+- Evidence: backend/app/routes/pipelines.py (POST /v1/workbench/pipelines/{pipeline_id}/switch-method), frontend/src/app/(main)/workbench/pipelines/[id]/page.tsx (Switch Method With Context Handoff UI)
 
 20. DONE - Marketplace has categories, cards, preview, install, ratings
 - Evidence: frontend/src/app/(main)/marketplace/page.tsx (filters/cards/install/skill detail + method rating fetch), frontend/src/components/marketplace/SkillCard.tsx, frontend/src/components/marketplace/SkillDetailPane.tsx
@@ -148,9 +147,9 @@ Scope source: REQUIREMENTS.md acceptance criteria for Pattern 1, Pattern 2, Patt
 
 ### Pattern 2 Summary
 
-- DONE: 7
-- PARTIAL: 10
-- MISSING: 4
+- DONE: 12
+- PARTIAL: 9
+- MISSING: 0
 
 ## Pattern 3 Acceptance Matrix (Deterministic Model Reliability)
 
@@ -168,9 +167,8 @@ Status: DONE across documented acceptance criteria in this repository snapshot.
 ## Remaining High-Impact Gaps (Priority)
 
 1. Unify method selection into a single launch flow that directly satisfies item 1 without page fragmentation.
-2. Implement dedicated gtrack acceptance flow and UI shape (Pattern 2 items 6, 11).
-3. Implement method-switch mid-project with explicit context handoff guarantees (Pattern 2 item 19).
-4. Upgrade Pattern 1 execution graph from linear handoff visualization to true DAG parent-child model (Pattern 1 items 2, 14).
+2. Tighten method-specific flow fidelity for GSD (item 4) and intake richness (item 14).
+3. Upgrade Pattern 1 execution graph from linear handoff visualization to true DAG parent-child model (Pattern 1 items 2, 14).
 
 ## Definition of Fully Completed
 

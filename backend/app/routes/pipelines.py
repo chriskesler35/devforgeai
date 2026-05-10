@@ -106,6 +106,14 @@ class PipelinePhaseModelUpdate(BaseModel):
     model_id: str
 
 
+class PipelineSwitchMethodBody(BaseModel):
+    method_id: str
+    handoff_note: Optional[str] = None
+    interaction_mode: str = "interactive"
+    delegate_qa_to_agent: bool = False
+    auto_approve: bool = False
+
+
 class PipelinePhasePreviewRequest(BaseModel):
     method_id: str
     stack_override: Optional[List[str]] = None
@@ -335,6 +343,56 @@ async def _build_phase_preview_rows(method_id: str) -> List[Dict[str, Any]]:
             }
         )
     return phase_rows
+
+
+def _build_method_switch_handoff_task(
+    current_pipeline: Any,
+    latest_runs: List[dict],
+    target_method_id: str,
+    handoff_note: Optional[str],
+) -> str:
+    """Build a deterministic handoff packet for method switching within a project."""
+    lines: List[str] = [
+        f"Switch this project workflow from '{current_pipeline.method_id}' to '{target_method_id}'.",
+        f"Original task: {current_pipeline.initial_task}",
+    ]
+
+    note = (handoff_note or "").strip()
+    if note:
+        lines.extend([
+            "",
+            "User handoff note:",
+            note,
+        ])
+
+    if latest_runs:
+        lines.extend([
+            "",
+            "Prior pipeline artifacts to preserve context:",
+        ])
+        for run in latest_runs[-4:]:
+            phase_name = run.get("phase_name") or f"Phase {run.get('phase_index', '?')}"
+            status = run.get("status") or "unknown"
+            rendered = _format_prior_artifact_for_context(run)
+            preview = rendered[:1400]
+            if len(rendered) > 1400:
+                preview += "\n... [truncated]"
+            lines.extend([
+                "",
+                f"## {phase_name} ({status})",
+                preview,
+            ])
+
+    lines.extend([
+        "",
+        "Switch requirements:",
+        "1. Preserve prior approved decisions unless explicitly contradicted.",
+        "2. Carry forward all unresolved risks/open questions.",
+        "3. Continue delivery without restarting discovery from scratch.",
+        "4. Produce an explicit handoff summary in early output for auditability.",
+    ])
+
+    return "\n".join(lines)
 
 
 # ─── Event helpers ────────────────────────────────────────────────────────────
@@ -2066,6 +2124,144 @@ async def get_pipeline(pipeline_id: str, db: AsyncSession = Depends(get_db)):
     return {
         **p.to_dict(),
         "phase_runs": [r.to_dict() for r in runs],
+    }
+
+
+@router.post("/{pipeline_id}/switch-method", dependencies=[Depends(verify_api_key)])
+async def switch_pipeline_method(
+    pipeline_id: str,
+    body: PipelineSwitchMethodBody,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Switch methods mid-project by creating a new pipeline with explicit context handoff."""
+    from app.models.pipeline import Pipeline, PhaseRun
+    from app.models.workbench import WorkbenchSession
+    from app.services.phase_templates import get_method_phases_with_custom, list_supported_methods, validate_phase_dag
+
+    target_method = (body.method_id or "").strip()
+    if not target_method:
+        raise HTTPException(status_code=400, detail="method_id is required")
+
+    current_pipeline = (await db.execute(
+        select(Pipeline).where(Pipeline.id == pipeline_id)
+    )).scalar_one_or_none()
+    if not current_pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    if current_pipeline.status == "running":
+        raise HTTPException(status_code=409, detail="Pause or finish the current pipeline before switching methods")
+
+    effective_method_id, requested_stack, stacked_prompt, layered_methods = _resolve_pipeline_method_selection(
+        target_method,
+        None,
+    )
+    if layered_methods:
+        logger.info(f"Switch method layering stack: {layered_methods}")
+
+    try:
+        template_phases = await get_method_phases_with_custom(effective_method_id, db)
+    except KeyError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Method '{effective_method_id}' does not support pipelines. Supported: {list_supported_methods()}"
+        )
+
+    dag_errors = validate_phase_dag(template_phases)
+    if dag_errors:
+        raise HTTPException(status_code=400, detail=f"Invalid phase dependency graph: {'; '.join(dag_errors)}")
+
+    session = (await db.execute(
+        select(WorkbenchSession).where(WorkbenchSession.id == current_pipeline.session_id)
+    )).scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Workbench session not found")
+
+    phase_runs = (await db.execute(
+        select(PhaseRun)
+        .where(PhaseRun.pipeline_id == pipeline_id)
+        .order_by(PhaseRun.phase_index, desc(PhaseRun.created_at))
+    )).scalars().all()
+
+    latest_by_phase: Dict[int, dict] = {}
+    for run in phase_runs:
+        if run.phase_index not in latest_by_phase:
+            latest_by_phase[run.phase_index] = run.to_dict()
+    latest_runs = [latest_by_phase[idx] for idx in sorted(latest_by_phase.keys())]
+
+    handoff_task = _build_method_switch_handoff_task(
+        current_pipeline=current_pipeline,
+        latest_runs=latest_runs,
+        target_method_id=effective_method_id,
+        handoff_note=body.handoff_note,
+    )
+
+    for phase in template_phases:
+        phase.pop("model", None)
+        if stacked_prompt:
+            existing = phase.get("system_prompt", "")
+            phase["system_prompt"] = (
+                f"{existing}\n\n---\n\n# Additional method instructions (from stack)\n{stacked_prompt}"
+            )
+
+    template_phases = _apply_interaction_mode_to_phases(
+        template_phases,
+        interaction_mode=body.interaction_mode,
+        delegate_qa_to_agent=body.delegate_qa_to_agent,
+    )
+
+    effective_auto_approve = bool(body.auto_approve)
+    if (body.interaction_mode or "autonomous").strip().lower() == "interactive":
+        effective_auto_approve = False
+
+    user = getattr(request.state, "user", None)
+    creator_id = user.get("id", "owner") if user else "owner"
+
+    new_pipeline_id = str(uuid.uuid4())
+    new_pipeline = Pipeline(
+        id=new_pipeline_id,
+        session_id=current_pipeline.session_id,
+        method_id=effective_method_id,
+        phases=template_phases,
+        current_phase_index=0,
+        status="pending",
+        auto_approve=effective_auto_approve,
+        approvers=current_pipeline.approvers or [],
+        approval_policy=current_pipeline.approval_policy or "any",
+        created_by=creator_id,
+        initial_task=handoff_task,
+    )
+    db.add(new_pipeline)
+
+    session.pipeline_id = new_pipeline_id
+    await db.commit()
+
+    _queues[new_pipeline_id] = asyncio.Queue(maxsize=1000)
+    _event_logs[new_pipeline_id] = []
+
+    _push(
+        new_pipeline_id,
+        "pipeline_created",
+        method_id=target_method,
+        effective_method_id=effective_method_id,
+        stack_override=requested_stack,
+        source="method_switch",
+        from_pipeline_id=pipeline_id,
+        from_method_id=current_pipeline.method_id,
+        phases=[{"name": p["name"], "role": p["role"], "model": p.get("model")} for p in template_phases],
+        auto_approve=effective_auto_approve,
+        interaction_mode=(body.interaction_mode or "autonomous").strip().lower(),
+        delegate_qa_to_agent=bool(body.delegate_qa_to_agent),
+    )
+
+    await _advance_to_next(new_pipeline_id)
+
+    return {
+        "ok": True,
+        "pipeline": new_pipeline.to_dict(),
+        "from_pipeline_id": pipeline_id,
+        "from_method_id": current_pipeline.method_id,
+        "to_method_id": effective_method_id,
     }
 
 
