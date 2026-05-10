@@ -56,6 +56,7 @@ _CANONICAL_TYPE_MAP: Dict[str, str] = {
     "spawn_requested": "run.spawn_requested",
     "spawn_approved": "run.spawn_approved",
     "spawn_rejected": "run.spawn_rejected",
+    "undo_last_agent": "run.undo_last_agent",
     "retry_with_prompt": "run.retry_with_prompt",
     "override_result": "run.override_result",
     "alternative_selected": "run.alternative_selected",

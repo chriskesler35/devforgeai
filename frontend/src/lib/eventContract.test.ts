@@ -12,6 +12,7 @@ test('resolveEventType maps canonical values for shared aliases', () => {
   assert.equal(resolveEventType({ canonical_type: 'run.spawn_requested', type: 'legacy_spawn_req' }), 'spawn_requested')
   assert.equal(resolveEventType({ canonical_type: 'run.spawn_approved', type: 'legacy_spawn_ok' }), 'spawn_approved')
   assert.equal(resolveEventType({ canonical_type: 'run.spawn_rejected', type: 'legacy_spawn_no' }), 'spawn_rejected')
+  assert.equal(resolveEventType({ canonical_type: 'run.undo_last_agent', type: 'legacy_undo' }), 'undo_last_agent')
   assert.equal(resolveEventType({ canonical_type: 'run.alternative_selected', type: 'legacy_alt' }), 'alternative_selected')
 })
 

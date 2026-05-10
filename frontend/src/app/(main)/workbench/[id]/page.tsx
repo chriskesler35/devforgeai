@@ -79,6 +79,7 @@ const EVENT_STYLE: Record<string, { icon: string; color: string; label: string }
   spawn_requested:{ icon: '📝', color: 'text-amber-700 dark:text-amber-400',   label: 'Spawn Requested' },
   spawn_approved:{ icon: '✅', color: 'text-emerald-700 dark:text-emerald-400', label: 'Spawn Approved' },
   spawn_rejected:{ icon: '🚫', color: 'text-red-700 dark:text-red-400',         label: 'Spawn Rejected' },
+  undo_last_agent:{ icon: '↩️', color: 'text-cyan-700 dark:text-cyan-400',      label: 'Undo' },
   retry_with_prompt:{ icon: '↻', color: 'text-indigo-600 dark:text-indigo-400', label: 'Retry'        },
   override_result:{ icon: '🛠️', color: 'text-emerald-600 dark:text-emerald-400', label: 'Override'    },
   ping:          { icon: '·',  color: 'text-gray-300',                          label: ''             },
@@ -577,6 +578,7 @@ export default function WorkbenchSessionPage() {
   const [spawnEditPrompt, setSpawnEditPrompt] = useState('')
   const [approvingSpawn, setApprovingSpawn] = useState(false)
   const [rejectingSpawn, setRejectingSpawn] = useState(false)
+  const [undoingLastAgent, setUndoingLastAgent] = useState(false)
 
   const streamRef = useRef<EventSource | null>(null)
   const streamEndRef = useRef<HTMLDivElement>(null)
@@ -1078,6 +1080,32 @@ export default function WorkbenchSessionPage() {
       alert(`Failed to reject spawn: ${e.message}`)
     } finally {
       setRejectingSpawn(false)
+    }
+  }
+
+  const undoLastAgent = async () => {
+    if (!confirm('Undo the last agent turn? This may delete created files and restore modified files from HEAD.')) return
+    const reason = prompt('Reason for undo (optional):') || ''
+    setUndoingLastAgent(true)
+    try {
+      const res = await fetch(`${API_BASE}/v1/workbench/sessions/${id}/undo-last-agent`, {
+        method: 'POST',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify({ reason: reason.trim() || null }),
+      })
+      const payload = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setStatus('waiting')
+      setWaitingForHuman(true)
+      const deletedCount = Array.isArray(payload?.deleted_files) ? payload.deleted_files.length : 0
+      const restoredCount = Array.isArray(payload?.restored_files) ? payload.restored_files.length : 0
+      if (deletedCount > 0 || restoredCount > 0) {
+        alert(`Undo complete. Deleted ${deletedCount} created file(s), restored ${restoredCount} modified file(s).`)
+      }
+    } catch (e: any) {
+      alert(`Undo failed: ${e.message}`)
+    } finally {
+      setUndoingLastAgent(false)
     }
   }
 
@@ -1619,11 +1647,19 @@ export default function WorkbenchSessionPage() {
             </button>
           )}
           {status === 'waiting' && (
-            <button onClick={completeSession}
-              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-green-600 hover:bg-green-700 text-white transition-colors"
-              title="Mark session as complete — closes it out, no more follow-ups">
-              ✓ Mark complete
-            </button>
+            <>
+              <button onClick={undoLastAgent}
+                disabled={undoingLastAgent}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg border border-cyan-300 text-cyan-700 hover:bg-cyan-50 transition-colors disabled:opacity-50"
+                title="Undo last agent turn (best effort)">
+                {undoingLastAgent ? 'Undoing…' : 'Undo Last Agent'}
+              </button>
+              <button onClick={completeSession}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-green-600 hover:bg-green-700 text-white transition-colors"
+                title="Mark session as complete — closes it out, no more follow-ups">
+                ✓ Mark complete
+              </button>
+            </>
           )}
         </div>
       </div>

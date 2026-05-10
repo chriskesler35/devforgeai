@@ -34,6 +34,7 @@ const DEFAULT_CANONICAL_EVENT_ALIAS: Record<string, string> = {
   'run.spawn_requested': 'spawn_requested',
   'run.spawn_approved': 'spawn_approved',
   'run.spawn_rejected': 'spawn_rejected',
+  'run.undo_last_agent': 'undo_last_agent',
   'run.retry_with_prompt': 'retry_with_prompt',
   'run.override_result': 'override_result',
   'run.alternative_selected': 'alternative_selected',

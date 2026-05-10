@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import re
+import subprocess
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, AsyncGenerator, Literal
@@ -87,6 +88,10 @@ class WorkbenchSpawnApproveBody(BaseModel):
 
 
 class WorkbenchSpawnRejectBody(BaseModel):
+    reason: Optional[str] = None
+
+
+class WorkbenchUndoBody(BaseModel):
     reason: Optional[str] = None
 
 
@@ -1757,6 +1762,128 @@ async def select_alternative_result(session_id: str, body: WorkbenchAlternativeB
         confidence=body.confidence,
     )
     return {"ok": True, "status": "waiting"}
+
+
+@router.post("/sessions/{session_id}/undo-last-agent", dependencies=[Depends(verify_api_key)])
+async def undo_last_agent_turn(session_id: str, body: Optional[WorkbenchUndoBody] = None):
+    """Best-effort undo for the last agent turn (history + touched files)."""
+    from app.models.workbench import WorkbenchSession
+
+    async with AsyncSessionLocal() as db:
+        session = (await db.execute(
+            select(WorkbenchSession).where(WorkbenchSession.id == session_id)
+        )).scalar_one_or_none()
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.status == "running":
+        raise HTTPException(status_code=409, detail="Cannot undo while session is running")
+
+    history = list(session.messages or [])
+    events = list(session.events_log or _event_logs.get(session_id, []))
+
+    # Locate the last interactive user turn (ignore synthetic system-note rows).
+    last_user_idx = -1
+    for idx in range(len(history) - 1, -1, -1):
+        msg = history[idx] or {}
+        if msg.get("role") == "user" and not str(msg.get("content") or "").startswith("[system-note]"):
+            last_user_idx = idx
+            break
+
+    if last_user_idx < 0:
+        raise HTTPException(status_code=409, detail="No user turn found to undo")
+
+    trimmed_history = history[:last_user_idx]
+
+    # Collect files touched in the last turn from event log tail.
+    last_user_event_idx = -1
+    for idx in range(len(events) - 1, -1, -1):
+        if str(events[idx].get("type") or "") == "user_message":
+            last_user_event_idx = idx
+            break
+
+    turn_events = events[last_user_event_idx + 1:] if last_user_event_idx >= 0 else []
+    created_files = []
+    modified_files = []
+    for evt in turn_events:
+        evt_type = str(evt.get("type") or "")
+        path = str((evt.get("payload") or {}).get("path") or "").strip()
+        if not path:
+            continue
+        if evt_type == "file_created":
+            created_files.append(path)
+        elif evt_type == "file_modified":
+            modified_files.append(path)
+
+    project_path = Path(session.project_path) if session.project_path else None
+    deleted_files: list[str] = []
+    restored_files: list[str] = []
+    skipped_files: list[str] = []
+
+    if project_path and project_path.exists():
+        # Delete newly created files from last turn.
+        for rel in created_files:
+            target = (project_path / rel.lstrip("/\\")).resolve()
+            if not str(target).startswith(str(project_path.resolve())):
+                skipped_files.append(rel)
+                continue
+            try:
+                if target.exists() and target.is_file():
+                    target.unlink()
+                    deleted_files.append(rel)
+                else:
+                    skipped_files.append(rel)
+            except Exception:
+                skipped_files.append(rel)
+
+        # Restore modified tracked files from HEAD when possible.
+        for rel in modified_files:
+            try:
+                result = subprocess.run(
+                    ["git", "-C", str(project_path), "restore", "--", rel],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if result.returncode == 0:
+                    restored_files.append(rel)
+                else:
+                    skipped_files.append(rel)
+            except Exception:
+                skipped_files.append(rel)
+    else:
+        skipped_files.extend(created_files)
+        skipped_files.extend(modified_files)
+
+    # Recompute files list by removing files deleted by undo.
+    remaining_files = [
+        f for f in list(session.files or [])
+        if f not in set(deleted_files)
+    ]
+
+    reason = (body.reason or "").strip() if body else ""
+    reason_txt = reason if reason else "No reason provided"
+    await _db_update(
+        session_id,
+        messages=trimmed_history,
+        files=remaining_files,
+        status="waiting",
+    )
+    _push(
+        session_id,
+        "undo_last_agent",
+        reason=reason_txt,
+        deleted_files=deleted_files,
+        restored_files=restored_files,
+        skipped_files=skipped_files,
+    )
+    return {
+        "ok": True,
+        "status": "waiting",
+        "deleted_files": deleted_files,
+        "restored_files": restored_files,
+        "skipped_files": skipped_files,
+    }
 
 
 @router.get("/sessions/{session_id}/agentic", dependencies=[Depends(verify_api_key)])
