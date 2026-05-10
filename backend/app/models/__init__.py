@@ -25,9 +25,11 @@ from app.models.notification import Notification
 from app.models.custom_workflow import CustomWorkflow
 from app.models.oauth_credential import OAuthCredential
 from app.models.installed_skill import InstalledSkill
+from app.models.model_verification import ModelVerification
+from app.models.provider_health import ProviderHealth
 
 __all__ = [
-    "Base", "BaseMixin", "Provider", "Model", "Persona",
+    "Base", "BaseMixin", "Provider", "Model", "ModelVerification", "ProviderHealth", "Persona",
     "Conversation", "Message", "ConversationShare", "RequestLog",
     "UserProfile", "MemoryFile", "PreferenceTracking", "SystemModification",
     "Agent", "AgentMemory", "AgentRun", "Task", "WorkbenchSession", "Pipeline", "PhaseRun", "CommandExecution",
