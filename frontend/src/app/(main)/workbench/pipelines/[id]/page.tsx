@@ -1174,6 +1174,10 @@ export default function PipelinePage() {
   const [connectionState, setConnectionState] = useState<'connecting' | 'live' | 'reconnecting'>('connecting')
   const [tickNow, setTickNow] = useState(() => Date.now())
   const [phaseResolution, setPhaseResolution] = useState<Record<string, { resolved_model: string | null; persona_name: string | null }>>({})
+  const [methodRating, setMethodRating] = useState<'excellent' | 'good' | 'ok' | 'poor' | ''>('')
+  const [methodReview, setMethodReview] = useState('')
+  const [submittingMethodFeedback, setSubmittingMethodFeedback] = useState(false)
+  const [methodFeedbackSubmitted, setMethodFeedbackSubmitted] = useState(false)
 
   // Escape closes the read-only artifact modal
   useEffect(() => {
@@ -1692,6 +1696,31 @@ export default function PipelinePage() {
     }
   }, [apiBase, authHeaders, guidance, pipelineId])
 
+  const submitMethodFeedback = useCallback(async () => {
+    if (!methodRating || !pipeline) return
+    setSubmittingMethodFeedback(true)
+    try {
+      const res = await fetch(`${apiBase}/v1/feedback/methods`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          method_id: (pipeline.method_id || 'pipeline').toLowerCase(),
+          workflow_type: 'pipeline',
+          rating: methodRating,
+          review_text: methodReview.trim() || null,
+          session_id: pipeline.session_id,
+          pipeline_id: pipeline.id,
+        }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setMethodFeedbackSubmitted(true)
+    } catch (e: any) {
+      setActionError(e.message || 'Failed to submit method feedback')
+    } finally {
+      setSubmittingMethodFeedback(false)
+    }
+  }, [apiBase, authHeaders, methodRating, methodReview, pipeline])
+
   const pipelineStatus = pipeline?.status || 'pending'
   const statusBadge = STATUS_STYLE[pipelineStatus] || STATUS_STYLE.pending
   const totalTokens = phaseRuns.reduce((sum, r) => sum + (r.input_tokens || 0) + (r.output_tokens || 0), 0)
@@ -2076,6 +2105,47 @@ export default function PipelinePage() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {pipeline.status === 'completed' && (
+        <div className="rounded-2xl border border-cyan-200 dark:border-cyan-800 bg-cyan-50 dark:bg-cyan-900/20 px-4 py-3 space-y-2">
+          <div className="text-sm font-semibold text-cyan-900 dark:text-cyan-100">How was this method?</div>
+          {methodFeedbackSubmitted ? (
+            <div className="text-xs text-cyan-800 dark:text-cyan-200">Thanks for the feedback. Your rating has been recorded.</div>
+          ) : (
+            <>
+              <div className="grid grid-cols-4 gap-2 max-w-md">
+                {([
+                  ['excellent', 'Excellent'],
+                  ['good', 'Good'],
+                  ['ok', 'OK'],
+                  ['poor', 'Poor'],
+                ] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    onClick={() => setMethodRating(value)}
+                    className={`px-2 py-1 text-xs rounded border ${methodRating === value ? 'border-cyan-500 bg-cyan-100 text-cyan-900' : 'border-cyan-300 bg-white text-cyan-800 hover:bg-cyan-100'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <input
+                value={methodReview}
+                onChange={(e) => setMethodReview(e.target.value)}
+                placeholder="Optional review"
+                className="w-full max-w-xl rounded border border-cyan-300 dark:border-cyan-700 bg-white dark:bg-gray-800 text-xs px-2 py-1.5 text-gray-700 dark:text-gray-200"
+              />
+              <button
+                onClick={submitMethodFeedback}
+                disabled={!methodRating || submittingMethodFeedback}
+                className="px-3 py-1.5 text-xs font-medium rounded bg-cyan-600 hover:bg-cyan-700 text-white disabled:opacity-50"
+              >
+                {submittingMethodFeedback ? 'Submitting…' : 'Submit Feedback'}
+              </button>
+            </>
+          )}
         </div>
       )}
 

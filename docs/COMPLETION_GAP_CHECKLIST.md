@@ -93,7 +93,7 @@ Current summary: method/workflow concepts exist in backend and UI areas, but acc
 9. MISSING - Interactive project creation Q&A with rich progress/breadcrumb/next steps
 10. MISSING - Method switching with context handoff guarantees
 11. MISSING - Marketplace UX depth (categories, preview, ratings, install loop)
-12. MISSING - Post-method feedback collection/aggregation
+12. PARTIAL - Post-method feedback now captured from completed session/pipeline flows and aggregated via /v1/feedback/methods/summary; marketplace ratings UX still missing
 
 ### Pattern 2 Remaining Work Packs
 

@@ -579,6 +579,10 @@ export default function WorkbenchSessionPage() {
   const [approvingSpawn, setApprovingSpawn] = useState(false)
   const [rejectingSpawn, setRejectingSpawn] = useState(false)
   const [undoingLastAgent, setUndoingLastAgent] = useState(false)
+  const [methodRating, setMethodRating] = useState<'excellent' | 'good' | 'ok' | 'poor' | ''>('')
+  const [methodReview, setMethodReview] = useState('')
+  const [submittingMethodFeedback, setSubmittingMethodFeedback] = useState(false)
+  const [methodFeedbackSubmitted, setMethodFeedbackSubmitted] = useState(false)
 
   const streamRef = useRef<EventSource | null>(null)
   const streamEndRef = useRef<HTMLDivElement>(null)
@@ -1106,6 +1110,30 @@ export default function WorkbenchSessionPage() {
       alert(`Undo failed: ${e.message}`)
     } finally {
       setUndoingLastAgent(false)
+    }
+  }
+
+  const submitMethodFeedback = async () => {
+    if (!methodRating) return
+    setSubmittingMethodFeedback(true)
+    try {
+      const res = await fetch(`${API_BASE}/v1/feedback/methods`, {
+        method: 'POST',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify({
+          method_id: (session?.agent_type || 'session').toLowerCase(),
+          workflow_type: 'session',
+          rating: methodRating,
+          review_text: methodReview.trim() || null,
+          session_id: id,
+        }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setMethodFeedbackSubmitted(true)
+    } catch (e: any) {
+      alert(`Failed to submit feedback: ${e.message}`)
+    } finally {
+      setSubmittingMethodFeedback(false)
     }
   }
 
@@ -1679,6 +1707,49 @@ export default function WorkbenchSessionPage() {
 
         {/* CENTER: Conversation timeline */}
         <div className="flex-1 flex flex-col min-w-0 min-h-0">
+          {(status === 'completed' || status === 'cancelled' || status === 'killed') && (
+            <div className="flex-shrink-0 border-b border-cyan-200 dark:border-cyan-800 bg-cyan-50 dark:bg-cyan-900/20 px-4 py-3 space-y-2">
+              <div className="text-xs font-semibold text-cyan-900 dark:text-cyan-100">How was this method?</div>
+              {methodFeedbackSubmitted ? (
+                <div className="text-xs text-cyan-800 dark:text-cyan-200">Thanks for the feedback. This rating now contributes to method quality summaries.</div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {([
+                      ['excellent', 'Excellent'],
+                      ['good', 'Good'],
+                      ['ok', 'OK'],
+                      ['poor', 'Poor'],
+                    ] as const).map(([value, label]) => (
+                      <button
+                        key={value}
+                        onClick={() => setMethodRating(value)}
+                        className={`px-2 py-1 text-xs rounded border ${methodRating === value ? 'border-cyan-500 bg-cyan-100 text-cyan-900' : 'border-cyan-300 bg-white text-cyan-800 hover:bg-cyan-100'}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <input
+                    value={methodReview}
+                    onChange={(e) => setMethodReview(e.target.value)}
+                    placeholder="Optional review"
+                    className="w-full rounded border border-cyan-300 dark:border-cyan-700 bg-white dark:bg-gray-800 text-xs px-2 py-1.5 text-gray-700 dark:text-gray-200"
+                  />
+                  <div className="flex justify-end">
+                    <button
+                      onClick={submitMethodFeedback}
+                      disabled={!methodRating || submittingMethodFeedback}
+                      className="px-3 py-1.5 text-xs font-medium rounded bg-cyan-600 hover:bg-cyan-700 text-white disabled:opacity-50"
+                    >
+                      {submittingMethodFeedback ? 'Submitting…' : 'Submit Feedback'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
           {status === 'awaiting_approval' && (
             <div className="flex-shrink-0 border-b border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 space-y-2">
               <div className="text-xs font-semibold text-amber-900 dark:text-amber-200">Approval gate: spawn this agent?</div>
