@@ -7,6 +7,7 @@ import VoiceAudioTab from '@/components/VoiceAudioTab'
 import MediaConverterTab from '@/components/MediaConverterTab'
 import { RemoteAccessTab } from './remote'
 import { useToast } from '@/app/ToastProvider'
+import { useSearchParams } from 'next/navigation'
 
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/api'
@@ -106,7 +107,19 @@ interface ClearImpact {
   has_references: boolean
 }
 
-function ApiKeysTab() {
+type ProviderSlug = keyof typeof PROVIDER_META
+
+function normalizeProviderSlug(value: string | null): ProviderSlug | null {
+  if (!value) return null
+  const normalized = value.trim().toLowerCase()
+  if (!normalized) return null
+  if (normalized === 'api-keys' || normalized === 'apikeys') return null
+  return Object.prototype.hasOwnProperty.call(PROVIDER_META, normalized)
+    ? (normalized as ProviderSlug)
+    : null
+}
+
+function ApiKeysTab({ preferredProvider }: { preferredProvider?: ProviderSlug | null }) {
   const { addToast } = useToast()
   const [keys, setKeys] = useState<KeyStatus[]>([])
   const [loading, setLoading] = useState(true)
@@ -444,6 +457,11 @@ function ApiKeysTab() {
   const openProviderEditor = (provider: string) => {
     setEditing((current) => ({ ...current, [provider]: current[provider] ?? '' }))
   }
+
+  useEffect(() => {
+    if (!preferredProvider) return
+    openProviderEditor(preferredProvider)
+  }, [preferredProvider])
 
   const describeProvider = (provider: string) => {
     const inventory = providerInventory[provider]
@@ -1571,6 +1589,7 @@ function ServerTab() {
 }
 
 export default function SettingsPage() {
+  const searchParams = useSearchParams()
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [memoryFiles, setMemoryFiles] = useState<MemoryFile[]>([])
   const [loading, setLoading] = useState(true)
@@ -1588,6 +1607,37 @@ export default function SettingsPage() {
   })
   const [updateStatus, setUpdateStatus] = useState<import('@/lib/types').UpdateStatus | null>(null)
   const [checkingUpdates, setCheckingUpdates] = useState(false)
+
+  const preferredProvider = normalizeProviderSlug(searchParams.get('provider'))
+
+  useEffect(() => {
+    const requested = (searchParams.get('tab') || '').trim().toLowerCase()
+    if (!requested) {
+      if (preferredProvider) setActiveTab('apikeys')
+      return
+    }
+    if (requested === 'api-keys' || requested === 'apikeys') {
+      setActiveTab('apikeys')
+      return
+    }
+    const allowed = new Set([
+      'identity',
+      'profile',
+      'memory',
+      'preferences',
+      'voice',
+      'conversations',
+      'apikeys',
+      'remote',
+      'images',
+      'media',
+      'server',
+      'budget',
+    ])
+    if (allowed.has(requested)) {
+      setActiveTab(requested as any)
+    }
+  }, [searchParams, preferredProvider])
 
   const checkForUpdates = useCallback(async (force = false) => {
     try {
@@ -2075,7 +2125,7 @@ export default function SettingsPage() {
             <h2 className="text-lg font-semibold text-gray-900">API Keys</h2>
             <p className="text-sm text-gray-500 mt-1">Manage provider API keys. Changes are applied immediately.</p>
           </div>
-          <ApiKeysTab />
+          <ApiKeysTab preferredProvider={preferredProvider} />
         </div>
       )}
 

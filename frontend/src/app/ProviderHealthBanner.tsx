@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { getApiBase, getAuthToken } from '@/lib/config'
 
@@ -52,6 +53,10 @@ export default function ProviderHealthBanner() {
   if (dismissed || unhealthy.length === 0) return null
 
   const names = unhealthy.map((p) => p.provider_name).join(', ')
+  const targetProvider = unhealthy[0]?.provider_id
+  const fixHref = targetProvider
+    ? `/settings?tab=api-keys&provider=${encodeURIComponent(targetProvider)}`
+    : '/settings?tab=api-keys'
 
   return (
     <div className="w-full border-b border-amber-300 bg-amber-50 text-amber-900 px-4 py-2 text-sm">
@@ -60,6 +65,12 @@ export default function ProviderHealthBanner() {
         <span className="flex-1">
           {names} currently report degraded or failed status. Update provider credentials or run health checks.
         </span>
+        <Link
+          href={fixHref}
+          className="rounded border border-amber-600 bg-amber-100 px-2 py-1 text-xs font-medium hover:bg-amber-200"
+        >
+          Fix credentials
+        </Link>
         <button
           type="button"
           className="rounded border border-amber-500 px-2 py-1 text-xs hover:bg-amber-100"
