@@ -180,6 +180,29 @@ async def _db_update(session_id: str, **kwargs):
         logger.warning(f"DB update failed for workbench session {session_id}: {e}")
 
 
+async def _discard_pending_commands_for_session(session_id: str, reason: str) -> int:
+    """Mark pending approval commands as rejected so pause has no partial command leftovers."""
+    from app.models.command_execution import CommandExecution
+
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(
+            select(CommandExecution)
+            .where(CommandExecution.session_id == session_id)
+            .where(CommandExecution.status == "pending")
+        )).scalars().all()
+
+        if not rows:
+            return 0
+
+        now = datetime.utcnow()
+        for cmd in rows:
+            cmd.status = "rejected"
+            cmd.user_feedback = reason
+            cmd.completed_at = now
+        await db.commit()
+        return len(rows)
+
+
 # ─── Project path resolver ────────────────────────────────────────────────────
 def _resolve_project_path(project_id: Optional[str], project_path: Optional[str]) -> Optional[Path]:
     """Look up project path from projects.json or use the provided path directly."""
@@ -1040,6 +1063,14 @@ async def _run_turn(
         confidence=confidence,
         alternatives=alternatives,
     )
+    if confidence is not None and confidence < 70:
+        _push(
+            session_id,
+            "verification_required",
+            message="Low-confidence result detected; user verification required before proceeding.",
+            confidence=confidence,
+            alternatives=alternatives,
+        )
     state_machine.transition(AgenticRunState.COMPLETED)
     _push_agentic_state(session_id, state_machine.current, "verifier", files_changed=len(written))
     _push(session_id, "done",
@@ -1548,11 +1579,25 @@ async def pause_session(session_id: str):
         if session.status in {"completed", "cancelled", "failed"}:
             raise HTTPException(status_code=409, detail=f"Cannot pause session in status '{session.status}'")
 
+    discarded_pending = await _discard_pending_commands_for_session(
+        session_id,
+        "Session paused by user; pending commands were discarded before execution.",
+    )
     _pending_messages[session_id] = "paused"
     _push(session_id, "info", message="Pause requested…")
     await _db_update(session_id, status="paused")
-    _push(session_id, "session_paused", message="Session paused by user.", status="paused")
-    return {"ok": True, "status": "paused"}
+    _push(
+        session_id,
+        "session_paused",
+        message="Session paused by user.",
+        status="paused",
+        discarded_pending_commands=discarded_pending,
+    )
+    return {
+        "ok": True,
+        "status": "paused",
+        "discarded_pending_commands": discarded_pending,
+    }
 
 
 @router.post("/sessions/pause-all", dependencies=[Depends(verify_api_key)])
@@ -1561,6 +1606,7 @@ async def pause_all_sessions():
     from app.models.workbench import WorkbenchSession
 
     paused_ids: list[str] = []
+    discarded_pending_total = 0
     async with AsyncSessionLocal() as db:
         rows = (await db.execute(
             select(WorkbenchSession).where(WorkbenchSession.status.in_(["running", "pending", "waiting"]))
@@ -1568,12 +1614,28 @@ async def pause_all_sessions():
 
     for sess in rows:
         sid = str(sess.id)
+        discarded_pending = await _discard_pending_commands_for_session(
+            sid,
+            "Session paused by global control; pending commands were discarded before execution.",
+        )
+        discarded_pending_total += discarded_pending
         _pending_messages[sid] = "paused"
         await _db_update(sid, status="paused")
-        _push(sid, "session_paused", message="Session paused by global control.", status="paused")
+        _push(
+            sid,
+            "session_paused",
+            message="Session paused by global control.",
+            status="paused",
+            discarded_pending_commands=discarded_pending,
+        )
         paused_ids.append(sid)
 
-    return {"ok": True, "paused_count": len(paused_ids), "session_ids": paused_ids}
+    return {
+        "ok": True,
+        "paused_count": len(paused_ids),
+        "session_ids": paused_ids,
+        "discarded_pending_commands": discarded_pending_total,
+    }
 
 
 @router.post("/sessions/resume-all", dependencies=[Depends(verify_api_key)])

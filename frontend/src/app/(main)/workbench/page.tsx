@@ -238,6 +238,13 @@ export default function WorkbenchListPage() {
 
   useEffect(() => { fetchSessions() }, [fetchSessions])
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      fetchSessions()
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [fetchSessions])
+
   // Auto-open new session modal if coming from a project or agent
   // Also check window.location as fallback (searchParams can be null on first render)
   useEffect(() => {
@@ -682,7 +689,12 @@ export default function WorkbenchListPage() {
       const authHeaders = getAuthHeaders()
       const res = await fetch(`${apiBase}/v1/workbench/sessions/pause-all`, { method: 'POST', headers: authHeaders })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const payload = await res.json().catch(() => ({}))
+      const discarded = Number(payload?.discarded_pending_commands || 0)
       await fetchSessions()
+      if (discarded > 0) {
+        alert(`Paused all agents. Discarded ${discarded} pending command(s) to prevent partial execution.`)
+      }
     } catch (e: any) {
       alert(`Pause all failed: ${e.message}`)
     } finally {
@@ -814,6 +826,25 @@ export default function WorkbenchListPage() {
   const launchExplainabilityStack = effectiveLaunchStack.length > 0 ? effectiveLaunchStack : (asPipeline ? [pipelineMethod] : [])
   const activeSessionCount = sessions.filter(s => s.status === 'running' || s.status === 'pending' || s.status === 'waiting').length
   const pausedSessionCount = sessions.filter(s => s.status === 'paused').length
+  const globalAgentRows = [
+    ...sessions.map((s) => ({
+      id: s.id,
+      kind: 'session' as const,
+      label: s.agent_type || 'agent',
+      detail: s.task,
+      status: s.status,
+      href: `/workbench/${s.id}`,
+    })),
+    ...pipelines.map((p) => ({
+      id: p.id,
+      kind: 'pipeline' as const,
+      label: p.method_id,
+      detail: p.initial_task,
+      status: p.status,
+      href: `/workbench/pipelines/${p.id}`,
+    })),
+  ]
+  const liveAgentRows = globalAgentRows.filter((row) => ['running', 'pending', 'waiting', 'paused', 'awaiting_approval'].includes(row.status))
 
   return (
     <div className="space-y-6">
@@ -891,6 +922,35 @@ export default function WorkbenchListPage() {
         >
           Open Run Center
         </button>
+      </div>
+
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-4 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-100">Global Agent Monitor</h2>
+          <span className="text-xs text-gray-500">Live: {liveAgentRows.length}</span>
+        </div>
+        {liveAgentRows.length === 0 ? (
+          <div className="text-xs text-gray-500">No active agents or pipelines right now.</div>
+        ) : (
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {liveAgentRows.slice(0, 18).map((row) => (
+              <button
+                key={`${row.kind}-${row.id}`}
+                onClick={() => router.push(row.href)}
+                className="text-left rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 px-3 py-2 hover:border-indigo-300 transition-colors"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">{row.kind}</span>
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${STATUS_COLOR[row.status] || 'bg-gray-100 text-gray-600'}`}>
+                    {STATUS_LABEL[row.status] || row.status}
+                  </span>
+                </div>
+                <div className="mt-1 text-xs font-semibold text-gray-800 dark:text-gray-100 truncate">{row.label}</div>
+                <div className="text-[11px] text-gray-600 dark:text-gray-300 line-clamp-2">{row.detail}</div>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {loading ? (

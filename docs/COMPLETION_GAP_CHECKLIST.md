@@ -11,24 +11,20 @@ Scope source: REQUIREMENTS.md acceptance criteria for Pattern 1, Pattern 2, Patt
 
 ## Pattern 1 Acceptance Matrix (Agent Transparency and Control)
 
-1. PARTIAL - Agent state badge visible on all running agents
-- Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (agent state badge + styles)
-- Gap: coverage appears session-centric; not a dedicated global all-agents monitor list.
+1. DONE - Agent state badge visible on all running agents
+- Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (session-level state badges), frontend/src/app/(main)/workbench/page.tsx (Global Agent Monitor with live status badges)
 
-2. PARTIAL - Execution graph rendered in real-time with correct parent-child relationships
-- Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (Execution Graph view + active pulse)
-- Gap: current graph is primarily linear turn handoff; requirement calls for true DAG parent-child relationship view.
+2. DONE - Execution graph rendered in real-time with correct parent-child relationships
+- Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (event-derived parent-child DAG nodes with depth/parent metadata and active branch indicators)
 
 3. DONE - Prompt Inspector shows exact system prompt + context + diff
 - Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (Prompt Inspector, context injected, diff vs previous turn, copy raw)
 
-4. PARTIAL - Agent conversation transcripts are complete and searchable
-- Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (Transcript search/filter + exports)
-- Gap: transcript appears turn-centric; full inter-agent/tool-thread completeness is not fully proven.
+4. DONE - Agent conversation transcripts are complete and searchable
+- Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (turn transcript + full event-thread transcript scope with shared search)
 
-5. PARTIAL - Pause All Agents works (all agents halt, no partial results)
-- Evidence: backend/app/routes/workbench.py (/sessions/pause-all, /sessions/resume-all), frontend/src/app/(main)/workbench/page.tsx (Pause/Resume All controls)
-- Gap: strict "no partial results" semantics are not explicitly guaranteed in acceptance-level verification.
+5. DONE - Pause All Agents works (all agents halt, no partial results)
+- Evidence: backend/app/routes/workbench.py (/sessions/pause-all discards pending commands before execution and reports discarded counts), frontend/src/app/(main)/workbench/page.tsx (global pause feedback with discarded pending command count)
 
 6. DONE - Override Result accepts user input and feeds parent flow
 - Evidence: backend/app/routes/workbench.py (/sessions/{session_id}/override), frontend/src/app/(main)/workbench/[id]/page.tsx (Override Result action)
@@ -42,33 +38,28 @@ Scope source: REQUIREMENTS.md acceptance criteria for Pattern 1, Pattern 2, Patt
 9. DONE - Kill Agent cascade impact is calculated and exposed before confirm
 - Evidence: backend/app/routes/workbench.py (/kill-impact + /kill), frontend/src/app/(main)/workbench/[id]/page.tsx (kill confirmation workflow)
 
-10. PARTIAL - Confidence scores display and trigger verification prompts
-- Evidence: backend/app/routes/workbench.py (_extract_confidence_and_alternatives), frontend/src/app/(main)/workbench/[id]/page.tsx (confidence badge and low-confidence handling)
-- Gap: acceptance wording implies stronger verification gating policy; current behavior is user-prompt driven.
+10. DONE - Confidence scores display and trigger verification prompts
+- Evidence: backend/app/routes/workbench.py (verification_required event for low-confidence replies), frontend/src/app/(main)/workbench/[id]/page.tsx (verification gate blocks next instruction until accept/override/alternative)
 
 11. DONE - Alternative results are selectable
 - Evidence: backend/app/routes/workbench.py (/select-alternative), frontend/src/app/(main)/workbench/[id]/page.tsx (alternative selection UI)
 
-12. PARTIAL - Agent Monitor view shows all agents in real-time
-- Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (Agent Monitor tab and monitor views)
-- Gap: current monitor is session-scoped, not clearly a global all-agent monitor.
+12. DONE - Agent Monitor view shows all agents in real-time
+- Evidence: frontend/src/app/(main)/workbench/page.tsx (Global Agent Monitor across sessions + pipelines with periodic refresh), frontend/src/app/(main)/workbench/[id]/page.tsx (session monitor)
 
-13. PARTIAL - Agent Detail modal has all 5 tabs and correct data
-- Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (timeline/transcript/prompt/graph/feed views)
-- Gap: requirement specifies dedicated modal with exact tab contract; current implementation is integrated panel.
+13. DONE - Agent Detail modal has all 5 tabs and correct data
+- Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (dedicated Agent Detail modal with Timeline/Transcript/Prompt/Graph/Live Feed tabs)
 
-14. PARTIAL - Execution graph animated and color-coded correctly
-- Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (state color badges, active pulse)
-- Gap: still not a full DAG implementation.
+14. DONE - Execution graph animated and color-coded correctly
+- Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (state-color badges from agent lifecycle map + active branch animation in DAG view)
 
-15. PARTIAL - Live Feed updates in real-time and is searchable with deep-linking
-- Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (Live Feed + filters + monitorView query support)
-- Gap: deep-linking to specific feed entries/agents is limited.
+15. DONE - Live Feed updates in real-time and is searchable with deep-linking
+- Evidence: frontend/src/app/(main)/workbench/[id]/page.tsx (live searchable feed + per-entry deep-link copy using panel/view/event query params)
 
 ### Pattern 1 Summary
 
-- DONE: 6
-- PARTIAL: 9
+- DONE: 15
+- PARTIAL: 0
 - MISSING: 0
 
 ## Pattern 2 Acceptance Matrix (Methods-First Workflows)
@@ -157,9 +148,7 @@ Status: DONE across documented acceptance criteria in this repository snapshot.
 
 ## Remaining High-Impact Gaps (Priority)
 
-1. Upgrade Pattern 1 execution graph from linear handoff visualization to true DAG parent-child model (Pattern 1 items 2, 14).
-2. Expand Pattern 1 monitoring scope from session-centric views to a global all-agent monitor surface (Pattern 1 items 1, 12).
-3. Strengthen Pattern 1 live feed deep-linking and strict operational guarantees for pause/confidence flows (Pattern 1 items 5, 10, 15).
+None. Pattern 1, Pattern 2, and Pattern 3 acceptance matrices are now fully marked DONE in this repository snapshot.
 
 ## Definition of Fully Completed
 

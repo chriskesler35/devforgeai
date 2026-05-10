@@ -73,6 +73,7 @@ const EVENT_STYLE: Record<string, { icon: string; color: string; label: string }
   agent_reply:   { icon: '🤖', color: 'text-emerald-600 dark:text-emerald-400', label: 'Agent'       },
   info:          { icon: 'ℹ️',  color: 'text-gray-500 dark:text-gray-400',      label: 'Info'         },
   done:          { icon: '✅', color: 'text-green-600 dark:text-green-400',    label: 'Done'         },
+  verification_required: { icon: '🧪', color: 'text-amber-700 dark:text-amber-300', label: 'Verify' },
   session_paused:{ icon: '⏸️', color: 'text-amber-600 dark:text-amber-400',    label: 'Paused'       },
   session_resumed:{ icon: '▶️', color: 'text-blue-600 dark:text-blue-400',     label: 'Resumed'      },
   session_killed:{ icon: '🛑', color: 'text-red-700 dark:text-red-400',        label: 'Killed'       },
@@ -559,8 +560,10 @@ export default function WorkbenchSessionPage() {
   const [showBypassWarning, setShowBypassWarning] = useState(false)
   const [showCommandLog, setShowCommandLog] = useState(false)
   const [rightPanelTab, setRightPanelTab] = useState<'files' | 'agent'>('files')
+  const [agentDetailModalOpen, setAgentDetailModalOpen] = useState(false)
   const [selectedMonitorEvent, setSelectedMonitorEvent] = useState<number | null>(null)
   const [monitorView, setMonitorView] = useState<'timeline' | 'transcript' | 'prompt' | 'graph' | 'feed'>('timeline')
+  const [transcriptScope, setTranscriptScope] = useState<'turns' | 'events'>('turns')
   const [monitorSearch, setMonitorSearch] = useState('')
   const [monitorStateFilter, setMonitorStateFilter] = useState('all')
   const [monitorTypeFilter, setMonitorTypeFilter] = useState('all')
@@ -583,6 +586,7 @@ export default function WorkbenchSessionPage() {
   const [methodReview, setMethodReview] = useState('')
   const [submittingMethodFeedback, setSubmittingMethodFeedback] = useState(false)
   const [methodFeedbackSubmitted, setMethodFeedbackSubmitted] = useState(false)
+  const [verificationRequired, setVerificationRequired] = useState(false)
 
   const streamRef = useRef<EventSource | null>(null)
   const streamEndRef = useRef<HTMLDivElement>(null)
@@ -689,6 +693,12 @@ export default function WorkbenchSessionPage() {
           )
         }
         if (type === 'waiting') {
+          setWaitingForHuman(true)
+          setStatus('waiting')
+          inputRef.current?.focus()
+        }
+        if (type === 'verification_required') {
+          setVerificationRequired(true)
           setWaitingForHuman(true)
           setStatus('waiting')
           inputRef.current?.focus()
@@ -861,6 +871,10 @@ export default function WorkbenchSessionPage() {
 
   const sendIntervention = useCallback(async () => {
     if (!intervention.trim() || sending) return
+    if (verificationRequired) {
+      alert('Verification is required before continuing. Accept, override, or select an alternative first.')
+      return
+    }
     setSending(true)
     const msg = intervention.trim()
     const res = await fetch(`${API_BASE}/v1/workbench/sessions/${id}/message`, {
@@ -872,6 +886,7 @@ export default function WorkbenchSessionPage() {
       // locally here or we get a duplicate. Just flip state + clear input.
       setStatus('running')
       setWaitingForHuman(false)
+      setVerificationRequired(false)
       setIntervention('')
     }
     setSending(false)
@@ -948,6 +963,7 @@ export default function WorkbenchSessionPage() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       setStatus('waiting')
       setWaitingForHuman(true)
+      setVerificationRequired(false)
       setRightPanelTab('agent')
     } catch (e: any) {
       alert(`Override failed: ${e.message}`)
@@ -970,6 +986,7 @@ export default function WorkbenchSessionPage() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       setStatus('waiting')
       setWaitingForHuman(true)
+      setVerificationRequired(false)
       setRightPanelTab('agent')
       setLowConfidenceModalOpen(false)
     } catch (e: any) {
@@ -1313,6 +1330,31 @@ export default function WorkbenchSessionPage() {
       })
   }, [mergedTurns, monitorSearch])
 
+  const transcriptEventRows = useMemo(() => {
+    const needle = monitorSearch.trim().toLowerCase()
+    return agentTimeline
+      .map((item) => {
+        const payloadText = JSON.stringify(item.evt.payload || {})
+        return {
+          index: item.eventIndex,
+          ts: item.evt.ts,
+          eventType: item.eventType,
+          state: item.state,
+          summary: item.summary,
+          payloadText,
+        }
+      })
+      .filter((row) => {
+        if (!needle) return true
+        return (
+          row.summary.toLowerCase().includes(needle)
+          || row.eventType.toLowerCase().includes(needle)
+          || row.state.toLowerCase().includes(needle)
+          || row.payloadText.toLowerCase().includes(needle)
+        )
+      })
+  }, [agentTimeline, monitorSearch])
+
   const promptInspectorTurns = useMemo(() => {
     return mergedTurns.map((turn, index) => {
       const previous = index > 0 ? mergedTurns[index - 1] : null
@@ -1350,20 +1392,103 @@ export default function WorkbenchSessionPage() {
   }, [mergedTurns, session?.model, session?.project_id, session?.project_path, session?.task])
 
   const executionGraphNodes = useMemo(() => {
-    return mergedTurns.map((turn, index) => {
-      const state = turn.turnStatus === 'error' ? 'ERROR' : (index === mergedTurns.length - 1 && isActive ? 'EXECUTING' : 'YIELDED')
-      const contextBytes = (turn.userMessage || '').length + (turn.agentReply || '').length
-      const label = turn.role || 'agent'
-      const summary = turn.agentReply || turn.agentActivities.join(' | ') || turn.error || '(in progress)'
-      return {
-        index,
-        state,
+    type GraphNode = {
+      id: string
+      parentId: string | null
+      depth: number
+      state: string
+      label: string
+      summary: string
+      contextBytes: number
+      eventIndex: number | null
+      isTurnRoot: boolean
+    }
+
+    const nodes: GraphNode[] = []
+    const depthById = new Map<string, number>()
+    let turnCounter = 0
+
+    const createTurnRoot = (label: string) => {
+      const id = `turn-${turnCounter}`
+      turnCounter += 1
+      depthById.set(id, 0)
+      nodes.push({
+        id,
+        parentId: null,
+        depth: 0,
+        state: 'YIELDED',
         label,
-        contextBytes,
-        summary,
+        summary: label,
+        contextBytes: label.length,
+        eventIndex: null,
+        isTurnRoot: true,
+      })
+      return id
+    }
+
+    let currentTurnRootId = session?.task ? createTurnRoot('Initial task') : createTurnRoot('Session start')
+    let latestReasoningNodeId = currentTurnRootId
+    let latestActionNodeId = currentTurnRootId
+
+    const reasoningTypes = new Set(['agent_thought', 'info', 'phase_progress', 'phase_thinking'])
+    const actionTypes = new Set(['tool_call', 'command_running', 'command_completed', 'command_awaiting_approval', 'command_approved', 'command_rejected'])
+    const artifactTypes = new Set(['file_created', 'file_modified'])
+    const terminalTypes = new Set(['agent_reply', 'done', 'error', 'verification_required', 'session_paused', 'session_resumed'])
+
+    for (const item of agentTimeline) {
+      const eventType = item.eventType
+      if (eventType === 'user_message') {
+        currentTurnRootId = createTurnRoot(`User turn ${turnCounter}`)
+        latestReasoningNodeId = currentTurnRootId
+        latestActionNodeId = currentTurnRootId
+        continue
       }
-    })
-  }, [mergedTurns, isActive])
+
+      const nodeId = `event-${item.eventIndex}`
+      let parentId = currentTurnRootId
+
+      if (reasoningTypes.has(eventType)) {
+        parentId = latestReasoningNodeId || currentTurnRootId
+      } else if (actionTypes.has(eventType)) {
+        parentId = latestReasoningNodeId || latestActionNodeId || currentTurnRootId
+      } else if (artifactTypes.has(eventType)) {
+        parentId = latestActionNodeId || latestReasoningNodeId || currentTurnRootId
+      } else if (terminalTypes.has(eventType)) {
+        parentId = latestActionNodeId || latestReasoningNodeId || currentTurnRootId
+      }
+
+      const parentDepth = depthById.get(parentId) ?? 0
+      const depth = parentDepth + 1
+      depthById.set(nodeId, depth)
+      nodes.push({
+        id: nodeId,
+        parentId,
+        depth,
+        state: item.state,
+        label: eventType,
+        summary: item.summary,
+        contextBytes: JSON.stringify(item.evt.payload || {}).length,
+        eventIndex: item.eventIndex,
+        isTurnRoot: false,
+      })
+
+      if (reasoningTypes.has(eventType)) {
+        latestReasoningNodeId = nodeId
+        latestActionNodeId = nodeId
+      } else if (actionTypes.has(eventType) || artifactTypes.has(eventType) || terminalTypes.has(eventType)) {
+        latestActionNodeId = nodeId
+      }
+    }
+
+    if (nodes.length > 0 && isActive) {
+      const last = nodes[nodes.length - 1]
+      if (!last.isTurnRoot) {
+        last.state = last.state === 'IDLE' ? 'EXECUTING' : last.state
+      }
+    }
+
+    return nodes
+  }, [agentTimeline, isActive, session?.task])
 
   const selectedPromptTurn = selectedPromptTurnIndex != null
     ? promptInspectorTurns[selectedPromptTurnIndex] || null
@@ -1438,6 +1563,7 @@ export default function WorkbenchSessionPage() {
     setLowConfidenceCandidate(latestResultSnapshot)
     setSelectedAlternativeIndex(0)
     setLowConfidenceModalOpen(true)
+    setVerificationRequired(true)
     setLastLowConfidenceEventIndex(latestResultSnapshot.eventIndex)
   }, [latestResultSnapshot, lastLowConfidenceEventIndex])
 
@@ -1484,6 +1610,19 @@ export default function WorkbenchSessionPage() {
     link.click()
     document.body.removeChild(link)
     URL.revokeObjectURL(url)
+  }, [])
+
+  const copyEntryDeepLink = useCallback(async (eventIndex: number, view: 'timeline' | 'feed') => {
+    if (typeof window === 'undefined') return
+    const url = new URL(window.location.href)
+    url.searchParams.set('panel', 'agent')
+    url.searchParams.set('av', view)
+    url.searchParams.set('ae', String(eventIndex))
+    try {
+      await navigator.clipboard.writeText(url.toString())
+    } catch {
+      // Clipboard can fail in restricted contexts.
+    }
   }, [])
 
   const exportMonitorJson = useCallback(() => {
@@ -1941,6 +2080,11 @@ export default function WorkbenchSessionPage() {
               ? 'border-orange-300 dark:border-orange-600 bg-orange-50 dark:bg-orange-900/10'
               : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900'
           } px-4 py-3`}>
+            {verificationRequired && (
+              <div className="mb-2 rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
+                Verification required: resolve low-confidence output before sending the next instruction.
+              </div>
+            )}
             {waitingForHuman && (
               <div className="flex items-center gap-2 mb-2 text-xs font-medium text-orange-600 dark:text-orange-400">
                 <span className="w-2 h-2 rounded-full bg-orange-400 animate-pulse" />
@@ -2025,6 +2169,12 @@ export default function WorkbenchSessionPage() {
                 <div className="text-[10px] text-gray-500 dark:text-gray-400">
                   {session?.agent_type || 'agent'} · {session?.model || 'unknown model'}
                 </div>
+                <button
+                  onClick={() => setAgentDetailModalOpen(true)}
+                  className="w-full px-2 py-1 text-[10px] rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                >
+                  Open Agent Detail Modal
+                </button>
               </div>
             )}
           </div>
@@ -2256,7 +2406,18 @@ export default function WorkbenchSessionPage() {
                               </span>
                             </div>
                             <div className="mt-1 text-[11px] text-gray-800 dark:text-gray-200 truncate">{item.summary}</div>
-                            <div className="text-[10px] text-gray-400">{item.eventType}</div>
+                            <div className="text-[10px] text-gray-400 flex items-center justify-between">
+                              <span>{item.eventType}</span>
+                              <span
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  copyEntryDeepLink(item.eventIndex, 'timeline')
+                                }}
+                                className="text-indigo-600 hover:text-indigo-700"
+                              >
+                                copy link
+                              </span>
+                            </div>
                           </button>
                         )
                       })
@@ -2284,34 +2445,77 @@ export default function WorkbenchSessionPage() {
                     <div className="px-2 py-1.5 bg-gray-50 dark:bg-gray-800/50 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                       Transcript
                     </div>
-                    <div className="p-2 border-y border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900">
+                    <div className="p-2 border-y border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 space-y-2">
+                      <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-100 dark:bg-gray-800 p-1">
+                        <button
+                          onClick={() => setTranscriptScope('turns')}
+                          className={`px-2 py-1 text-[10px] font-medium rounded transition-colors ${
+                            transcriptScope === 'turns'
+                              ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                              : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                          }`}
+                        >
+                          Turn transcript
+                        </button>
+                        <button
+                          onClick={() => setTranscriptScope('events')}
+                          className={`px-2 py-1 text-[10px] font-medium rounded transition-colors ${
+                            transcriptScope === 'events'
+                              ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                              : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                          }`}
+                        >
+                          Full event thread
+                        </button>
+                      </div>
                       <input
                         value={monitorSearch}
                         onChange={(e) => setMonitorSearch(e.target.value)}
-                        placeholder="Search turns by user text, agent text, files, role"
+                        placeholder={transcriptScope === 'turns' ? 'Search turns by user text, agent text, files, role' : 'Search event thread by payload, type, or state'}
                         className="w-full rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-xs px-2 py-1 text-gray-700 dark:text-gray-200"
                       />
                     </div>
                     <div className="max-h-80 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
-                      {transcriptRows.length === 0 ? (
-                        <div className="px-2 py-3 text-xs text-gray-400">No transcript rows match current filters.</div>
-                      ) : (
-                        transcriptRows.map((row) => (
-                          <div key={row.index} className="px-2 py-2 space-y-1.5">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Turn {row.index + 1}</span>
-                              <span className={`px-1.5 py-0.5 rounded border text-[9px] font-semibold ${row.status === 'error' ? AGENT_STATE_STYLE.ERROR : AGENT_STATE_STYLE.YIELDED}`}>
-                                {row.status}
-                              </span>
+                      {transcriptScope === 'turns' ? (
+                        transcriptRows.length === 0 ? (
+                          <div className="px-2 py-3 text-xs text-gray-400">No transcript rows match current filters.</div>
+                        ) : (
+                          transcriptRows.map((row) => (
+                            <div key={row.index} className="px-2 py-2 space-y-1.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Turn {row.index + 1}</span>
+                                <span className={`px-1.5 py-0.5 rounded border text-[9px] font-semibold ${row.status === 'error' ? AGENT_STATE_STYLE.ERROR : AGENT_STATE_STYLE.YIELDED}`}>
+                                  {row.status}
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-indigo-700 dark:text-indigo-300">Role: {row.role}</div>
+                              <div className="text-[11px] text-gray-700 dark:text-gray-200 whitespace-pre-wrap">{row.userText}</div>
+                              <div className="text-[11px] text-gray-600 dark:text-gray-300 whitespace-pre-wrap border-l-2 border-gray-200 dark:border-gray-700 pl-2">{row.agentText}</div>
+                              {row.filesTouched.length > 0 && (
+                                <div className="text-[10px] text-gray-500">Files: {row.filesTouched.join(', ')}</div>
+                              )}
                             </div>
-                            <div className="text-[10px] text-indigo-700 dark:text-indigo-300">Role: {row.role}</div>
-                            <div className="text-[11px] text-gray-700 dark:text-gray-200 whitespace-pre-wrap">{row.userText}</div>
-                            <div className="text-[11px] text-gray-600 dark:text-gray-300 whitespace-pre-wrap border-l-2 border-gray-200 dark:border-gray-700 pl-2">{row.agentText}</div>
-                            {row.filesTouched.length > 0 && (
-                              <div className="text-[10px] text-gray-500">Files: {row.filesTouched.join(', ')}</div>
-                            )}
-                          </div>
-                        ))
+                          ))
+                        )
+                      ) : (
+                        transcriptEventRows.length === 0 ? (
+                          <div className="px-2 py-3 text-xs text-gray-400">No event-thread rows match current filters.</div>
+                        ) : (
+                          transcriptEventRows.map((row) => (
+                            <button
+                              key={`event-thread-${row.index}`}
+                              onClick={() => setSelectedMonitorEvent(row.index)}
+                              className={`w-full text-left px-2 py-2 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors ${selectedMonitorEvent === row.index ? 'bg-indigo-50 dark:bg-indigo-900/20' : ''}`}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[10px] font-mono text-gray-500">{new Date(row.ts).toLocaleTimeString()}</span>
+                                <span className={`px-1.5 py-0.5 rounded border text-[9px] font-semibold ${AGENT_STATE_STYLE[row.state] || AGENT_STATE_STYLE.IDLE}`}>{row.state}</span>
+                              </div>
+                              <div className="mt-1 text-[11px] text-gray-800 dark:text-gray-200 truncate">{row.summary}</div>
+                              <div className="text-[10px] text-gray-400">{row.eventType}</div>
+                            </button>
+                          ))
+                        )
                       )}
                     </div>
                   </div>
@@ -2416,43 +2620,41 @@ export default function WorkbenchSessionPage() {
                     {executionGraphNodes.length === 0 ? (
                       <div className="px-2 py-3 text-xs text-gray-400">No graph nodes yet.</div>
                     ) : (
-                      <div className="p-2 overflow-x-auto">
-                        <div className="inline-flex items-center gap-2 min-w-max">
-                          {executionGraphNodes.map((node, idx) => (
-                            <div key={node.index} className="inline-flex items-center gap-2">
-                              <button
-                                onClick={() => {
-                                  setSelectedPromptTurnIndex(node.index)
-                                  setMonitorView('prompt')
-                                }}
-                                title={node.summary}
-                                className="min-w-28 max-w-36 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-2 text-left hover:border-indigo-300 transition-colors"
-                              >
-                                <div className="flex items-center justify-between gap-1">
-                                  <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">T{node.index + 1}</span>
-                                  <span className={`px-1 py-0.5 rounded border text-[9px] font-semibold ${AGENT_STATE_STYLE[node.state] || AGENT_STATE_STYLE.IDLE}`}>
-                                    {node.state}
-                                  </span>
-                                </div>
-                                <div className="mt-1 text-[11px] text-gray-800 dark:text-gray-200 truncate">{node.label}</div>
-                                <div className="text-[10px] text-gray-500 truncate">{node.contextBytes} ctx chars</div>
-                                {idx === executionGraphNodes.length - 1 && isActive && (
-                                  <div className="mt-1 text-[10px] text-indigo-600 animate-pulse">active</div>
-                                )}
-                              </button>
-                              {idx < executionGraphNodes.length - 1 && (
-                                <div className="flex flex-col items-center text-[10px] text-gray-400 min-w-12">
-                                  <span>→</span>
-                                  <span>handoff</span>
-                                </div>
-                              )}
+                      <div className="p-2 space-y-1.5 max-h-80 overflow-auto">
+                        {executionGraphNodes.map((node) => (
+                          <button
+                            key={node.id}
+                            onClick={() => {
+                              if (node.eventIndex != null) {
+                                setSelectedMonitorEvent(node.eventIndex)
+                                setMonitorView('timeline')
+                              }
+                            }}
+                            title={node.summary}
+                            className="w-full text-left rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-2 hover:border-indigo-300 transition-colors"
+                            style={{ marginLeft: `${Math.min(node.depth, 6) * 14}px`, width: `calc(100% - ${Math.min(node.depth, 6) * 14}px)` }}
+                          >
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                                {node.isTurnRoot ? node.label : node.label.replaceAll('_', ' ')}
+                              </span>
+                              <span className={`px-1 py-0.5 rounded border text-[9px] font-semibold ${AGENT_STATE_STYLE[node.state] || AGENT_STATE_STYLE.IDLE}`}>
+                                {node.state}
+                              </span>
                             </div>
-                          ))}
-                        </div>
+                            <div className="mt-1 text-[11px] text-gray-800 dark:text-gray-200 truncate">{node.summary}</div>
+                            <div className="text-[10px] text-gray-500 truncate">
+                              depth {node.depth} · {node.contextBytes} payload chars{node.parentId ? ` · parent ${node.parentId}` : ''}
+                            </div>
+                            {!node.isTurnRoot && isActive && node.state !== 'YIELDED' && node.state !== 'COMPLETED' && (
+                              <div className="mt-1 text-[10px] text-indigo-600 animate-pulse">active branch</div>
+                            )}
+                          </button>
+                        ))}
                       </div>
                     )}
                     <div className="px-2 py-1.5 border-t border-gray-100 dark:border-gray-800 text-[10px] text-gray-500">
-                      Click a node to inspect the turn prompt and context diff.
+                      Parent-child branches are derived from event relationships inside each turn.
                     </div>
                   </div>
                 ) : (
@@ -2521,7 +2723,18 @@ export default function WorkbenchSessionPage() {
                                 <span className="text-[10px] font-mono text-gray-500">{new Date(row.evt.ts).toLocaleTimeString()}</span>
                               </div>
                               <div className="mt-1 text-[11px] text-gray-800 dark:text-gray-200 truncate">{row.summary}</div>
-                              <div className="text-[10px] text-gray-400">{row.eventType} · {row.state}</div>
+                              <div className="text-[10px] text-gray-400 flex items-center justify-between gap-2">
+                                <span>{row.eventType} · {row.state}</span>
+                                <span
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    copyEntryDeepLink(row.eventIndex, 'feed')
+                                  }}
+                                  className="text-indigo-600 hover:text-indigo-700"
+                                >
+                                  copy link
+                                </span>
+                              </div>
                             </button>
                           )
                         })
@@ -2685,7 +2898,10 @@ export default function WorkbenchSessionPage() {
             </div>
             <div className="px-6 py-3 border-t border-gray-200 dark:border-gray-800 flex flex-wrap gap-2 justify-end">
               <button
-                onClick={() => setLowConfidenceModalOpen(false)}
+                onClick={() => {
+                  setVerificationRequired(false)
+                  setLowConfidenceModalOpen(false)
+                }}
                 className="px-3 py-1.5 text-xs font-medium rounded border border-gray-300 text-gray-700 hover:bg-gray-50"
               >
                 Yes (accept)
@@ -2713,6 +2929,104 @@ export default function WorkbenchSessionPage() {
               >
                 No (use selected alternative)
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {agentDetailModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setAgentDetailModalOpen(false)}>
+          <div className="w-full max-w-4xl bg-white dark:bg-gray-900 rounded-2xl shadow-2xl overflow-hidden border border-gray-300" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-3 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
+              <div>
+                <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">Agent Detail</div>
+                <div className="text-[11px] text-gray-500">Session {id} · {session?.agent_type || 'agent'} · {status}</div>
+              </div>
+              <button onClick={() => setAgentDetailModalOpen(false)} className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50">Close</button>
+            </div>
+
+            <div className="p-3 space-y-3">
+              <div className="grid grid-cols-5 gap-1 rounded-lg bg-gray-100 dark:bg-gray-800 p-1">
+                <button onClick={() => setMonitorView('timeline')} className={`px-2 py-1 text-xs rounded ${monitorView === 'timeline' ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100' : 'text-gray-500'}`}>Timeline</button>
+                <button onClick={() => setMonitorView('transcript')} className={`px-2 py-1 text-xs rounded ${monitorView === 'transcript' ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100' : 'text-gray-500'}`}>Transcript</button>
+                <button onClick={() => setMonitorView('prompt')} className={`px-2 py-1 text-xs rounded ${monitorView === 'prompt' ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100' : 'text-gray-500'}`}>Prompt</button>
+                <button onClick={() => setMonitorView('graph')} className={`px-2 py-1 text-xs rounded ${monitorView === 'graph' ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100' : 'text-gray-500'}`}>Graph</button>
+                <button onClick={() => setMonitorView('feed')} className={`px-2 py-1 text-xs rounded ${monitorView === 'feed' ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100' : 'text-gray-500'}`}>Live Feed</button>
+              </div>
+
+              <div className="rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40 p-2">
+                <input
+                  value={monitorSearch}
+                  onChange={(e) => setMonitorSearch(e.target.value)}
+                  placeholder="Search current tab"
+                  className="w-full rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-xs px-2 py-1"
+                />
+              </div>
+
+              <div className="max-h-[60vh] overflow-auto rounded border border-gray-200 dark:border-gray-700">
+                {monitorView === 'timeline' && (
+                  <div className="divide-y divide-gray-100 dark:divide-gray-800">
+                    {filteredAgentTimeline.slice(-120).map((item) => (
+                      <div key={`modal-timeline-${item.eventIndex}`} className="px-3 py-2 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-mono text-gray-500">{new Date(item.evt.ts).toLocaleTimeString()}</span>
+                          <span className={`px-1.5 py-0.5 rounded border text-[10px] ${AGENT_STATE_STYLE[item.state] || AGENT_STATE_STYLE.IDLE}`}>{item.state}</span>
+                        </div>
+                        <div className="mt-1 text-gray-800 dark:text-gray-200">{item.summary}</div>
+                        <div className="text-gray-400">{item.eventType}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {monitorView === 'transcript' && (
+                  <div className="divide-y divide-gray-100 dark:divide-gray-800">
+                    {transcriptRows.map((row) => (
+                      <div key={`modal-transcript-${row.index}`} className="px-3 py-2 text-xs space-y-1">
+                        <div className="font-semibold text-gray-600">Turn {row.index + 1} · {row.role}</div>
+                        <div className="text-gray-800 dark:text-gray-200 whitespace-pre-wrap">User: {row.userText}</div>
+                        <div className="text-gray-600 dark:text-gray-300 whitespace-pre-wrap">Agent: {row.agentText}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {monitorView === 'prompt' && (
+                  <div className="p-3 text-xs space-y-2">
+                    <div className="font-semibold text-gray-600">Prompt Inspector (latest turn)</div>
+                    <pre className="whitespace-pre-wrap break-all bg-gray-50 dark:bg-gray-800/50 rounded p-2 text-gray-700 dark:text-gray-300">{selectedPromptTurn?.rawPrompt || 'No prompt data yet.'}</pre>
+                  </div>
+                )}
+
+                {monitorView === 'graph' && (
+                  <div className="p-2 space-y-1.5">
+                    {executionGraphNodes.map((node) => (
+                      <div key={`modal-graph-${node.id}`} className="rounded border border-gray-200 dark:border-gray-700 p-2" style={{ marginLeft: `${Math.min(node.depth, 6) * 14}px` }}>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-semibold text-gray-700 dark:text-gray-200">{node.label}</span>
+                          <span className={`px-1.5 py-0.5 rounded border text-[10px] ${AGENT_STATE_STYLE[node.state] || AGENT_STATE_STYLE.IDLE}`}>{node.state}</span>
+                        </div>
+                        <div className="text-[11px] text-gray-600 dark:text-gray-300 truncate">{node.summary}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {monitorView === 'feed' && (
+                  <div className="divide-y divide-gray-100 dark:divide-gray-800">
+                    {liveFeedRows.slice(0, 120).map((row) => (
+                      <div key={`modal-feed-${row.eventIndex}`} className="px-3 py-2 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className={`px-1.5 py-0.5 rounded border text-[10px] ${row.categoryColor}`}>{row.feedTitle}</span>
+                          <span className="font-mono text-gray-500">{new Date(row.evt.ts).toLocaleTimeString()}</span>
+                        </div>
+                        <div className="mt-1 text-gray-800 dark:text-gray-200">{row.summary}</div>
+                        <div className="text-gray-400">{row.eventType} · {row.state}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
