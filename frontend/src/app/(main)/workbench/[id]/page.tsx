@@ -511,7 +511,7 @@ export default function WorkbenchSessionPage() {
   const [showCommandLog, setShowCommandLog] = useState(false)
   const [rightPanelTab, setRightPanelTab] = useState<'files' | 'agent'>('files')
   const [selectedMonitorEvent, setSelectedMonitorEvent] = useState<number | null>(null)
-  const [monitorView, setMonitorView] = useState<'timeline' | 'transcript' | 'prompt'>('timeline')
+  const [monitorView, setMonitorView] = useState<'timeline' | 'transcript' | 'prompt' | 'graph'>('timeline')
   const [monitorSearch, setMonitorSearch] = useState('')
   const [monitorStateFilter, setMonitorStateFilter] = useState('all')
   const [monitorTypeFilter, setMonitorTypeFilter] = useState('all')
@@ -697,7 +697,7 @@ export default function WorkbenchSessionPage() {
     if (panel === 'agent' || panel === 'files') {
       setRightPanelTab(panel)
     }
-    if (monitorViewParam === 'timeline' || monitorViewParam === 'transcript' || monitorViewParam === 'prompt') {
+    if (monitorViewParam === 'timeline' || monitorViewParam === 'transcript' || monitorViewParam === 'prompt' || monitorViewParam === 'graph') {
       setMonitorView(monitorViewParam)
     }
     if (Number.isInteger(deepLinkEvent) && deepLinkEvent >= 0) {
@@ -1005,6 +1005,22 @@ export default function WorkbenchSessionPage() {
       }
     })
   }, [mergedTurns, session?.model, session?.project_id, session?.project_path, session?.task])
+
+  const executionGraphNodes = useMemo(() => {
+    return mergedTurns.map((turn, index) => {
+      const state = turn.turnStatus === 'error' ? 'ERROR' : (index === mergedTurns.length - 1 && isActive ? 'EXECUTING' : 'YIELDED')
+      const contextBytes = (turn.userMessage || '').length + (turn.agentReply || '').length
+      const label = turn.role || 'agent'
+      const summary = turn.agentReply || turn.agentActivities.join(' | ') || turn.error || '(in progress)'
+      return {
+        index,
+        state,
+        label,
+        contextBytes,
+        summary,
+      }
+    })
+  }, [mergedTurns, isActive])
 
   const selectedPromptTurn = selectedPromptTurnIndex != null
     ? promptInspectorTurns[selectedPromptTurnIndex] || null
@@ -1568,7 +1584,7 @@ export default function WorkbenchSessionPage() {
                 </div>
 
                 <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-2 space-y-2">
-                  <div className="grid grid-cols-3 gap-1 rounded-lg bg-gray-100 dark:bg-gray-800 p-1">
+                  <div className="grid grid-cols-4 gap-1 rounded-lg bg-gray-100 dark:bg-gray-800 p-1">
                     <button
                       onClick={() => setMonitorView('timeline')}
                       className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
@@ -1598,6 +1614,16 @@ export default function WorkbenchSessionPage() {
                       }`}
                     >
                       Prompt Inspector
+                    </button>
+                    <button
+                      onClick={() => setMonitorView('graph')}
+                      className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
+                        monitorView === 'graph'
+                          ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                          : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                      }`}
+                    >
+                      Graph
                     </button>
                   </div>
                   <div className="flex items-center gap-1.5">
@@ -1694,6 +1720,22 @@ export default function WorkbenchSessionPage() {
                     )}
                   </div>
                 </div>
+                {selectedAgentEvent && (
+                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+                    <div className="px-2 py-1.5 bg-gray-50 dark:bg-gray-800/50 flex items-center justify-between">
+                      <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Event Payload</span>
+                      <button
+                        onClick={() => setSelectedMonitorEvent(null)}
+                        className="text-[10px] text-gray-500 hover:text-gray-700"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    <pre className="p-2 text-[11px] font-mono whitespace-pre-wrap break-all text-gray-700 dark:text-gray-300 max-h-56 overflow-auto">
+                      {JSON.stringify(selectedAgentEvent, null, 2)}
+                    </pre>
+                  </div>
+                )}
                 ) : monitorView === 'transcript' ? (
                   <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
                     <div className="px-2 py-1.5 bg-gray-50 dark:bg-gray-800/50 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
@@ -1730,24 +1772,7 @@ export default function WorkbenchSessionPage() {
                       )}
                     </div>
                   </div>
-                )}
-
-                {selectedAgentEvent && (
-                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-                    <div className="px-2 py-1.5 bg-gray-50 dark:bg-gray-800/50 flex items-center justify-between">
-                      <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Event Payload</span>
-                      <button
-                        onClick={() => setSelectedMonitorEvent(null)}
-                        className="text-[10px] text-gray-500 hover:text-gray-700"
-                      >
-                        Clear
-                      </button>
-                    </div>
-                    <pre className="p-2 text-[11px] font-mono whitespace-pre-wrap break-all text-gray-700 dark:text-gray-300 max-h-56 overflow-auto">
-                      {JSON.stringify(selectedAgentEvent, null, 2)}
-                    </pre>
-                  </div>
-                ) : (
+                ) : monitorView === 'prompt' ? (
                   <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
                     <div className="px-2 py-1.5 bg-gray-50 dark:bg-gray-800/50 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                       Prompt Inspector
@@ -1839,6 +1864,53 @@ export default function WorkbenchSessionPage() {
                         </div>
                       </>
                     )}
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+                    <div className="px-2 py-1.5 bg-gray-50 dark:bg-gray-800/50 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                      Execution Graph
+                    </div>
+                    {executionGraphNodes.length === 0 ? (
+                      <div className="px-2 py-3 text-xs text-gray-400">No graph nodes yet.</div>
+                    ) : (
+                      <div className="p-2 overflow-x-auto">
+                        <div className="inline-flex items-center gap-2 min-w-max">
+                          {executionGraphNodes.map((node, idx) => (
+                            <div key={node.index} className="inline-flex items-center gap-2">
+                              <button
+                                onClick={() => {
+                                  setSelectedPromptTurnIndex(node.index)
+                                  setMonitorView('prompt')
+                                }}
+                                title={node.summary}
+                                className="min-w-28 max-w-36 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-2 text-left hover:border-indigo-300 transition-colors"
+                              >
+                                <div className="flex items-center justify-between gap-1">
+                                  <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">T{node.index + 1}</span>
+                                  <span className={`px-1 py-0.5 rounded border text-[9px] font-semibold ${AGENT_STATE_STYLE[node.state] || AGENT_STATE_STYLE.IDLE}`}>
+                                    {node.state}
+                                  </span>
+                                </div>
+                                <div className="mt-1 text-[11px] text-gray-800 dark:text-gray-200 truncate">{node.label}</div>
+                                <div className="text-[10px] text-gray-500 truncate">{node.contextBytes} ctx chars</div>
+                                {idx === executionGraphNodes.length - 1 && isActive && (
+                                  <div className="mt-1 text-[10px] text-indigo-600 animate-pulse">active</div>
+                                )}
+                              </button>
+                              {idx < executionGraphNodes.length - 1 && (
+                                <div className="flex flex-col items-center text-[10px] text-gray-400 min-w-12">
+                                  <span>→</span>
+                                  <span>handoff</span>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="px-2 py-1.5 border-t border-gray-100 dark:border-gray-800 text-[10px] text-gray-500">
+                      Click a node to inspect the turn prompt and context diff.
+                    </div>
                   </div>
                 )}
               </div>
