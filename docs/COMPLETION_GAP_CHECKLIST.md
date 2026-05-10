@@ -22,7 +22,7 @@ Scope source: REQUIREMENTS.md (Pattern 1, Pattern 2, Pattern 3 acceptance criter
 8. PARTIAL - Model Health Dashboard shows real-time metrics (backend endpoint exists; UI and richer metrics incomplete)
 9. PARTIAL - Selection decisions are logged (currently logger output, not durable queryable store)
 10. DONE - Provider health check endpoint exists and works
-11. PARTIAL - Provider credential management UI shows status and actions (backend exists; UI flow incomplete)
+11. DONE - Provider credential management UI now shows live per-provider health status, credential/connectivity signals, and refresh action
 12. DONE - Background health monitoring runs periodically
 13. PARTIAL - Degraded provider auto-disabled in model selection (auto-deactivation exists; policy thresholding and observability incomplete)
 14. DONE - Global provider-health warning banner includes direct Fix credentials action into Settings -> API Keys with provider focus

@@ -40,6 +40,18 @@ interface ProviderInventory {
   active_model_count: number
 }
 
+interface ProviderHealthSummary {
+  provider_id: string
+  provider_name: string
+  health_status: 'ok' | 'degraded' | 'failed' | 'unknown' | string
+  credential_status: 'valid' | 'invalid' | 'unchecked' | string
+  connectivity_status: 'ok' | 'error' | 'unchecked' | string
+  last_checked_at?: string | null
+  message?: string | null
+  notes?: string | null
+}
+}
+
 interface RuntimeCredentialStatus {
   openai_oauth: {
     provider: string
@@ -133,6 +145,8 @@ function ApiKeysTab({ preferredProvider }: { preferredProvider?: ProviderSlug | 
   const [providerActionBusy, setProviderActionBusy] = useState<Record<string, boolean>>({})
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeCredentialStatus | null>(null)
   const [providerInventory, setProviderInventory] = useState<Record<string, ProviderInventory>>({})
+  const [providerHealth, setProviderHealth] = useState<Record<string, ProviderHealthSummary>>({})
+  const [providerHealthLoading, setProviderHealthLoading] = useState(false)
   const [copilotDevice, setCopilotDevice] = useState<{ user_code: string; verification_uri: string; device_code: string; status: 'pending' | 'ok' | 'error'; error?: string } | null>(null)
 
   const fetchRuntimeStatus = useCallback(async () => {
@@ -171,11 +185,29 @@ function ApiKeysTab({ preferredProvider }: { preferredProvider?: ProviderSlug | 
     }
   }, [])
 
+  const fetchProviderHealth = useCallback(async () => {
+    try {
+      setProviderHealthLoading(true)
+      const res = await fetch(`${API_BASE}/v1/providers/health/all`, { headers: AUTH_HEADERS })
+      if (!res.ok) return
+      const data = (await res.json()) as ProviderHealthSummary[]
+      const healthByName = Object.fromEntries(
+        (data || []).map((item) => [item.provider_name, item])
+      )
+      setProviderHealth(healthByName)
+    } catch (e) {
+      console.error('Failed to fetch provider health', e)
+    } finally {
+      setProviderHealthLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     fetchKeys()
     fetchRuntimeStatus()
     fetchProviderInventory()
-  }, [fetchKeys, fetchRuntimeStatus, fetchProviderInventory])
+    fetchProviderHealth()
+  }, [fetchKeys, fetchRuntimeStatus, fetchProviderInventory, fetchProviderHealth])
 
   const saveKey = async (provider: string) => {
     const value = editing[provider]?.trim()
@@ -549,6 +581,7 @@ function ApiKeysTab({ preferredProvider }: { preferredProvider?: ProviderSlug | 
       }
       await fetchProviderInventory()
       await fetchRuntimeStatus()
+      await fetchProviderHealth()
       addToast({
         type: 'success',
         title: `${title} test completed`,
@@ -567,11 +600,55 @@ function ApiKeysTab({ preferredProvider }: { preferredProvider?: ProviderSlug | 
     }
   }
 
+  const healthBadgeClass = (status: string) => {
+    if (status === 'ok') return 'bg-emerald-100 text-emerald-800 border-emerald-200'
+    if (status === 'degraded') return 'bg-amber-100 text-amber-800 border-amber-200'
+    if (status === 'failed') return 'bg-rose-100 text-rose-800 border-rose-200'
+    return 'bg-slate-100 text-slate-700 border-slate-200'
+  }
+
   return (
     <div className="space-y-4">
       <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 text-sm text-slate-700">
         <strong>Provider setup lives here.</strong> Each card below shows the supported connection methods for that provider,
         which method is recommended, and what is currently blocking it. Changes are hot-reloaded, so you do not need to restart the app after connecting a provider.
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white p-4">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold text-slate-900">Provider health status</h3>
+          <button
+            type="button"
+            onClick={() => fetchProviderHealth()}
+            disabled={providerHealthLoading}
+            className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            {providerHealthLoading ? 'Refreshing…' : 'Refresh health'}
+          </button>
+        </div>
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {(Object.keys(PROVIDER_META) as ProviderSlug[]).map((provider) => {
+            const health = providerHealth[provider]
+            const healthStatus = health?.health_status || 'unknown'
+            const credential = health?.credential_status || 'unchecked'
+            const connectivity = health?.connectivity_status || 'unchecked'
+            return (
+              <div key={`health-${provider}`} className="rounded border border-slate-200 p-3 text-xs text-slate-700">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="font-medium text-slate-900">{PROVIDER_META[provider].label}</span>
+                  <span className={`rounded border px-2 py-0.5 ${healthBadgeClass(healthStatus)}`}>{healthStatus}</span>
+                </div>
+                <div className="space-y-1">
+                  <div>Credential: <span className="font-medium">{credential}</span></div>
+                  <div>Connectivity: <span className="font-medium">{connectivity}</span></div>
+                  {health?.last_checked_at && (
+                    <div className="text-[11px] text-slate-500">Last check: {new Date(health.last_checked_at).toLocaleString()}</div>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
