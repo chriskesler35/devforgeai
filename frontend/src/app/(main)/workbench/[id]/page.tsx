@@ -5,6 +5,7 @@ export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
 import { API_BASE, AUTH_HEADERS } from '@/lib/config'
+import { resolveEventType } from '@/lib/eventContract'
 import { filterModelsByCatalogFeature } from '@/lib/modelCatalog'
 import { renderMarkdown } from '@/lib/markdown'
 import { RunPanel } from '@/components/RunPanel'
@@ -25,29 +26,8 @@ interface WBEvent {
   canonical_version?: string
 }
 
-const CANONICAL_EVENT_ALIAS: Record<string, string> = {
-  'lifecycle.init': 'init',
-  'lifecycle.ping': 'ping',
-  'system.info': 'info',
-  'system.warning': 'warning',
-  'run.error': 'error',
-  'run.done': 'done',
-  'run.waiting': 'waiting',
-  'run.model_changed': 'model_changed',
-  'user.message': 'user_message',
-  'agent.role_change': 'role_change',
-  'agent.thought': 'agent_thought',
-  'agent.reply': 'agent_reply',
-  'artifact.file_created': 'file_created',
-  'artifact.file_modified': 'file_modified',
-  'command.awaiting_approval': 'command_awaiting_approval',
-  'command.approved': 'command_approved',
-  'command.rejected': 'command_rejected',
-  'command.completed': 'command_completed',
-}
-
 function getEventType(evt: WBEvent): string {
-  return CANONICAL_EVENT_ALIAS[evt.canonical_type || ''] || evt.type
+  return resolveEventType(evt)
 }
 
 interface ModelOption {
@@ -632,7 +612,7 @@ export default function WorkbenchSessionPage() {
             status: p.status, stdout: p.stdout, stderr: p.stderr, tier: p.tier,
           }])
         }
-        if (evt.type === 'bypass_mode_changed') {
+        if (type === 'bypass_mode_changed') {
           setBypassMode(!!evt.payload.bypass_approvals)
         }
       } catch { /* ignore malformed */ }
