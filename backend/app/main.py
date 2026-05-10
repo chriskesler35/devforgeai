@@ -201,6 +201,43 @@ async def lifespan(app: FastAPI):
         import logging as _log
         _log.getLogger(__name__).warning(f"Startup model sync failed (non-fatal): {_e}")
 
+    # Recover orphaned workbench sessions / pipelines / phase runs that were
+    # mid-flight when the previous process exited. Without this, the DB rows
+    # stay at status='running' forever and the UI shows a hung session.
+    try:
+        from app.database import AsyncSessionLocal
+        from sqlalchemy import update as _sa_update
+        from app.models.workbench import WorkbenchSession
+        try:
+            from app.models.pipeline import Pipeline as _Pipeline, PhaseRun as _PhaseRun
+        except Exception:
+            _Pipeline = None
+            _PhaseRun = None
+        async with AsyncSessionLocal() as _db:
+            await _db.execute(
+                _sa_update(WorkbenchSession)
+                .where(WorkbenchSession.status.in_(["running", "pending"]))
+                .values(status="failed")
+            )
+            if _Pipeline is not None:
+                await _db.execute(
+                    _sa_update(_Pipeline)
+                    .where(_Pipeline.status.in_(["running", "pending"]))
+                    .values(status="failed")
+                )
+            if _PhaseRun is not None:
+                await _db.execute(
+                    _sa_update(_PhaseRun)
+                    .where(_PhaseRun.status.in_(["running", "pending"]))
+                    .values(status="failed")
+                )
+            await _db.commit()
+    except Exception as _orphan_exc:
+        import logging as _log
+        _log.getLogger(__name__).warning(
+            "Orphaned workbench/pipeline recovery skipped: %s", _orphan_exc
+        )
+
     # Keep provider catalogs fresh without requiring backend restarts.
     # Override with MODEL_SYNC_INTERVAL_MINUTES (default: 60).
     try:

@@ -141,11 +141,19 @@ export function getAuthHeaders(): Record<string, string> {
   }
 }
 
-// Legacy compat — evaluated at import time. In 'use client' components,
-// window exists so they work. In SSR, they fall back to localhost.
-export const API_BASE = typeof window !== 'undefined'
-  ? getApiBase()
-  : trimTrailingSlash(process.env.NEXT_PUBLIC_API_URL?.trim() || `http://localhost:${BACKEND_PORTS[0]}`)
+// Legacy compat for existing `${API_BASE}` call sites.
+// This wrapper resolves getApiBase() on each string coercion so callers
+// don't get stuck with a stale import-time value.
+const API_BASE_DYNAMIC = {
+  toString() {
+    return getApiBase()
+  },
+  valueOf() {
+    return getApiBase()
+  },
+}
+
+export const API_BASE = API_BASE_DYNAMIC as unknown as string
 
 /**
  * AUTH_HEADERS — computed dynamically via a Proxy so the Authorization

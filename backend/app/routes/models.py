@@ -133,13 +133,19 @@ def _apply_validation_result(model: Model, validation: dict) -> str:
 def _can_connect_to_base_url(base_url: str | None, timeout: float = 0.35) -> bool:
     if not base_url:
         return False
+    # Allow override via env var, fallback to 1.5s (was 0.35s)
+    try:
+        import os
+        probe_timeout = float(os.environ.get("MODEL_LOCAL_PROBE_TIMEOUT", "1.5"))
+    except Exception:
+        probe_timeout = 1.5
     try:
         parsed = urlparse(base_url)
         host = parsed.hostname
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
         if not host:
             return False
-        with socket.create_connection((host, port), timeout=timeout):
+        with socket.create_connection((host, port), timeout=probe_timeout):
             return True
     except OSError:
         return False
@@ -209,7 +215,7 @@ async def list_models(
             continue
         if usable_only and not _provider_is_usable(provider_name, provider_api_base_url):
             continue
-        if validated_only and (model.validation_status or "unverified") == "failed":
+        if validated_only and (model.validation_status or "unverified") != "validated":
             continue
         if chat_only and not _is_chat_capable_model(model.model_id, capabilities):
             continue
@@ -397,6 +403,137 @@ async def revalidate_model(
     await db.commit()
     await db.refresh(model)
     return model
+
+
+@router.get("/{model_id}/diagnose")
+async def diagnose_model(
+    model_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return deep diagnostic info for a model: row state, provider readiness,
+    runtime resolver outcome, and remediation hints. Used by the Models UI to
+    explain why a 'validated' model might still be rejected at runtime.
+    """
+    from app.services.runtime_model_resolver import (
+        resolve_model_for_runtime,
+        Ready as RuntimeReady,
+        NeedsLiveProbe as RuntimeNeedsLiveProbe,
+        Unreachable as RuntimeUnreachable,
+    )
+
+    try:
+        model_uuid = uuid.UUID(model_id)
+        result = await db.execute(select(Model).where(Model.id == model_uuid))
+        model = result.scalar_one_or_none()
+    except ValueError:
+        result = await db.execute(select(Model).where(Model.model_id == model_id))
+        model = result.scalars().first()
+    if not model:
+        raise HTTPException(status_code=404, detail="Model not found")
+
+    provider_result = await db.execute(select(Provider).where(Provider.id == model.provider_id))
+    provider = provider_result.scalar_one_or_none()
+
+    provider_name = (provider.name if provider else "") or ""
+    provider_active = bool(provider.is_active) if provider else False
+    provider_base_url = provider.api_base_url if provider else None
+    is_local_provider = provider_name.lower().strip() in _LOCAL_MODEL_PROVIDERS
+
+    has_api_key = has_provider_api_key(provider_name.lower().strip()) if provider_name else False
+    local_reachable = (
+        _can_connect_to_base_url(provider_base_url) if is_local_provider else None
+    )
+
+    # Resolve via the canonical runtime resolver using a provider-qualified ref
+    resolver_ref = (
+        f"{provider_name}/{model.model_id}"
+        if provider_name and model.model_id
+        else (model.model_id or str(model.id))
+    )
+    resolver_result = await resolve_model_for_runtime(db, resolver_ref, intent="pipeline")
+
+    if isinstance(resolver_result, RuntimeReady):
+        runtime_status = "ready"
+        runtime_reason_code = None
+        runtime_user_message = None
+        runtime_notes = list(resolver_result.notes or [])
+        runtime_remediation: list[str] = []
+    elif isinstance(resolver_result, RuntimeNeedsLiveProbe):
+        runtime_status = "needs_live_probe"
+        runtime_reason_code = resolver_result.reason_code
+        runtime_user_message = (
+            f"Model '{model.model_id}' is recognized but not yet validated. "
+            "Run revalidate to confirm it works at runtime."
+        )
+        runtime_notes = list(resolver_result.notes or [])
+        runtime_remediation = ["Click Revalidate", "Use Force Resync if metadata may be stale"]
+    elif isinstance(resolver_result, RuntimeUnreachable):
+        runtime_status = "unreachable"
+        runtime_reason_code = resolver_result.reason_code
+        runtime_user_message = resolver_result.user_message
+        runtime_notes = []
+        runtime_remediation = list(resolver_result.remediation or [])
+    else:
+        runtime_status = "unknown"
+        runtime_reason_code = None
+        runtime_user_message = None
+        runtime_notes = []
+        runtime_remediation = []
+
+    # Look for ambiguous model_id collisions across providers
+    sibling_rows = (
+        await db.execute(
+            select(Model, Provider)
+            .join(Provider, Model.provider_id == Provider.id)
+            .where(Model.model_id == model.model_id)
+        )
+    ).all()
+    siblings = [
+        {
+            "id": str(m.id),
+            "provider_name": p.name if p else None,
+            "is_active": bool(m.is_active),
+            "validation_status": (m.validation_status or "unverified"),
+        }
+        for m, p in sibling_rows
+        if str(m.id) != str(model.id)
+    ]
+
+    return {
+        "model": {
+            "id": str(model.id),
+            "model_id": model.model_id,
+            "display_name": model.display_name,
+            "is_active": bool(model.is_active),
+            "validation_status": (model.validation_status or "unverified"),
+            "validated_at": model.validated_at.isoformat() if model.validated_at else None,
+            "validation_source": model.validation_source,
+            "validation_warning": model.validation_warning,
+            "validation_error": model.validation_error,
+            "capabilities": model.capabilities or {},
+        },
+        "provider": {
+            "id": str(provider.id) if provider else None,
+            "name": provider_name or None,
+            "is_active": provider_active,
+            "is_local": is_local_provider,
+            "api_base_url": provider_base_url,
+            "has_api_key": has_api_key,
+            "local_reachable": local_reachable,
+        },
+        "runtime": {
+            "status": runtime_status,
+            "reason_code": runtime_reason_code,
+            "user_message": runtime_user_message,
+            "notes": runtime_notes,
+            "remediation": runtime_remediation,
+            "resolved_ref": resolver_ref,
+        },
+        "ambiguity": {
+            "duplicate_model_id_across_providers": len(siblings) > 0,
+            "siblings": siblings,
+        },
+    }
 
 
 @router.post("/validate-catalog")

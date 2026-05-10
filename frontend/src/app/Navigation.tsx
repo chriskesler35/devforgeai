@@ -1,24 +1,24 @@
 'use client'
 
-import { API_BASE, AUTH_HEADERS } from '@/lib/config'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
+import { NowLauncher } from '@/components/now/NowLive'
 
 const NAV_ITEMS = [
   { href: '/',                label: 'Dashboard',  icon: '◈' },
   { href: '/chat',            label: 'Chat',        icon: '💬' },
-  { href: '/agents',          label: 'Agents',      icon: '🤖' },
-  { href: '/agents/sessions', label: 'Sessions',    icon: '▶' },
-  { href: '/workbench',       label: 'Workbench',   icon: '🔨' },
+  { href: '/runs',            label: 'Runs',        icon: '🧭' },
   { href: '/projects',        label: 'Projects',    icon: '🗂️' },
+  { href: '/create',          label: 'Create',      icon: '✨' },
+  { href: '/agents',          label: 'Agents',      icon: '🤖' },
+  { href: '/personas',        label: 'Personas',    icon: '🎭' },
   { href: '/gallery',         label: 'Gallery',     icon: '🖼️' },
   { href: '/methods',         label: 'Methods',     icon: '🧠' },
   { href: '/marketplace',     label: 'Marketplace', icon: '🛍️' },
   { href: '/skills/installed', label: 'Installed Skills', icon: '🧰' },
   { href: '/collaborate',     label: 'Collaborate', icon: '👥' },
-  { href: '/personas',        label: 'Personas',    icon: '🎭' },
   { href: '/models',          label: 'Models',      icon: '⚡' },
   { href: '/stats',           label: 'Stats',       icon: '📊' },
   { href: '/settings',        label: 'Settings',    icon: '⚙️' },
@@ -26,18 +26,24 @@ const NAV_ITEMS = [
 ]
 
 const GROUPS = [
-  { label: 'MAIN',   items: ['/', '/chat'] },
-  { label: 'BUILD',  items: ['/agents', '/personas', '/projects', '/workbench', '/agents/sessions'] },
-  { label: 'CREATE', items: ['/gallery', '/methods', '/marketplace', '/skills/installed'] },
+  { label: 'MAIN',   items: ['/', '/chat', '/runs', '/projects'] },
+  { label: 'CREATE', items: ['/create', '/agents', '/personas', '/gallery', '/methods', '/marketplace', '/skills/installed'] },
   { label: 'MANAGE', items: ['/collaborate', '/models', '/stats', '/settings', '/help'] },
 ]
 
 // Routes that should render indented under their parent
 const NESTED_UNDER: Record<string, string> = {
-  '/personas': '/agents',
-  '/workbench': '/projects',
-  '/agents/sessions': '/projects',
+  '/agents': '/create',
+  '/personas': '/create',
+  '/gallery': '/create',
+  '/methods': '/create',
+  '/marketplace': '/create',
   '/skills/installed': '/marketplace',
+}
+
+// Alias legacy routes to the new IA so nav highlighting stays intuitive.
+const ACTIVE_ALIASES: Record<string, string[]> = {
+  '/runs': ['/workbench', '/agents/sessions', '/workbench/pipelines'],
 }
 
 function ThemeToggle({ collapsed }: { collapsed: boolean }) {
@@ -132,7 +138,6 @@ export default function Navigation() {
   const [mounted, setMounted] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
   const [backendUp, setBackendUp] = useState<boolean | null>(null)
-  const [activeSessions, setActiveSessions] = useState(0)
 
   useEffect(() => {
     setMounted(true)
@@ -156,24 +161,6 @@ export default function Navigation() {
   }, [])
 
   useEffect(() => {
-    const fetchInFlight = async () => {
-      try {
-        const res = await fetch(`${API_BASE}/v1/workbench/sessions`, { headers: AUTH_HEADERS })
-        if (!res.ok) return
-        const data = await res.json()
-        const sessions = Array.isArray(data?.data) ? data.data : []
-        const count = sessions.filter((s: any) => s.status === 'running' || s.status === 'pending').length
-        setActiveSessions(count)
-      } catch {
-        // Keep the previous count if polling fails.
-      }
-    }
-    fetchInFlight()
-    const timer = setInterval(fetchInFlight, 10000)
-    return () => clearInterval(timer)
-  }, [])
-
-  useEffect(() => {
     for (const item of NAV_ITEMS) {
       router.prefetch(item.href)
     }
@@ -187,7 +174,9 @@ export default function Navigation() {
 
   const isActive = (href: string) => {
     if (href === '/') return pathname === '/'
-    return pathname === href || pathname.startsWith(href + '/')
+    if (pathname === href || pathname.startsWith(href + '/')) return true
+    const aliases = ACTIVE_ALIASES[href] || []
+    return aliases.some((prefix) => pathname === prefix || pathname.startsWith(prefix + '/'))
   }
 
   // Early return AFTER all hooks
@@ -227,37 +216,7 @@ export default function Navigation() {
 
       {/* In Flight shortcut */}
       <div className="px-2 pt-3">
-        <Link
-          href="/agents/sessions?filter=active"
-          title={collapsed ? `In Flight (${activeSessions})` : undefined}
-          className={`
-            relative flex items-center gap-2.5 rounded-lg transition-colors
-            ${collapsed ? 'justify-center px-0 py-2.5' : 'px-3 py-2'}
-            ${activeSessions > 0
-              ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800'
-              : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
-            }
-          `}
-        >
-          <span className="text-base flex-shrink-0">🛫</span>
-          {!collapsed && (
-            <>
-              <span className="text-sm font-medium">In Flight</span>
-              <span className={`ml-auto inline-flex items-center justify-center min-w-[1.5rem] h-6 px-1.5 rounded-full text-xs font-semibold ${
-                activeSessions > 0
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400'
-              }`}>
-                {activeSessions}
-              </span>
-            </>
-          )}
-          {collapsed && activeSessions > 0 && (
-            <span className="absolute top-1.5 right-1.5 inline-flex items-center justify-center min-w-[1rem] h-4 px-1 rounded-full text-[10px] font-semibold bg-blue-600 text-white">
-              {activeSessions}
-            </span>
-          )}
-        </Link>
+        <NowLauncher collapsed={collapsed} />
       </div>
 
       {/* Nav items */}

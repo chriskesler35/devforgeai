@@ -419,13 +419,7 @@ async def copilot_device_poll(body: DevicePollBody):
         raise HTTPException(status_code=502, detail=f"Unexpected device-flow response: {r.text[:200]}")
     # Reuse the existing storage path; this is a real GitHub user OAuth token.
     result = await github_vscode_token(VscodeTokenBody(access_token=access_token))
-    result = await github_vscode_token(VscodeTokenBody(access_token=access_token))
-    # Invalidate the Copilot session token cache so the next request immediately
-    # tries to exchange the new token rather than reusing a stale entry.
-    from app.services.github_copilot import _SESSION_TOKEN_CACHE
-    _SESSION_TOKEN_CACHE.clear()
-    from app.services.github_copilot import _TOKEN_CACHE
-    _TOKEN_CACHE.clear()
+    # Note: cache invalidation is handled inside github_vscode_token now.
     return {"status": "ok", "user": result.get("user")}
 
 
@@ -507,6 +501,28 @@ async def github_vscode_token(body: VscodeTokenBody):
 
     _save_users(users)
 
+    # Persist the token to the oauth_credentials DB table so it survives
+    # backend restarts and is picked up by init_db_token_cache() next time.
+    user_id_for_db = user.get("id", "")
+    if user_id_for_db:
+        try:
+            from app.services.oauth_secrets import upsert_user_oauth_token
+            await upsert_user_oauth_token(user_id_for_db, "github", access_token)
+        except Exception as _e:
+            import logging as _logging
+            _logging.getLogger(__name__).warning("Failed to persist GitHub token to DB: %s", _e)
+
+    # Update the in-process DB token cache immediately so the very next
+    # chat request uses the new token without needing a backend restart.
+    try:
+        from app.services.github_copilot import _DB_TOKEN_CACHE, _SESSION_TOKEN_CACHE, _TOKEN_CACHE, _MODEL_LIST_CACHE
+        _DB_TOKEN_CACHE["github"] = access_token
+        _SESSION_TOKEN_CACHE.clear()
+        _TOKEN_CACHE.clear()
+        _MODEL_LIST_CACHE.clear()
+    except Exception:
+        pass
+
     safe_user = {k: v for k, v in user.items() if k not in ("password_hash", "github_token")}
     return {"ok": True, "user": safe_user}
 
@@ -521,11 +537,7 @@ async def github_vscode_token_route(body: VscodeTokenBody):
     backend without going through the web OAuth flow.
     """
     result = await github_vscode_token(body)
-    # Invalidate stale session token cache so the new token is used immediately.
-    from app.services.github_copilot import _SESSION_TOKEN_CACHE
-    _SESSION_TOKEN_CACHE.clear()
-    from app.services.github_copilot import _TOKEN_CACHE
-    _TOKEN_CACHE.clear()
+    # Note: cache invalidation is handled inside github_vscode_token now.
     return result
 
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { API_BASE, AUTH_HEADERS } from '@/lib/config'
+import { AUTH_HEADERS, getApiBase, probeAndCacheApiBase } from '@/lib/config'
 
 import { useState, useEffect, useCallback } from 'react'
 
@@ -97,30 +97,54 @@ export default function ImageSettingsTab() {
   const [comfyEndpoints, setComfyEndpoints] = useState<ComfyEndpoint[]>([])
   const [activeComfyUrl, setActiveComfyUrl] = useState<string | null>(null)
   const [runtimeCapabilities, setRuntimeCapabilities] = useState<RuntimeCapabilities | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  const fetchJson = useCallback(async <T,>(path: string, init?: RequestInit, retry = true): Promise<T> => {
+    const base = getApiBase()
+    try {
+      const res = await fetch(`${base}${path}`, init)
+      if (!res.ok) {
+        throw new Error(`${res.status} ${res.statusText}`)
+      }
+      return await res.json()
+    } catch (err) {
+      if (!retry) throw err
+
+      // Re-probe backend in case the cached port/base is stale, then retry once.
+      await probeAndCacheApiBase().catch(() => undefined)
+      const retriedBase = getApiBase()
+      const res = await fetch(`${retriedBase}${path}`, init)
+      if (!res.ok) {
+        throw new Error(`${res.status} ${res.statusText}`)
+      }
+      return await res.json()
+    }
+  }, [])
 
   const fetchEndpoints = useCallback(async () => {
     try {
-      const res: ComfyEndpointsResponse = await fetch(`${API_BASE}/v1/comfyui/endpoints`, { headers: AUTH_HEADERS })
-        .then(r => r.json())
-        .catch(() => ({ data: [], active_url: null } as ComfyEndpointsResponse))
+      const res = await fetchJson<ComfyEndpointsResponse>(
+        '/v1/comfyui/endpoints',
+        { headers: AUTH_HEADERS }
+      ).catch(() => ({ data: [], active_url: null } as ComfyEndpointsResponse))
       setComfyEndpoints(res.data || [])
       setActiveComfyUrl(res.active_url || null)
     } catch {
       // ignore
     }
-  }, [])
+  }, [fetchJson])
 
   const fetchSettings = useCallback(async () => {
     try {
       const [settingsRes, statusRes, wfRes, endpointsRes, runtimeCapabilitiesRes] = await Promise.all([
-        fetch(`${API_BASE}/v1/settings/app`, { headers: AUTH_HEADERS }).then(r => r.json()),
-        fetch(`${API_BASE}/v1/comfyui/status`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({ status: 'offline' })),
-        fetch(`${API_BASE}/v1/workflows`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({ data: [] })),
-        fetch(`${API_BASE}/v1/comfyui/endpoints`, { headers: AUTH_HEADERS })
-          .then(r => r.json())
+        fetchJson<{ data?: Record<string, SettingValue> }>('/v1/settings/app', { headers: AUTH_HEADERS }),
+        fetchJson<{ status?: string }>('/v1/comfyui/status', { headers: AUTH_HEADERS })
+          .catch(() => ({ status: 'offline' })),
+        fetchJson<{ data?: any[] }>('/v1/workflows', { headers: AUTH_HEADERS })
+          .catch(() => ({ data: [] })),
+        fetchJson<ComfyEndpointsResponse>('/v1/comfyui/endpoints', { headers: AUTH_HEADERS })
           .catch(() => ({ data: [], active_url: null } as ComfyEndpointsResponse)),
-        fetch(`${API_BASE}/v1/runtime/capabilities`, { headers: AUTH_HEADERS })
-          .then(r => r.json())
+        fetchJson<RuntimeCapabilities>('/v1/runtime/capabilities', { headers: AUTH_HEADERS })
           .catch(() => ({} as RuntimeCapabilities)),
       ])
       setSettings(settingsRes.data || {})
@@ -134,7 +158,7 @@ export default function ImageSettingsTab() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [fetchJson])
 
   const comfyImageProviderAvailable = runtimeCapabilities?.image_providers?.['comfyui-local'] ?? (comfyStatus === 'online')
 
@@ -159,14 +183,16 @@ export default function ImageSettingsTab() {
     const value = dirty[key]
     if (value === undefined) return
     setSaving(key)
+    setSaveError(null)
     try {
-      const res = await fetch(`${API_BASE}/v1/settings/app/${key}`, {
+      const updated = await fetchJson<SettingValue>(`/v1/settings/app/${key}`, {
         method: 'PUT', headers: AUTH_HEADERS,
         body: JSON.stringify({ value }),
       })
-      const updated = await res.json()
       setSettings(prev => ({ ...prev, [key]: updated }))
       setDirty(prev => { const n = { ...prev }; delete n[key]; return n })
+    } catch (e: any) {
+      setSaveError(e?.message || 'Could not save setting. Check backend connectivity and try again.')
     } finally {
       setSaving(null)
     }
@@ -238,6 +264,11 @@ export default function ImageSettingsTab() {
 
       {/* Settings form */}
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
+        {saveError && (
+          <div className="px-5 py-3 bg-red-50 border-b border-red-200 text-red-700 text-sm">
+            {saveError}
+          </div>
+        )}
         {SETTING_FIELDS.map(field => {
           const value = getValue(field.key)
           const isDirty = field.key in dirty

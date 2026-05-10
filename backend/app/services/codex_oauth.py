@@ -214,20 +214,12 @@ def should_use_codex_oauth_proxy(provider_name: str, api_key: str | None = None)
     health_ttl = 0.0 if normalized == "openai-codex" else 5.0
     if not is_codex_proxy_reachable(cache_ttl_seconds=health_ttl):
         return False
-    prefer_proxy = os.environ.get("PREFER_CODEX_OAUTH", "").strip().lower() in ("1", "true", "yes")
-
-    # Dedicated Codex provider should use OAuth proxy transport by default.
-    # Users relying on OAuth tokens (without OPENAI_API_KEY) depend on this.
-    if normalized == "openai-codex":
-        return True
-    # When the user sets PREFER_CODEX_OAUTH=1, route plain OpenAI models
-    # through the OAuth proxy even if an API key is set. Useful when your
-    # sk- key is dead/unfunded but you want ChatGPT Plus OAuth to do the work.
-    if prefer_proxy:
-        return True
-    # Plain OpenAI dual-mode: prefer a real API key when present,
-    # otherwise fall back to the local OAuth proxy.
-    return not bool(api_key)
+    # OAuth subscription is always preferred over a per-use API key.
+    # If the proxy is reachable and we have Codex CLI auth, use it regardless
+    # of whether an OPENAI_API_KEY is also present. The API key only activates
+    # when OAuth is unavailable (proxy unreachable / no CLI auth / no proxy URL).
+    # PREFER_CODEX_OAUTH env var is still honoured but is no longer required.
+    return True
 
 
 def codex_proxy_rejects_temperature(model_id: str) -> bool:

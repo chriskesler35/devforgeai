@@ -186,6 +186,18 @@ export default function AgentSessionsPage() {
         </div>
       </div>
 
+      <div className="rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50/70 dark:bg-indigo-900/20 px-4 py-3 flex items-center justify-between gap-3">
+        <p className="text-sm text-indigo-800 dark:text-indigo-200">
+          This list is still available, but Run Center now shows sessions and pipelines together.
+        </p>
+        <button
+          onClick={() => router.push('/runs')}
+          className="px-3 py-1.5 text-xs font-medium rounded-lg border border-indigo-300 dark:border-indigo-600 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/30"
+        >
+          Open Run Center
+        </button>
+      </div>
+
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <StatCard

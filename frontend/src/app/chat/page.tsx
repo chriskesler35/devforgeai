@@ -301,7 +301,7 @@ function Sidebar({
               ).map(([group, ms]) => (
                 <optgroup key={group} label={group}>
                   {(ms as Model[]).map(m => (
-                    <option key={m.id} value={m.id}>{m.display_name || m.model_id}</option>
+                    <option key={m.id} value={`${m.provider_name || 'unknown'}/${m.model_id}`}>{m.display_name || m.model_id}</option>
                   ))}
                 </optgroup>
               ))}
@@ -1734,6 +1734,8 @@ export default function ChatPage() {
           const match = personas.find(p => p.name.toLowerCase().includes(arg.toLowerCase()))
           if (match) {
             setSelectedPersonaId(match.id)
+            // Persona switch should reset explicit model override so persona routing is respected.
+            setSelectedModelId('')
             addToast({ type: 'success', title: 'Persona switched', message: `Now using ${match.name}`, autoClose: 2000 })
           } else {
             addToast({ type: 'error', title: 'Not found', message: `No persona matching "${arg}"`, autoClose: 3000 })
@@ -1749,7 +1751,7 @@ export default function ChatPage() {
             m.id === arg
           )
           if (match) {
-            setSelectedModelId(match.id)
+            setSelectedModelId(`${match.provider_name || 'unknown'}/${match.model_id}`)
             addToast({ type: 'success', title: 'Model switched', message: match.display_name || match.model_id, autoClose: 2000 })
           } else {
             addToast({ type: 'error', title: 'Not found', message: `No match for "${arg}"`, autoClose: 3000 })
@@ -2989,7 +2991,11 @@ export default function ChatPage() {
         onRename={renameConv}
         personas={personas}
         selectedPersonaId={selectedPersonaId}
-        onPersonaChange={setSelectedPersonaId}
+        onPersonaChange={(nextPersonaId) => {
+          setSelectedPersonaId(nextPersonaId)
+          // Prevent stale model overrides from shadowing the newly selected persona.
+          setSelectedModelId('')
+        }}
         models={models}
         selectedModelId={selectedModelId}
         onModelChange={setSelectedModelId}

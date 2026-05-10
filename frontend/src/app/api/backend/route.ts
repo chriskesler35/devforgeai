@@ -22,10 +22,12 @@ const REPO_ROOT = path.resolve(FRONTEND_DIR, '..')
 const BACKEND_DIR = path.join(REPO_ROOT, 'backend')
 const LOGS_DIR = path.join(REPO_ROOT, 'logs')
 const BACKEND_STARTUP_LOG = path.join(LOGS_DIR, 'backend-startup.log')
-// The virtual environment lives at <repo_root>/.venv, not backend/venv.
-const VENV_PYTHON = fs.existsSync(path.join(REPO_ROOT, '.venv', 'Scripts', 'python.exe'))
-  ? path.join(REPO_ROOT, '.venv', 'Scripts', 'python.exe')
-  : path.join(BACKEND_DIR, 'venv', 'Scripts', 'python.exe') // legacy fallback
+// Prefer backend/venv (backend dependencies), then fall back to repo .venv.
+const BACKEND_VENV_PYTHON = path.join(BACKEND_DIR, 'venv', 'Scripts', 'python.exe')
+const ROOT_VENV_PYTHON = path.join(REPO_ROOT, '.venv', 'Scripts', 'python.exe')
+const VENV_PYTHON = fs.existsSync(BACKEND_VENV_PYTHON)
+  ? BACKEND_VENV_PYTHON
+  : (fs.existsSync(ROOT_VENV_PYTHON) ? ROOT_VENV_PYTHON : BACKEND_VENV_PYTHON)
 const PYTHON_EXE = 'C:\\Python313\\python.exe' // last-resort fallback
 const FALLBACK_ENV = (process.env.DEVFORGE_ALLOW_BACKEND_PYTHON_FALLBACK || '').toLowerCase()
 const FALLBACK_ENV_SET = FALLBACK_ENV.length > 0
@@ -52,8 +54,34 @@ async function getBackendPidForPort(port: number): Promise<number | null> {
 }
 
 async function isBackendUp(): Promise<boolean> {
-  const pid = await getBackendPidForPort(PRIMARY_BACKEND_PORT)
-  return pid !== null
+  const healthyPort = await findHealthyBackendPort()
+  if (healthyPort !== null) return true
+
+  for (const port of BACKEND_PORTS) {
+    const pid = await getBackendPidForPort(port)
+    if (pid) return true
+  }
+  return false
+}
+
+async function findHealthyBackendPort(): Promise<number | null> {
+  for (const port of BACKEND_PORTS) {
+    if (await isBackendHealthy(port)) return port
+  }
+  return null
+}
+
+async function findRunningBackendPort(): Promise<number | null> {
+  // Prefer the port that is actually serving healthy backend responses.
+  const healthyPort = await findHealthyBackendPort()
+  if (healthyPort !== null) return healthyPort
+
+  // Fallback: any listening port (may be stale/non-backend listener).
+  for (const port of BACKEND_PORTS) {
+    const pid = await getBackendPidForPort(port)
+    if (pid) return port
+  }
+  return null
 }
 
 async function killBackends(): Promise<void> {
@@ -112,9 +140,12 @@ function spawnBackend(explicitPythonExe?: string): { pythonExe: string; pid: num
   return { pythonExe, pid: child.pid ?? null }
 }
 
-async function isBackendHealthy(): Promise<boolean> {
+async function isBackendHealthy(port: number = PRIMARY_BACKEND_PORT): Promise<boolean> {
   try {
-    const res = await fetch(`http://localhost:${PRIMARY_BACKEND_PORT}/`, { signal: AbortSignal.timeout(3000) })
+    const res = await fetch(`http://localhost:${port}/v1/health`, {
+      signal: AbortSignal.timeout(3000),
+      headers: { Authorization: 'Bearer modelmesh_local_dev_key' },
+    })
     return res.ok
   } catch {
     return false
@@ -125,9 +156,10 @@ async function waitForBackend(timeoutMs = 30000): Promise<boolean> {
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
     await new Promise(r => setTimeout(r, 800))
-    if (await isBackendUp()) {
+    const runningPort = await findRunningBackendPort()
+    if (runningPort !== null) {
       // Give app a little extra time to pass import/startup and answer HTTP.
-      if (await isBackendHealthy()) return true
+      if (await isBackendHealthy(runningPort)) return true
     }
   }
   return false
@@ -136,23 +168,24 @@ async function waitForBackend(timeoutMs = 30000): Promise<boolean> {
 // ── Route handlers ────────────────────────────────────────────────────────────
 
 export async function GET() {
-  const pid = await getBackendPidForPort(PRIMARY_BACKEND_PORT)
-  const legacyPid = await getBackendPidForPort(LEGACY_BACKEND_PORT)
-  let healthy = false
+  const healthyPort = await findHealthyBackendPort()
+  const pid19001 = await getBackendPidForPort(PRIMARY_BACKEND_PORT)
+  const pid19000 = await getBackendPidForPort(LEGACY_BACKEND_PORT)
 
-  if (pid) {
-    try {
-      const res = await fetch(`http://localhost:${PRIMARY_BACKEND_PORT}/`, { signal: AbortSignal.timeout(3000) })
-      healthy = res.ok
-    } catch { /* unreachable */ }
-  }
+  const activePort = healthyPort ?? (pid19001 ? PRIMARY_BACKEND_PORT : (pid19000 ? LEGACY_BACKEND_PORT : null))
+  const healthy = healthyPort !== null
+  const activePid = activePort === PRIMARY_BACKEND_PORT
+    ? (pid19001 ?? null)
+    : activePort === LEGACY_BACKEND_PORT
+      ? (pid19000 ?? null)
+      : null
 
   return NextResponse.json({
-    running: pid !== null,
+    running: activePort !== null,
     healthy,
-    pid: pid ?? null,
-    port: PRIMARY_BACKEND_PORT,
-    staleLegacyPid: legacyPid ?? null,
+    pid: activePid,
+    port: activePort,
+    staleLegacyPid: pid19000 ?? null,
   })
 }
 

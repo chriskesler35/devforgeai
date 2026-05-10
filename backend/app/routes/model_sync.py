@@ -5,12 +5,16 @@ On startup (and on demand):
   1. Probe Ollama — import every locally-installed model.
   2. Check which provider API keys are set — activate those provider model lists.
   3. Upsert everything into the DB (never delete, only add/update).
+    4. Import necessary libraries.
+    5. Set up logging and router.
+    6. Define provider model lists.
 """
 
 import uuid
 import httpx
 import logging
 import re
+import os
 from typing import Any, Optional
 from datetime import datetime
 from fastapi import APIRouter, Depends
@@ -647,6 +651,9 @@ async def discover_provider_models(provider_name: str) -> tuple[list[dict[str, A
 
     if normalized == "github-copilot":
         github_token = (get_copilot_auth_token() or "").strip()
+        raw_pat = (os.environ.get("GITHUB_TOKEN") or "").strip()
+        if raw_pat and not github_token.startswith("gho_"):
+            github_token = raw_pat
         static_fallback = [
             _enrich_with_litellm_metadata(normalized, dict(m))
             for m in PROVIDER_DEFAULT_MODELS.get(normalized, [])

@@ -16,8 +16,16 @@ from sqlalchemy import select, desc
 from pydantic import BaseModel
 from app.middleware.auth import verify_api_key
 from app.database import get_db, AsyncSessionLocal
-from app.services.provider_credentials import has_provider_api_key, get_provider_api_key
-from app.services.codex_oauth import should_use_codex_oauth_proxy
+from app.services.runtime_model_resolver import (
+    build_runtime_model_chain_for_runtime,
+    humanize_runtime_model_error,
+    NeedsLiveProbe as RuntimeNeedsLiveProbe,
+    Ready as RuntimeReady,
+    Unreachable as RuntimeUnreachable,
+    should_deactivate_model_from_runtime_error,
+    should_failover_on_runtime_error,
+    resolve_model_for_runtime,
+)
 from app.schemas.agentic import AgenticRunState
 from app.services.agentic_state_machine import AgenticStateMachine
 from app.services.agentic_events import build_agentic_event, compute_agentic_score
@@ -43,6 +51,10 @@ class WorkbenchCreate(BaseModel):
 
 class WorkbenchMessage(BaseModel):
     message: str
+
+
+class WorkbenchModelUpdate(BaseModel):
+    model: str
 
 
 # ─── Event helpers ────────────────────────────────────────────────────────────
@@ -110,64 +122,8 @@ def _resolve_project_path(project_id: Optional[str], project_path: Optional[str]
 
 
 # ─── LLM model resolver ───────────────────────────────────────────────────────
-def _provider_has_credentials(provider_name: str) -> bool:
-    """Check if a provider has API credentials available (Ollama/local always true)."""
-    p = (provider_name or "").lower()
-    if p in ("ollama", "local", "lm-studio", "lmstudio", "llamacpp"):
-        return True
-    if p == "openai-codex":
-        # openai-codex supports API-key mode OR Codex OAuth proxy mode.
-        api_key = get_provider_api_key("openai-codex")
-        return bool(api_key) or should_use_codex_oauth_proxy("openai-codex", api_key=api_key)
-    if p in ("anthropic", "google", "openai", "openai-codex", "openrouter", "github-copilot"):
-        return has_provider_api_key(p)
-    # Unknown providers — assume yes and let the call fail loudly
-    return True
-
-
-def _model_is_runtime_ready(model_orm, provider_orm) -> bool:
-    if not model_orm or not provider_orm:
-        return False
-    if not model_orm.is_active:
-        return False
-    if (model_orm.validation_status or "unverified") != "validated":
-        return False
-    if not _provider_has_credentials(provider_orm.name):
-        return False
-    return True
-
-
-def _enabled_capabilities(capabilities: Any) -> set[str]:
-    if not isinstance(capabilities, dict):
-        return set()
-    runtime_relevant = {"chat", "code", "streaming"}
-    return {
-        str(key)
-        for key, enabled in capabilities.items()
-        if enabled and str(key) in runtime_relevant
-    }
-
-
-def _runtime_fallback_capabilities(model_orm: Any) -> set[str]:
-    """Return the minimum runtime capabilities a fallback must satisfy.
-
-    If the requested model row is stale or missing capability metadata, default
-    to a chat-safe profile so we don't fall through into image/audio models.
-    """
-    requested_caps = _enabled_capabilities(getattr(model_orm, "capabilities", None))
-    if requested_caps:
-        return requested_caps
-    return {"chat", "streaming"}
-
-
 def _runtime_error_deactivates_model(exc: Exception) -> bool:
-    low = str(exc).lower()
-    return any(marker in low for marker in (
-        "notfounderror",
-        "model_not_found",
-        "does not exist",
-        "404",
-    ))
+    return should_deactivate_model_from_runtime_error(exc)
 
 
 async def _mark_model_runtime_unavailable(model_id: str, *, warning: str, validation_error: str) -> None:
@@ -189,221 +145,11 @@ async def _mark_model_runtime_unavailable(model_id: str, *, warning: str, valida
 
 
 def _should_failover_error(exc: Exception) -> bool:
-    low = str(exc).lower()
-    markers = (
-        "notfounderror",
-        "model_not_found",
-        "does not exist",
-        "authenticationerror",
-        "invalid_api_key",
-        "insufficient_quota",
-        "exceeded your current quota",
-        "ratelimiterror",
-        "apiconnectionerror",
-        "service unavailable",
-        "temporarily unavailable",
-        "timeout",
-        "timed out",
-        "connection refused",
-        "connection reset",
-        "bad gateway",
-        "gateway timeout",
-        "overloaded",
-        "503",
-        "502",
-        "429",
-        "401",
-        "404",
-    )
-    return any(marker in low for marker in markers)
+    return should_failover_on_runtime_error(exc)
 
 
 def _humanize_model_error(err_str: str, model_id: str) -> str:
-    friendly = err_str
-    low = err_str.lower()
-    if "insufficient_quota" in low or "exceeded your current quota" in low:
-        friendly = (
-            "OpenAI quota exceeded — your account is out of credits. "
-            "Top up at https://platform.openai.com/account/billing, or pick a different provider."
-        )
-    elif "authenticationerror" in low or "x-api-key" in low or "401" in err_str or "invalid_api_key" in low:
-        friendly = f"Provider rejected the API key for model '{model_id}'. Check the key in your .env file."
-    elif "ratelimiterror" in low or "429" in err_str:
-        friendly = f"Rate-limited by provider for model '{model_id}'. Wait and retry, or switch models."
-    elif "notfounderror" in low or "model_not_found" in low or "does not exist" in low or ("404" in err_str and "openai" in low):
-        friendly = (
-            f"Model '{model_id}' doesn't exist on the provider's API. "
-            "It may have been renamed or removed. Pick a different model."
-        )
-    elif "timeout" in low or "timed out" in low:
-        friendly = f"Provider call for model '{model_id}' timed out."
-    elif "apiconnectionerror" in low or "connection refused" in low or "connection reset" in low:
-        friendly = f"Could not connect to the provider for model '{model_id}'."
-    elif "service unavailable" in low or "temporarily unavailable" in low or "503" in low or "502" in low:
-        friendly = f"Provider for model '{model_id}' is temporarily unavailable."
-    return friendly
-
-
-def _normalize_model_ref_for_lookup(model_ref: str) -> str:
-    """Normalize common alias/versioned refs to stable catalog IDs for lookup.
-
-    This primarily protects Codex OAuth/OpenAI model refs where users or older
-    templates may use aliases like `gpt-5-codex`, `gpt-5.3`, or `gpt-5.4`.
-    """
-    ref = (model_ref or "").strip()
-    low = ref.lower()
-    alias_map = {
-        "gpt-5-codex": "gpt-5",
-        "gpt-5.3": "gpt-5",
-        "gpt-5.4": "gpt-5",
-        "gpt-5.3-codex": "gpt-5",
-        "gpt-5.4-codex": "gpt-5",
-    }
-    if low in alias_map:
-        return alias_map[low]
-
-    # Future-proof: map gpt-5.<minor> and gpt-5.<minor>-codex to gpt-5.
-    if re.fullmatch(r"gpt-5\.\d+(?:-codex)?", low):
-        return "gpt-5"
-
-    return ref
-
-
-async def _fetch_model_row(db: AsyncSession, model_ref: str, *, include_fuzzy: bool = True):
-    from app.models.model import Model as ModelORM
-    from app.models.provider import Provider as ProviderORM
-
-    normalized_ref = _normalize_model_ref_for_lookup(model_ref)
-
-    result = await db.execute(
-        select(ModelORM, ProviderORM)
-        .join(ProviderORM, ModelORM.provider_id == ProviderORM.id)
-        .where(ModelORM.model_id == normalized_ref)
-    )
-    rows = result.all()
-    if rows:
-        wants_codex = "codex" in str(model_ref).lower()
-
-        def _row_rank(item):
-            model_orm, provider_orm = item
-            provider_name = (provider_orm.name or "").lower()
-            codex_provider_rank = 0 if (wants_codex and provider_name == "openai-codex") else 1
-            ready_rank = 0 if _model_is_runtime_ready(model_orm, provider_orm) else 1
-            active_rank = 0 if model_orm.is_active else 1
-            validated_rank = 0 if (model_orm.validation_status or "unverified") == "validated" else 1
-            return (
-                codex_provider_rank,
-                ready_rank,
-                active_rank,
-                validated_rank,
-                -(model_orm.validated_at.timestamp() if model_orm.validated_at else 0),
-            )
-
-        rows.sort(key=_row_rank)
-        return rows[0]
-
-    try:
-        model_uuid = uuid.UUID(str(normalized_ref))
-    except (TypeError, ValueError):
-        model_uuid = None
-
-    if model_uuid:
-        result = await db.execute(
-            select(ModelORM, ProviderORM)
-            .join(ProviderORM, ModelORM.provider_id == ProviderORM.id)
-            .where(ModelORM.id == model_uuid)
-            .limit(1)
-        )
-        row = result.first()
-        if row:
-            return row
-
-    if include_fuzzy and normalized_ref:
-        last_part = str(normalized_ref).split("/")[-1]
-        result = await db.execute(
-            select(ModelORM, ProviderORM)
-            .join(ProviderORM, ModelORM.provider_id == ProviderORM.id)
-            .where(ModelORM.model_id.contains(last_part))
-            .where(ModelORM.is_active == True)
-            .order_by(desc(ModelORM.validated_at), ModelORM.display_name)
-        )
-        return result.first()
-
-    return None
-
-
-async def _collect_runtime_fallbacks(
-    model_ref: str,
-    explicit_fallback_refs: Optional[list[str]] = None,
-    *,
-    allow_catalog_fallbacks: bool = True,
-    limit: int = 3,
-):
-    from app.models.model import Model as ModelORM
-    from app.models.provider import Provider as ProviderORM
-
-    candidates = []
-    seen: set[str] = set()
-
-    async with AsyncSessionLocal() as db:
-        requested_row = await _fetch_model_row(db, model_ref, include_fuzzy=True)
-        requested_model = requested_row[0] if requested_row else None
-        requested_provider = requested_row[1] if requested_row else None
-        required_caps = _runtime_fallback_capabilities(requested_model)
-        requested_context = getattr(requested_model, "context_window", None)
-
-        if requested_model:
-            seen.add(str(requested_model.id))
-
-        for fallback_ref in explicit_fallback_refs or []:
-            row = await _fetch_model_row(db, fallback_ref, include_fuzzy=False)
-            if not row:
-                continue
-            model_orm, provider_orm = row
-            if str(model_orm.id) in seen or not _model_is_runtime_ready(model_orm, provider_orm):
-                continue
-            seen.add(str(model_orm.id))
-            candidates.append((model_orm, provider_orm, "configured fallback"))
-            if len(candidates) >= limit:
-                return candidates
-
-        if not allow_catalog_fallbacks:
-            return candidates
-
-        result = await db.execute(
-            select(ModelORM, ProviderORM)
-            .join(ProviderORM, ModelORM.provider_id == ProviderORM.id)
-            .where(ModelORM.is_active == True)
-            .where(ModelORM.validation_status == "validated")
-            .order_by(desc(ModelORM.validated_at), ModelORM.display_name)
-        )
-
-        scored = []
-        for model_orm, provider_orm in result:
-            if str(model_orm.id) in seen or not _model_is_runtime_ready(model_orm, provider_orm):
-                continue
-            candidate_caps = _enabled_capabilities(model_orm.capabilities)
-            if required_caps and not required_caps.issubset(candidate_caps):
-                continue
-
-            same_provider = 0 if requested_provider and model_orm.provider_id == requested_provider.id else 1
-            context_gap = 0 if not requested_context or not model_orm.context_window or model_orm.context_window >= requested_context else 1
-            validated_rank = 0 if model_orm.validated_at else 1
-            validated_ts = -model_orm.validated_at.timestamp() if model_orm.validated_at else 0
-            scored.append((
-                (same_provider, context_gap, validated_rank, validated_ts, (model_orm.display_name or model_orm.model_id).lower()),
-                model_orm,
-                provider_orm,
-            ))
-
-        for _, model_orm, provider_orm in sorted(scored):
-            seen.add(str(model_orm.id))
-            reason = "same-provider validated backup" if requested_provider and model_orm.provider_id == requested_provider.id else "validated backup"
-            candidates.append((model_orm, provider_orm, reason))
-            if len(candidates) >= limit:
-                break
-
-    return candidates
+    return humanize_runtime_model_error(err_str, model_id)
 
 
 async def _build_runtime_model_chain(
@@ -412,66 +158,40 @@ async def _build_runtime_model_chain(
     *,
     limit: int = 3,
 ):
-    primary_model, primary_provider = await _resolve_model(model_ref)
-    chain = []
-    seen: set[str] = set()
-
-    if primary_model and primary_provider:
-        chain.append((primary_model, primary_provider, "selected model"))
-        seen.add(str(primary_model.id))
-
-    for model_orm, provider_orm, reason in await _collect_runtime_fallbacks(
-        model_ref,
-        explicit_fallback_refs=explicit_fallback_refs,
-        allow_catalog_fallbacks=bool(primary_model),
-        limit=limit,
-    ):
-        if str(model_orm.id) in seen:
-            continue
-        chain.append((model_orm, provider_orm, reason))
-        seen.add(str(model_orm.id))
-
-    preflight_note = None
-    if not primary_model and chain:
-        preflight_note = (
-            f"Selected model '{model_ref}' was unavailable, inactive, unvalidated, or missing credentials. "
-            f"Switching to validated backup '{chain[0][0].model_id}'."
+    async with AsyncSessionLocal() as db:
+        return await build_runtime_model_chain_for_runtime(
+            db,
+            model_ref,
+            intent="agentic",
+            explicit_fallback_refs=explicit_fallback_refs,
+            limit=limit,
         )
-
-    return chain, preflight_note
 
 
 async def _resolve_model(model_id: str):
     """Return (Model, Provider) objects from DB for a given model_id string.
 
-    Never silently falls back to a model whose provider has no credentials —
-    surfaces the failure so the caller can report the real problem.
+    Uses the shared runtime resolver so chat and agentic paths agree on
+    reference parsing, provider readiness, and Copilot alias normalization.
     """
     try:
-        from app.database import AsyncSessionLocal
-        from app.models.model import Model as ModelORM
-        from app.models.provider import Provider as ProviderORM
-        from sqlalchemy import select
-
         async with AsyncSessionLocal() as db:
-            row = await _fetch_model_row(db, model_id, include_fuzzy=True)
-            if row:
-                if not row[0].is_active:
-                    logger.error(f"Model '{model_id}' matched but is inactive")
-                    return None, None
-                if (row[0].validation_status or "unverified") != "validated":
-                    logger.error(
-                        f"Model '{model_id}' matched but is not live-validated "
-                        f"(status={row[0].validation_status or 'unverified'})"
-                    )
-                    return None, None
-                if not _provider_has_credentials(row[1].name):
-                    logger.error(f"Model '{model_id}' matched but provider '{row[1].name}' has no API credentials set")
-                    return None, None
-                return row[0], row[1]
-
-            # No fallback to arbitrary models — return None so the caller surfaces the error
-            logger.error(f"Could not resolve model '{model_id}' to any active, live-validated provider model with credentials")
+            result = await resolve_model_for_runtime(
+                db,
+                model_id,
+                intent="agentic",
+            )
+            if isinstance(result, RuntimeUnreachable):
+                logger.error(
+                    "Could not resolve model '%s': %s (%s)",
+                    model_id,
+                    result.user_message,
+                    result.reason_code,
+                )
+                return None, None
+            if isinstance(result, (RuntimeReady, RuntimeNeedsLiveProbe)):
+                return result.model, result.provider
+            logger.error("Unknown runtime resolver result for model '%s'", model_id)
     except Exception as e:
         logger.error(f"Model resolve failed: {e}")
     return None, None
@@ -1304,6 +1024,57 @@ async def get_session(session_id: str, db: AsyncSession = Depends(get_db)):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session.to_dict()
+
+
+@router.post("/sessions/{session_id}/model", dependencies=[Depends(verify_api_key)])
+async def update_session_model(
+    session_id: str,
+    body: WorkbenchModelUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update the model used by a session.
+
+    If a turn is currently running, the new model is applied on the next turn.
+    """
+    from app.models.workbench import WorkbenchSession
+
+    result = await db.execute(
+        select(WorkbenchSession).where(WorkbenchSession.id == session_id)
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    next_model = (body.model or "").strip()
+    if not next_model:
+        raise HTTPException(status_code=400, detail="Model is required")
+
+    previous_model = (session.model or "").strip() or "llama3.1:8b"
+    session.model = next_model
+    await db.commit()
+    await db.refresh(session)
+
+    _push(
+        session_id,
+        "model_changed",
+        previous_model=previous_model,
+        model=next_model,
+        applies_to="next_turn" if session.status == "running" else "current_session",
+    )
+    _push(
+        session_id,
+        "info",
+        message=(
+            f"Model updated to {next_model}. "
+            + ("Change applies on the next turn." if session.status == "running" else "Using this model now.")
+        ),
+    )
+
+    return {
+        "ok": True,
+        "session": session.to_dict(),
+        "applies_to": "next_turn" if session.status == "running" else "current_session",
+    }
 
 
 @router.get("/sessions/{session_id}/files/read", dependencies=[Depends(verify_api_key)])

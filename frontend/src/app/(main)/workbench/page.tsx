@@ -31,6 +31,11 @@ interface ProjectSummary {
   }
 }
 
+interface ProjectListItem {
+  id: string
+  name: string
+}
+
 interface MethodRecommendation {
   goal_id: string
   label: string
@@ -93,7 +98,11 @@ const STACK_METHOD_OPTIONS = ['bmad', 'gsd', 'superpowers', 'specaudit', 'mvp-lo
 
 function getModelLabel(models: Model[], ref?: string | null) {
   if (!ref) return ''
-  const match = models.find(m => m.id === ref || m.model_id === ref)
+  const match = models.find(m =>
+    m.id === ref ||
+    m.model_id === ref ||
+    `${m.provider_name || 'unknown'}/${m.model_id}` === ref
+  )
   return match?.display_name || match?.model_id || ref
 }
 
@@ -171,12 +180,16 @@ export default function WorkbenchListPage() {
   const [pipelines, setPipelines] = useState<PipelineSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [showNew, setShowNew] = useState(false)
+  const [showProjectPicker, setShowProjectPicker] = useState(false)
   const [task, setTask] = useState('')
   const [agentType, setAgentType] = useState('coder')
   const [model, setModel] = useState('')
   const [creating, setCreating] = useState(false)
   const [projectId, setProjectId] = useState<string | null>(null)
   const [projectName, setProjectName] = useState<string>('')
+  const [projects, setProjects] = useState<ProjectListItem[]>([])
+  const [loadingProjects, setLoadingProjects] = useState(false)
+  const [projectPickerSelection, setProjectPickerSelection] = useState<string>('')
   const [models, setModels] = useState<Model[]>([])
   const [loadingModels, setLoadingModels] = useState(false)
   // Pipeline mode
@@ -227,9 +240,11 @@ export default function WorkbenchListPage() {
     const params = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '')
     const pid = searchParams?.get('project') || params.get('project')
     const qAgentType = searchParams?.get('agent_type') || params.get('agent_type')
+    const qModel = searchParams?.get('model') || params.get('model')
     if (pid) setProjectId(pid)
     if (qAgentType) setAgentType(qAgentType)
-    if (pid || qAgentType) setShowNew(true)
+    if (qModel) setModel(qModel)
+    if (pid || qAgentType || qModel) setShowNew(true)
   }, [searchParams])
 
   useEffect(() => {
@@ -292,6 +307,31 @@ export default function WorkbenchListPage() {
       })
       .catch(() => setProjectName(''))
   }, [projectId])
+
+  useEffect(() => {
+    if (!showNew) return
+    const apiBase = getApiBase()
+    const authHeaders = getAuthHeaders()
+    let cancelled = false
+
+    const loadProjects = async () => {
+      setLoadingProjects(true)
+      try {
+        const res = await fetch(`${apiBase}/v1/projects/`, { headers: authHeaders })
+        const payload = await res.json().catch(() => ({ data: [] }))
+        if (cancelled) return
+        const rows = Array.isArray(payload?.data) ? payload.data : []
+        setProjects(rows.map((p: any) => ({ id: String(p.id), name: String(p.name || 'Untitled Project') })))
+      } catch {
+        if (!cancelled) setProjects([])
+      } finally {
+        if (!cancelled) setLoadingProjects(false)
+      }
+    }
+
+    loadProjects()
+    return () => { cancelled = true }
+  }, [showNew])
 
   // Fetch active method stack + phase preview when pipeline mode changes
   useEffect(() => {
@@ -477,15 +517,26 @@ export default function WorkbenchListPage() {
       .catch(() => setSelectedStackCompatibility(null))
   }, [showNew, selectedStack, activeStack])
 
-  const createSession = async () => {
+  const createSession = async (forcedProjectId?: string) => {
+    const launchProjectId = forcedProjectId || projectId
     if (!task.trim() || creating) return
+    if (!launchProjectId) {
+      if (projects.length === 0) {
+        alert('Create a project first, then start a run.')
+        router.push('/projects')
+        return
+      }
+      setProjectPickerSelection('')
+      setShowProjectPicker(true)
+      return
+    }
     setCreating(true)
     try {
       const apiBase = getApiBase()
       const authHeaders = getAuthHeaders()
       const body: any = { task: task.trim(), agent_type: agentType }
       if (model) body.model = model
-      if (projectId) body.project_id = projectId
+      body.project_id = launchProjectId
       const sessRes = await fetch(`${apiBase}/v1/workbench/sessions`, {
         method: 'POST', headers: authHeaders,
         body: JSON.stringify(body),
@@ -749,6 +800,18 @@ export default function WorkbenchListPage() {
             New Session
           </button>
         </div>
+      </div>
+
+      <div className="rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50/70 dark:bg-indigo-900/20 px-4 py-3 flex items-center justify-between gap-3">
+        <p className="text-sm text-indigo-800 dark:text-indigo-200">
+          Prefer a single monitoring view? Run Center combines sessions and pipelines in one flow.
+        </p>
+        <button
+          onClick={() => router.push('/runs')}
+          className="px-3 py-1.5 text-xs font-medium rounded-lg border border-indigo-300 dark:border-indigo-600 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/30"
+        >
+          Open Run Center
+        </button>
       </div>
 
       {loading ? (
@@ -1058,6 +1121,14 @@ export default function WorkbenchListPage() {
                   )}
                 </div>
               )}
+              {!projectId && (
+                <div className="rounded-lg border border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+                  <div className="flex items-center gap-2">
+                    <span>📌</span>
+                    <span className="font-medium">No project selected yet. Launch will ask you to pick one.</span>
+                  </div>
+                </div>
+              )}
               {isPromotedProject && taskAutoFilled && (
                 <div className="rounded-lg border border-purple-200 dark:border-purple-700 bg-purple-50 dark:bg-purple-900/20 px-3 py-2 text-xs text-purple-700 dark:text-purple-300">
                   <div className="flex items-center gap-2">
@@ -1230,7 +1301,7 @@ export default function WorkbenchListPage() {
                                   <option value={ph.default_model}>{defaultModelLabel} (template)</option>
                                   {Object.entries(
                                     models
-                                      .filter(m => m.model_id !== model && m.model_id !== ph.resolved_model && m.model_id !== ph.default_model)
+                                      .filter(m => `${m.provider_name || 'unknown'}/${m.model_id}` !== model && `${m.provider_name || 'unknown'}/${m.model_id}` !== ph.resolved_model && `${m.provider_name || 'unknown'}/${m.model_id}` !== ph.default_model)
                                       .reduce((acc, m) => {
                                         const provider = m.provider_name || 'other'
                                         if (!acc[provider]) acc[provider] = []
@@ -1240,7 +1311,7 @@ export default function WorkbenchListPage() {
                                   ).map(([provider, providerModels]) => (
                                     <optgroup key={provider} label={provider.charAt(0).toUpperCase() + provider.slice(1)}>
                                       {providerModels.map(m => (
-                                        <option key={m.id} value={m.model_id}>{m.display_name || m.model_id}</option>
+                                        <option key={m.id} value={`${m.provider_name || 'unknown'}/${m.model_id}`}>{m.display_name || m.model_id}</option>
                                       ))}
                                     </optgroup>
                                   ))}
@@ -1291,7 +1362,7 @@ export default function WorkbenchListPage() {
                       ).map(([provider, pModels]) => (
                         <optgroup key={provider} label={provider.charAt(0).toUpperCase() + provider.slice(1)}>
                           {pModels.map(m => (
-                            <option key={m.id} value={m.model_id}>
+                            <option key={m.id} value={`${m.provider_name || 'unknown'}/${m.model_id}`}>
                               {m.display_name || m.model_id}
                             </option>
                           ))}
@@ -1313,6 +1384,72 @@ export default function WorkbenchListPage() {
                 className="px-4 py-2 text-sm font-medium rounded-lg bg-orange-500 hover:bg-orange-600 disabled:bg-gray-200 text-white disabled:text-gray-400 transition-colors">
                 {creating ? 'Launching...' : stackLaunchBlocked ? 'Fix stack to launch' : '🚀 Launch'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showProjectPicker && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md bg-white dark:bg-gray-900 rounded-2xl shadow-2xl">
+            <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-800">
+              <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Choose a Project for this Run</h3>
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Select where files and commands should be attached.</p>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              {loadingProjects ? (
+                <div className="text-sm text-gray-500 dark:text-gray-400">Loading projects...</div>
+              ) : projects.length === 0 ? (
+                <div className="rounded-lg border border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+                  No projects found. Create a project first.
+                </div>
+              ) : (
+                <select
+                  value={projectPickerSelection}
+                  onChange={(e) => setProjectPickerSelection(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                >
+                  <option value="">Select a project...</option>
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>{project.name}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+            <div className="px-5 py-4 border-t border-gray-100 dark:border-gray-800 flex justify-end gap-2">
+              {projects.length === 0 ? (
+                <button
+                  onClick={() => {
+                    setShowProjectPicker(false)
+                    setShowNew(false)
+                    router.push('/projects')
+                  }}
+                  className="px-3 py-1.5 text-sm font-medium rounded-lg bg-orange-500 hover:bg-orange-600 text-white"
+                >
+                  Create Project
+                </button>
+              ) : (
+                <>
+                  <button
+                    onClick={() => setShowProjectPicker(false)}
+                    className="px-3 py-1.5 text-sm font-medium rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (!projectPickerSelection) return
+                      setProjectId(projectPickerSelection)
+                      setShowProjectPicker(false)
+                      createSession(projectPickerSelection)
+                    }}
+                    disabled={!projectPickerSelection}
+                    className="px-3 py-1.5 text-sm font-medium rounded-lg bg-orange-500 hover:bg-orange-600 disabled:bg-gray-200 disabled:text-gray-400 text-white"
+                  >
+                    Attach Project
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>

@@ -319,9 +319,26 @@ async def runtime_status():
         status["github_copilot"]["usable"] = live_verified
         # Check if the token has the copilot scope by trying the session token exchange.
         # If it returns a different (longer) token it means the exchange succeeded.
-        from app.services.github_copilot import exchange_for_copilot_token
+        from app.services.github_copilot import exchange_for_copilot_token, list_copilot_models
         session_token = await exchange_for_copilot_token(github_token)
         has_copilot_scope = bool(session_token and session_token != github_token)
+
+        # Some valid Copilot credentials (especially cached/session-style tokens)
+        # can still expose the full catalog even when token exchange does not
+        # return a different token. Use the live model list as a second signal.
+        if not has_copilot_scope:
+            try:
+                live_models = await list_copilot_models(github_token)
+                has_catalog_only_models = any(
+                    (model_id or "").lower().startswith(("claude", "gemini", "o3", "o4"))
+                    for model_id in live_models
+                )
+                if has_catalog_only_models:
+                    has_copilot_scope = True
+            except Exception:
+                # Keep the exchange-derived value when live catalog probing fails.
+                pass
+
         status["github_copilot"]["has_copilot_scope"] = has_copilot_scope
     return status
 

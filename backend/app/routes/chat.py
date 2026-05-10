@@ -6,23 +6,30 @@ import time
 import asyncio
 import os
 import re
-import socket
 import subprocess
 from pathlib import Path
 from typing import Any, Dict
 from datetime import datetime, timezone
-from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, cast, func, or_, select, String
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.dependencies import get_memory
 from app.models import Conversation, Message, Model, Provider
 from app.schemas import ChatCompletionRequest
 from app.services import PersonaResolver, Router, model_client
+from app.services.github_copilot import get_copilot_auth_token, resolve_supported_copilot_model
 from app.services.memory_context import MemoryContext
-from app.services.provider_credentials import has_provider_api_key
+from app.services.runtime_model_resolver import (
+    find_validated_runtime_recovery_model,
+    NeedsLiveProbe as RuntimeNeedsLiveProbe,
+    Ready as RuntimeReady,
+    Unreachable as RuntimeUnreachable,
+    mark_runtime_validation_failure,
+    mark_runtime_validation_success,
+    resolve_model_for_runtime,
+)
 from app.middleware.auth import verify_api_key
 from app.middleware.rate_limit import check_rate_limit
 import logging
@@ -183,22 +190,57 @@ def _tool_loop_max_rounds() -> int:
 
 def _tool_loop_timeout_seconds() -> int:
     """Configurable timeout for each model call in the tool loop."""
-    raw = (os.getenv("DEVFORGEAI_TOOL_LOOP_TIMEOUT_SECONDS", "60") or "60").strip()
+    raw = (os.getenv("DEVFORGEAI_TOOL_LOOP_TIMEOUT_SECONDS", "120") or "120").strip()
     try:
         value = int(raw)
     except Exception:
-        value = 60
-    return max(15, min(value, 300))
+        value = 120
+    return max(30, min(value, 600))
+
+
+def _normalize_ollama_override_candidates(model_hint: str) -> list[str]:
+    """Build tolerant candidate IDs for Ollama override matching."""
+    raw = (model_hint or "").strip().lower()
+    if not raw:
+        return []
+
+    # Generate normalization variants in two rounds so combinations like
+    # "lgm-5.1model" become "glm-5.1".
+    candidates: list[str] = [raw]
+    for _ in range(2):
+        snapshot = list(candidates)
+        for c in snapshot:
+            if c.startswith("lgm-"):
+                candidates.append("glm-" + c[4:])
+            if c.endswith("model"):
+                trimmed = c[:-5].strip(" -_")
+                if trimmed:
+                    candidates.append(trimmed)
+
+    expanded: list[str] = []
+    for c in candidates:
+        expanded.append(c)
+        if ":" not in c:
+            expanded.append(f"{c}:cloud")
+
+    # Preserve order while removing duplicates.
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for c in expanded:
+        if c and c not in seen:
+            seen.add(c)
+            deduped.append(c)
+    return deduped
 
 
 def _chat_completion_timeout_seconds() -> int:
     """Base timeout for non-tool single model calls."""
-    raw = (os.getenv("DEVFORGEAI_CHAT_TIMEOUT_SECONDS", "45") or "45").strip()
+    raw = (os.getenv("DEVFORGEAI_CHAT_TIMEOUT_SECONDS", "120") or "120").strip()
     try:
         value = int(raw)
     except Exception:
-        value = 45
-    return max(20, min(value, 600))
+        value = 120
+    return max(30, min(value, 600))
 
 
 def _tool_loop_max_tokens(requested: int | None) -> int:
@@ -235,6 +277,14 @@ def _adaptive_model_timeout_seconds(model: Model | None, provider: Provider | No
         return base
 
     provider_name = (provider.name or "").lower().strip()
+    if provider_name == "github-copilot":
+        raw = (os.getenv("DEVFORGEAI_COPILOT_TIMEOUT_SECONDS", "180") or "180").strip()
+        try:
+            copilot_timeout = int(raw)
+        except Exception:
+            copilot_timeout = 180
+        return max(base, max(30, min(copilot_timeout, 600)))
+
     if provider_name not in _LOCAL_MODEL_PROVIDERS and provider_name != "ollama":
         return base
 
@@ -260,73 +310,85 @@ def _model_supports_tools(model, provider) -> bool:
     return True
 
 
-def _can_connect_to_base_url(base_url: str | None, timeout: float = 0.35) -> bool:
-    if not base_url:
-        return False
-    try:
-        parsed = urlparse(base_url)
-        host = parsed.hostname
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        if not host:
-            return False
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except OSError:
-        return False
+def _tool_availability_system_message(tool_names: list[str]) -> dict:
+    """System message telling the model which tools are available.
+
+    This belt-and-braces hint is injected alongside the native OpenAI
+    `tools=` array. Some upstream proxies (e.g. GitHub Copilot, Codex
+    OAuth proxy) can silently drop the `tools` parameter, leaving the
+    model unaware of its capabilities. With this notice, the model knows
+    tools exist and how to invoke them, so it never falsely claims it
+    has no tool access.
+    """
+    if not tool_names:
+        return {}
+    listed = ", ".join(tool_names)
+    return {
+        "role": "system",
+        "content": (
+            "You have function-calling tools available in this session: "
+            f"{listed}. "
+            "Use them via standard OpenAI tool/function calling whenever the user "
+            "needs file reads/writes, directory listings, shell commands, web fetches, "
+            "or media conversion. If native function calling is unavailable, emit a "
+            "JSON object of the form "
+            "{\"tool_calls\": [{\"name\": \"<tool>\", \"arguments\": {...}}]} "
+            "as your entire response. Never tell the user you lack tool access — "
+            "these tools are wired into this DevForgeAI backend and execute server-side."
+        ),
+    }
 
 
-def _provider_is_usable(provider: Provider | None) -> bool:
-    if not provider or provider.is_active is False:
-        return False
-    provider_name = (provider.name or "").lower().strip()
-    if provider_name in _LOCAL_MODEL_PROVIDERS:
-        return _can_connect_to_base_url(provider.api_base_url)
-    return has_provider_api_key(provider_name)
+# Preferred model IDs in quality order for recovery selection (best first)
+_RECOVERY_QUALITY_ORDER: list[str] = [
+    "gpt-4o", "gpt-4o-2024-11-20", "gpt-4o-2024-08-06",
+    "gpt-4o-mini", "gpt-4o-mini-2024-07-18",
+    "gpt-3.5-turbo", "gpt-3.5-turbo-0613",
+]
 
 
-def _evaluate_model_connectivity(model: Model | None, provider: Provider | None) -> tuple[bool, str]:
-    if not model:
-        return False, "No model is configured."
-    if not provider:
-        return False, f"Provider missing for model '{model.model_id}'."
-    if model.is_active is False:
-        return False, f"Model '{model.model_id}' is disabled."
-    if (model.validation_status or "unverified") != "validated":
-        return False, (
-            f"Model '{model.model_id}' is not live-validated "
-            f"(status: {model.validation_status or 'unverified'})."
+async def _find_copilot_recovery_model(
+    db: AsyncSession,
+    excluded_model_ids: set[str] | None = None,
+) -> tuple[Model | None, Provider | None]:
+    """Find the best available GitHub Copilot model using the live catalog."""
+    excluded = excluded_model_ids or set()
+    token = get_copilot_auth_token()
+    # Resolve live catalog via a dummy probe (any model_id will return live_models)
+    _, live_models = await resolve_supported_copilot_model("gpt-4o", token)
+    if not live_models:
+        return None, None
+    # Build priority order: prefer quality tier, then whatever is live
+    candidates = [m for m in _RECOVERY_QUALITY_ORDER if m in live_models]
+    remaining = [m for m in live_models if m not in _RECOVERY_QUALITY_ORDER]
+    ordered = candidates + remaining
+    for model_id in ordered:
+        result = await db.execute(
+            select(Model, Provider)
+            .join(Provider, Model.provider_id == Provider.id)
+            .where(Model.is_active == True)
+            .where(Model.validation_status == "validated")
+            .where(Model.model_id == model_id)
+            .where(Provider.name.ilike("github-copilot"))
         )
-    if provider.is_active is False:
-        return False, f"Provider '{provider.name}' is disabled."
-    if not _provider_is_usable(provider):
-        provider_name = (provider.name or "").lower().strip()
-        if provider_name == "github-copilot":
-            return False, (
-                "GitHub Copilot is not connected. Reconnect GitHub in Settings and ensure "
-                "your account has an active Copilot subscription."
-            )
-        if provider_name in _LOCAL_MODEL_PROVIDERS:
-            return False, f"Local provider '{provider.name}' is unreachable at {provider.api_base_url}."
-        return False, f"Provider '{provider.name}' has no usable live credentials."
-    return True, ""
+        row = result.first()
+        if not row:
+            continue
+        model, provider = row
+        if str(model.id) in excluded:
+            continue
+        resolved = await resolve_model_for_runtime(db, str(model.id), intent="chat")
+        if isinstance(resolved, RuntimeReady):
+            return resolved.model, resolved.provider
+    return None, None
 
 
 async def _find_recovery_model(db: AsyncSession, excluded_model_ids: set[str] | None = None) -> tuple[Model | None, Provider | None]:
-    excluded = excluded_model_ids or set()
-    result = await db.execute(
-        select(Model, Provider)
-        .join(Provider, Model.provider_id == Provider.id)
-        .where(Model.is_active == True)
-        .where(Model.validation_status == "validated")
-        .order_by(Model.validated_at.desc().nulls_last(), Model.created_at.desc())
+    return await find_validated_runtime_recovery_model(
+        db,
+        intent="chat",
+        excluded_model_ids=excluded_model_ids,
     )
-    for model, provider in result.all():
-        if str(model.id) in excluded:
-            continue
-        ok, _reason = _evaluate_model_connectivity(model, provider)
-        if ok:
-            return model, provider
-    return None, None
 
 
 async def _find_cloud_recovery_model(
@@ -334,23 +396,12 @@ async def _find_cloud_recovery_model(
     excluded_model_ids: set[str] | None = None,
 ) -> tuple[Model | None, Provider | None]:
     """Find a validated, connected cloud model for safe fallback."""
-    excluded = excluded_model_ids or set()
-    result = await db.execute(
-        select(Model, Provider)
-        .join(Provider, Model.provider_id == Provider.id)
-        .where(Model.is_active == True)
-        .where(Model.validation_status == "validated")
-        .order_by(Model.validated_at.desc().nulls_last(), Model.created_at.desc())
+    return await find_validated_runtime_recovery_model(
+        db,
+        intent="chat",
+        excluded_model_ids=excluded_model_ids,
+        cloud_only=True,
     )
-    for model, provider in result.all():
-        if str(model.id) in excluded:
-            continue
-        if not _is_cloud_model(model, provider):
-            continue
-        ok, _reason = _evaluate_model_connectivity(model, provider)
-        if ok:
-            return model, provider
-    return None, None
 
 
 def _get_workflow_state(conversation_id: str) -> Dict[str, Any]:
@@ -637,6 +688,75 @@ async def chat_completions(
                 actual_model="command_executor",
             )
 
+        # ── Active method routing ────────────────────────────────────────
+        # If the user has selected a non-standard development method
+        # (BMAD, GSD, SuperPowers, …), route the message to a multi-agent
+        # pipeline instead of running it as a single inline LLM call.
+        # If the active method is "standard" (or unknown / pipeline-less),
+        # fall through to regular inline chat.
+        wf_state_for_method = _get_workflow_state(conv_id)
+        try:
+            from app.routes.methods import _load_state as _load_methods_state
+            from app.services.phase_templates import list_supported_methods
+            from app.routes.pipelines import start_method_pipeline_for_chat
+
+            methods_state = _load_methods_state()
+            active_method_id = (methods_state.get("active_method") or "standard").strip().lower()
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.warning("Active-method routing skipped: %s", exc)
+            active_method_id = "standard"
+
+        # Reset pipeline gate if user switched methods since last pipeline.
+        if wf_state_for_method.get("pipeline_method_id") not in (None, active_method_id):
+            wf_state_for_method["pipeline_started"] = False
+
+        if (
+            active_method_id
+            and active_method_id != "standard"
+            and not wf_state_for_method.get("pipeline_started")
+        ):
+            if active_method_id in list_supported_methods():
+                try:
+                    pipeline_dict = await start_method_pipeline_for_chat(
+                        method_id=active_method_id,
+                        task=last_user_msg,
+                        db=db,
+                    )
+                    wf_state_for_method["pipeline_started"] = True
+                    wf_state_for_method["pipeline_id"] = pipeline_dict.get("id")
+                    wf_state_for_method["pipeline_method_id"] = active_method_id
+                    method_label = active_method_id.upper()
+                    pipeline_id_disp = pipeline_dict.get("id", "?")
+                    return _system_completion(
+                        content=(
+                            f"Starting **{method_label}** pipeline for this request.\n\n"
+                            f"- **Pipeline:** `{pipeline_id_disp}`\n"
+                            f"- **Status:** {pipeline_dict.get('status', 'pending')}\n\n"
+                            f"Switch to the **Workbench / Pipelines** view to monitor agent progress. "
+                            f"To run this conversation as a normal chat instead, click the method badge "
+                            f"to deactivate (or use `/standard`)."
+                        ),
+                        conversation_id=conv_id,
+                        actual_model="method_dispatcher",
+                        workflow_trigger={
+                            "method_id": active_method_id,
+                            "method_name": method_label,
+                            "score": 1.0,
+                            "is_custom": False,
+                            "pipeline_id": pipeline_id_disp,
+                        },
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to start pipeline for active method '%s': %s — falling back to inline chat.",
+                        active_method_id, exc,
+                    )
+            else:
+                logger.info(
+                    "Active method '%s' has no pipeline phases; running as inline chat.",
+                    active_method_id,
+                )
+
         # No explicit command matched — check for workflow triggers
         from app.services.chat_commands.workflow_commands import (
             detect_workflow_trigger,
@@ -721,115 +841,50 @@ async def chat_completions(
 
     # 1. Resolve persona
     resolver = PersonaResolver(db)
-    persona, primary_model, fallback_model = await resolver.resolve(request.model)
+    persona_ref = request.model
+    override_ref = request.model_override
+
+    # Backward compatibility: some clients still send provider/model in
+    # the `model` field instead of using `model_override`.
+    if not override_ref and "/" in (persona_ref or ""):
+        override_ref = persona_ref
+        default_persona = await resolver.get_default_persona()
+        if default_persona:
+            persona_ref = default_persona.name or str(default_persona.id)
+        else:
+            persona_ref = "Default"
+
+    persona, primary_model, fallback_model = await resolver.resolve(persona_ref)
     recovery_notice: str | None = None
     
     # Apply model override if specified (user picked a specific model from dropdown)
-    if request.model_override and persona:
-        from app.models.model import Model as ModelORM
-        from app.models.provider import Provider as ProviderORM
-        from app.services.codex_oauth import should_use_codex_oauth_proxy
-        from sqlalchemy import case
-        _use_codex_proxy = should_use_codex_oauth_proxy("openai-codex")
-
-        # Deterministic override resolution order:
-        # 1) Model UUID (frontend dropdown now sends this)
-        # 2) Provider-qualified ref: provider/model_id (e.g. openai-codex/gpt-5.3-codex)
-        # 3) Plain model_id exact match only (ambiguous duplicates are rejected)
-        _override_ref = request.model_override
-        override_row = None
-        override_issue: str | None = None
-
-        # 1) UUID lookup
-        try:
-            override_uuid = uuid.UUID(_override_ref)
-            override_result = await db.execute(
-                select(ModelORM, ProviderORM)
-                .join(ProviderORM, ModelORM.provider_id == ProviderORM.id)
-                .where(ModelORM.is_active == True)
-                .where(ModelORM.id == override_uuid)
-                .limit(1)
-            )
-            override_row = override_result.first()
-        except ValueError:
-            pass
-
-        # 2) provider-qualified lookup
-        if not override_row and "/" in _override_ref:
-            provider_hint, model_hint = _override_ref.split("/", 1)
-            provider_hint = provider_hint.strip()
-            model_hint = model_hint.strip()
-            if provider_hint and model_hint:
-                qualified_result = await db.execute(
-                    select(ModelORM, ProviderORM)
-                    .join(ProviderORM, ModelORM.provider_id == ProviderORM.id)
-                    .where(ModelORM.is_active == True)
-                    .where(func.lower(ProviderORM.name) == provider_hint.lower())
-                    .where(
-                        (ModelORM.model_id == model_hint)
-                        | (ModelORM.model_id == _override_ref)
-                    )
-                    .order_by(
-                        (ModelORM.model_id == model_hint).desc(),
-                        (ModelORM.model_id == _override_ref).desc(),
-                        case(
-                            (ProviderORM.name == "openai-codex", 0 if _use_codex_proxy else -1),
-                            else_=1,
-                        ).desc(),
-                        ModelORM.validated_at.desc().nulls_last(),
-                    )
-                    .limit(1)
-                )
-                override_row = qualified_result.first()
-
-        # 3) plain exact model_id lookup; reject ambiguous duplicates
-        if not override_row:
-            exact_result = await db.execute(
-                select(ModelORM, ProviderORM)
-                .join(ProviderORM, ModelORM.provider_id == ProviderORM.id)
-                .where(ModelORM.is_active == True)
-                .where(ModelORM.model_id == _override_ref)
-                .order_by(
-                    case(
-                        (ProviderORM.name == "openai-codex", 0 if _use_codex_proxy else -1),
-                        else_=1,
-                    ).desc(),
-                    ModelORM.validated_at.desc().nulls_last(),
-                )
-            )
-            exact_rows = exact_result.all()
-            if len(exact_rows) == 1:
-                override_row = exact_rows[0]
-            elif len(exact_rows) > 1:
-                providers = ", ".join(sorted({(r[1].name or "unknown") for r in exact_rows}))
-                override_issue = (
-                    f"Requested model '{_override_ref}' is ambiguous across providers ({providers}). "
-                    "Select a specific model entry or use provider/model format."
-                )
-
-        if override_row:
-            primary_model = override_row[0]
-            fallback_model = None  # No fallback when explicitly overridden
-            logger.info(
-                "Model override resolved: requested='%s' -> matched='%s' (model_id=%s) via provider='%s'",
-                _override_ref,
-                primary_model.model_id,
-                primary_model.id,
-                override_row[1].name,
+    if override_ref and persona:
+        override_result = await resolve_model_for_runtime(
+            db,
+            override_ref,
+            intent="chat",
+        )
+        if isinstance(override_result, RuntimeUnreachable):
+            recovery_notice = override_result.user_message
+            logger.warning(
+                "Model override '%s' unresolved (%s); falling back to runtime recovery",
+                override_ref,
+                override_result.reason_code,
             )
         else:
-            recovery_notice = (
-                override_issue
-                or (
-                    f"Requested model '{_override_ref}' is unavailable or inactive. "
-                    "I switched to a verified model for this reply and can help you reconnect the requested provider."
+            primary_model = override_result.model
+            fallback_model = None  # explicit override disables persona fallback path
+            logger.info(
+                "Model override resolved via shared resolver: requested='%s' -> provider='%s' model='%s'",
+                override_ref,
+                override_result.provider.name,
+                override_result.runtime_model_id,
+            )
+            if isinstance(override_result, RuntimeNeedsLiveProbe):
+                recovery_notice = (
+                    f"Model '{primary_model.model_id}' has not been explicitly validated yet. "
+                    "Using it with live runtime probing for this response."
                 )
-            )
-            logger.warning(
-                "Model override '%s' unresolved (%s); falling back to a validated usable model",
-                _override_ref,
-                override_issue or "not-found",
-            )
     
     if not persona:
         raise HTTPException(
@@ -864,7 +919,7 @@ async def chat_completions(
                 }
             )
 
-    # 1b. Enforce model eligibility: active + validated + provider connected.
+    # 1b. Enforce model eligibility via shared runtime resolver.
     primary_provider = None
     fallback_provider = None
     if primary_model:
@@ -874,8 +929,35 @@ async def chat_completions(
         fallback_provider_result = await db.execute(select(Provider).where(Provider.id == fallback_model.provider_id))
         fallback_provider = fallback_provider_result.scalar_one_or_none()
 
-    primary_ok, primary_reason = _evaluate_model_connectivity(primary_model, primary_provider)
-    fallback_ok, fallback_reason = _evaluate_model_connectivity(fallback_model, fallback_provider)
+    async def _resolve_candidate_for_chat(model_obj: Model | None, provider_obj: Provider | None):
+        if not model_obj:
+            return None, None, False, "No model is configured.", None
+        ref = str(model_obj.id)
+        if provider_obj and provider_obj.name:
+            ref = f"{provider_obj.name}/{model_obj.model_id}"
+        resolved = await resolve_model_for_runtime(db, ref, intent="chat")
+        if isinstance(resolved, RuntimeUnreachable):
+            return model_obj, provider_obj, False, resolved.user_message, resolved
+        if isinstance(resolved, (RuntimeReady, RuntimeNeedsLiveProbe)):
+            reason = ""
+            if isinstance(resolved, RuntimeNeedsLiveProbe):
+                reason = "Using unverified model with live runtime probe."
+            return resolved.model, resolved.provider, True, reason, resolved
+        return model_obj, provider_obj, False, "Unknown resolver state.", None
+
+    primary_model, primary_provider, primary_ok, primary_reason, primary_resolution = await _resolve_candidate_for_chat(
+        primary_model,
+        primary_provider,
+    )
+    fallback_model, fallback_provider, fallback_ok, fallback_reason, _fallback_resolution = await _resolve_candidate_for_chat(
+        fallback_model,
+        fallback_provider,
+    )
+
+    if primary_ok and isinstance(primary_resolution, RuntimeNeedsLiveProbe) and not recovery_notice:
+        recovery_notice = (
+            f"Model '{primary_model.model_id}' is currently unverified; running with live runtime probe."
+        )
 
     if not primary_ok:
         requested_name = primary_model.model_id if primary_model else "(none)"
@@ -891,7 +973,12 @@ async def chat_completions(
                 f"Switched to fallback model '{primary_model.model_id}'."
             )
         else:
-            recovery_model, recovery_provider = await _find_recovery_model(db, excluded_model_ids=excluded)
+            # For Copilot failures, try to recover within the live Copilot catalog first
+            recovery_model, recovery_provider = None, None
+            if primary_provider and (primary_provider.name or "").strip().lower() == "github-copilot":
+                recovery_model, recovery_provider = await _find_copilot_recovery_model(db, excluded_model_ids=excluded)
+            if not recovery_model:
+                recovery_model, recovery_provider = await _find_recovery_model(db, excluded_model_ids=excluded)
             if recovery_model and recovery_provider:
                 primary_model = recovery_model
                 primary_provider = recovery_provider
@@ -1082,6 +1169,9 @@ async def _stream_response(
                 if primary_model and provider and _model_supports_tools(primary_model, provider):
                     tool_schemas = get_tool_schemas(list(ALL_TOOLS))
                     loop_messages = list(msg_dicts)
+                    _tool_notice = _tool_availability_system_message(list(ALL_TOOLS))
+                    if _tool_notice:
+                        loop_messages.insert(0, _tool_notice)
                     workspace_root = Path(__file__).resolve().parents[3]
                     max_tool_rounds = _tool_loop_max_rounds()
                     call_timeout = _adaptive_model_timeout_seconds(
@@ -1292,6 +1382,11 @@ async def _stream_response(
                               input_tokens, output_tokens, latency_ms, True, None,
                               estimated_cost=estimated_cost)
             if full_content:
+                if primary_model:
+                    try:
+                        await mark_runtime_validation_success(db, primary_model, intent="chat")
+                    except Exception as validation_exc:
+                        logger.debug("Runtime validation success mark skipped: %s", validation_exc)
                 if user_saved_early:
                     await _save_assistant_message(
                         db,
@@ -1313,6 +1408,16 @@ async def _stream_response(
 
         except Exception as e:
             logger.error(f"Streaming error: {e}")
+            if primary_model:
+                try:
+                    await mark_runtime_validation_failure(
+                        db,
+                        primary_model,
+                        intent="chat",
+                        error_text=str(e),
+                    )
+                except Exception as validation_exc:
+                    logger.debug("Runtime validation failure mark skipped: %s", validation_exc)
             error_data = json.dumps({
                 "error": {
                     "type": "model_error",
@@ -1412,6 +1517,9 @@ async def _sync_response(
             if primary_model and provider and _model_supports_tools(primary_model, provider):
                 tool_schemas = get_tool_schemas(list(ALL_TOOLS))
                 loop_messages = list(msg_dicts)
+                _tool_notice = _tool_availability_system_message(list(ALL_TOOLS))
+                if _tool_notice:
+                    loop_messages.insert(0, _tool_notice)
                 workspace_root = Path(__file__).resolve().parents[3]
                 max_tool_rounds = _tool_loop_max_rounds()
                 call_timeout = _adaptive_model_timeout_seconds(
@@ -1712,6 +1820,11 @@ async def _sync_response(
                           input_tokens, output_tokens, latency_ms, True, None,
                           estimated_cost=estimated_cost)
         if full_content:
+            if primary_model:
+                try:
+                    await mark_runtime_validation_success(db, primary_model, intent="chat")
+                except Exception as validation_exc:
+                    logger.debug("Runtime validation success mark skipped: %s", validation_exc)
             if user_saved_early:
                 await _save_assistant_message(
                     db,
@@ -1765,6 +1878,16 @@ async def _sync_response(
         raise
     except Exception as e:
         logger.error(f"Sync response error: {e}", exc_info=True)
+        if primary_model:
+            try:
+                await mark_runtime_validation_failure(
+                    db,
+                    primary_model,
+                    intent="chat",
+                    error_text=str(e),
+                )
+            except Exception as validation_exc:
+                logger.debug("Runtime validation failure mark skipped: %s", validation_exc)
         raise HTTPException(
             status_code=500,
             detail={

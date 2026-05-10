@@ -4,8 +4,8 @@ import { API_BASE, AUTH_HEADERS } from '@/lib/config'
 import { RunPanel } from '@/components/RunPanel'
 import { renderMarkdown } from '@/lib/markdown'
 
-import { useState, useEffect, useCallback } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 
 // ─── Sandbox Panel ──────────────────────────────────────────────────────────
 function SandboxPanel({ projectId }: { projectId: string }) {
@@ -280,6 +280,17 @@ function fileIcon(name: string): string {
   return FILE_ICONS[ext] || '📄'
 }
 
+function findNodeByPath(nodes: FileNode[], path: string): FileNode | null {
+  for (const node of nodes) {
+    if (node.path === path && node.type === 'file') return node
+    if (node.type === 'dir' && node.children?.length) {
+      const child = findNodeByPath(node.children, path)
+      if (child) return child
+    }
+  }
+  return null
+}
+
 function FileTree({ nodes, onSelect, selected, depth = 0 }: {
   nodes: FileNode[]; onSelect: (n: FileNode) => void
   selected: string | null; depth?: number
@@ -324,6 +335,7 @@ function FileTree({ nodes, onSelect, selected, depth = 0 }: {
 export default function ProjectDetailPage() {
   const { id } = useParams() as { id: string }
   const router = useRouter()
+  const searchParams = useSearchParams()
 
   const [project, setProject] = useState<any>(null)
   const [tree, setTree] = useState<FileNode[]>([])
@@ -359,6 +371,7 @@ export default function ProjectDetailPage() {
   const [editName, setEditName] = useState('')
   const [editDesc, setEditDesc] = useState('')
   const [saving, setSaving] = useState(false)
+  const openedFromQueryRef = useRef<string | null>(null)
 
   const fetchProject = useCallback(async () => {
     const [proj, files] = await Promise.all([
@@ -374,6 +387,13 @@ export default function ProjectDetailPage() {
   }, [id, router])
 
   useEffect(() => { fetchProject() }, [fetchProject])
+
+  useEffect(() => {
+    const tab = searchParams.get('tab')
+    if (tab === 'files' || tab === 'sandbox' || tab === 'run') {
+      setActiveTab(tab)
+    }
+  }, [searchParams])
 
   // Restore all advanced launch prefs from localStorage on mount.
   useEffect(() => {
@@ -525,7 +545,7 @@ export default function ProjectDetailPage() {
     return () => clearInterval(timer)
   }, [id, fetchProject])
 
-  const openFile = async (node: FileNode) => {
+  const openFile = useCallback(async (node: FileNode) => {
     setSelectedFile(node)
     setFileContent(null)
     setLoadingFile(true)
@@ -533,7 +553,22 @@ export default function ProjectDetailPage() {
       .then(r => r.json()).catch(() => ({ content: 'Failed to load file.' }))
     setFileContent(res.content || '')
     setLoadingFile(false)
-  }
+  }, [id])
+
+  useEffect(() => {
+    const targetPath = searchParams.get('file')
+    if (!targetPath || tree.length === 0) return
+    if (openedFromQueryRef.current === targetPath) return
+    const target = findNodeByPath(tree, targetPath)
+    if (!target) return
+    openedFromQueryRef.current = targetPath
+    setActiveTab('files')
+    openFile(target)
+  }, [searchParams, tree, openFile])
+
+  useEffect(() => {
+    openedFromQueryRef.current = null
+  }, [id])
 
   const saveProject = async () => {
     setSaving(true)

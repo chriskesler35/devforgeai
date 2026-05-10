@@ -11,6 +11,8 @@ from app.services.codex_oauth import (
     codex_proxy_rejects_temperature,
     get_codex_proxy_api_key,
     get_codex_proxy_base_url,
+    get_codex_proxy_configuration_issue,
+    is_codex_proxy_reachable,
     should_use_codex_oauth_proxy,
 )
 from app.services.provider_credentials import get_provider_api_key
@@ -70,6 +72,13 @@ _REAL_VERSIONED_MODEL_IDS: frozenset[str] = frozenset({
     "codex-mini-latest",
 })
 
+# Some OpenAI/Codex IDs can appear in catalog data but are not callable
+# through the chat/completions transport used by this backend.
+_CHAT_COMPLETIONS_FALLBACKS: dict[str, str] = {
+    "gpt-5.5": "gpt-5.3-codex",
+    "gpt-5.5-pro": "gpt-5.3-codex",
+}
+
 
 def _normalize_codex_model_id(model_id: str) -> str:
     """Map legacy/alias Codex model IDs to provider-canonical IDs.
@@ -90,6 +99,11 @@ def _normalize_codex_model_id(model_id: str) -> str:
     if mapped:
         return mapped
     return model_id
+
+
+def _fallback_chat_completions_model(model_id: str) -> Optional[str]:
+    normalized = (model_id or "").strip().lower()
+    return _CHAT_COMPLETIONS_FALLBACKS.get(normalized)
 
 # Drop params unsupported by specific providers (e.g. GPT-5 only accepts
 # temperature=1, Anthropic ignores some OpenAI-specific fields, etc).
@@ -115,7 +129,9 @@ class ModelClient:
     ):
         """Call model via LiteLLM with unified interface."""
         provider_name = provider.name.lower()
-        raw_model_id = model.model_id or ""
+        configured_model_id = model.model_id or ""
+        runtime_model_id = getattr(model, "_runtime_model_id", None)
+        raw_model_id = runtime_model_id or configured_model_id
         raw_model_id_lower = raw_model_id.lower()
         # GitHub Copilot exposes real versioned model IDs directly; never remap them.
         effective_model_id = raw_model_id if provider_name == "github-copilot" else _normalize_codex_model_id(raw_model_id)
@@ -208,7 +224,11 @@ class ModelClient:
         elif provider_name == "github-copilot":
             # Copilot accepts the stored GitHub OAuth token directly.
             from app.services.github_copilot import (
-                exchange_for_copilot_token, get_copilot_headers, COPILOT_API_BASE, get_copilot_auth_token,
+                COPILOT_API_BASE,
+                exchange_for_copilot_token,
+                get_copilot_auth_token,
+                get_copilot_headers,
+                resolve_supported_copilot_model,
             )
             gh_token = get_copilot_auth_token()
             copilot_token = await exchange_for_copilot_token(gh_token) if gh_token else None
@@ -217,6 +237,17 @@ class ModelClient:
                     "GitHub Copilot is not available. Sign in with GitHub first "
                     "(and ensure your account has a Copilot subscription)."
                 )
+            resolved_model_id, live_models = await resolve_supported_copilot_model(raw_model_id, gh_token)
+            if not resolved_model_id:
+                preview = ", ".join(live_models[:8]) if live_models else "none"
+                raise ValueError(
+                    f"GitHub Copilot does not currently expose model '{configured_model_id or raw_model_id}'. "
+                    f"Live catalog preview: {preview}"
+                )
+            if resolved_model_id != effective_model_id:
+                logger.info("Copilot model alias normalized: %s -> %s", effective_model_id, resolved_model_id)
+                effective_model_id = resolved_model_id
+                litellm_model = f"openai/{effective_model_id}"
             kwargs["api_base"] = COPILOT_API_BASE
             kwargs["api_key"] = copilot_token
             # Add Copilot-specific headers
@@ -260,7 +291,26 @@ class ModelClient:
         logger.info(f"Calling model: {litellm_model} | stream={stream} | api_key={_key_hint} | provider={provider_name}")
 
         # Use acompletion for async support
-        response = await acompletion(**kwargs)
+        try:
+            response = await acompletion(**kwargs)
+        except Exception as exc:
+            should_retry_chat_fallback = (
+                provider_name in ("openai", "openai-codex")
+                and "not accessible via the /chat/completions endpoint" in str(exc)
+            )
+            fallback_model_id = _fallback_chat_completions_model(effective_model_id) if should_retry_chat_fallback else None
+
+            if not fallback_model_id:
+                raise
+
+            kwargs["model"] = f"openai/{fallback_model_id}"
+            kwargs.pop("temperature", None)
+            logger.warning(
+                "Retrying OpenAI/Codex call with chat-compatible fallback model: %s -> %s",
+                effective_model_id,
+                fallback_model_id,
+            )
+            response = await acompletion(**kwargs)
 
         if stream:
             return self._stream_response(response)

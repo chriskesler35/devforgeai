@@ -768,7 +768,7 @@ function ApiKeysTab() {
                 <div className="text-[11px] text-slate-600">Probe detail: {runtimeStatus.github_copilot.validation_error}</div>
               )}
             </div>
-            {runtimeStatus.github_copilot.has_token && runtimeStatus.github_copilot.has_copilot_scope === false && (
+            {runtimeStatus.github_copilot.has_token && !runtimeStatus.github_copilot.usable && runtimeStatus.github_copilot.has_copilot_scope === false && (
               <div className="mt-3 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
                 <strong>Limited model access:</strong> Your GitHub token is missing the <code>copilot</code> scope, so only basic GPT models are currently live-verified. Click <strong>Sign in to Copilot (device flow)</strong> below — that is the only flow that can grant this scope and unlock the full catalog (Claude, Gemini, o3, etc.).
               </div>
@@ -1339,7 +1339,9 @@ function ServerTab() {
         processes: [
           {
             name: 'devforgeai-backend',
-            status: backendStatus?.running ? 'online' : 'stopped',
+            status: backendStatus?.healthy
+              ? 'online'
+              : (backendStatus?.running ? 'degraded' : 'stopped'),
             pid: backendStatus?.pid ?? null,
             port: backendStatus?.port ?? 19001,
             memory_mb: null,

@@ -176,6 +176,59 @@ class Router:
 
         return "SIMPLE"
 
+    @staticmethod
+    def _is_model_not_supported_error(error: Exception) -> bool:
+        text = str(error or "").lower()
+        return "model_not_supported" in text or "requested model is not supported" in text
+
+    async def _mark_model_runtime_unsupported(self, model: Optional[Model]) -> None:
+        if not model:
+            return
+        model.validation_status = "failed"
+        model.validation_error = "model_not_supported"
+        model.validation_warning = "Provider rejected this model during a live chat/completions call."
+        model.validation_source = "runtime_rejection"
+        model.is_active = False
+        try:
+            await self.db.commit()
+        except Exception as exc:
+            await self.db.rollback()
+            logger.warning("Failed to persist runtime model demotion for %s: %s", model.model_id, exc)
+
+    async def _find_runtime_recovery_model(
+        self,
+        provider: Optional[Provider],
+        excluded_model_ids: set[str],
+    ) -> tuple[Optional[Model], Optional[Provider]]:
+        if not provider:
+            return None, None
+
+        result = await self.db.execute(
+            select(Model)
+            .where(Model.provider_id == provider.id)
+            .where(Model.is_active == True)
+            .where(Model.validation_status == "validated")
+        )
+        candidates = [model for model in result.scalars().all() if str(model.id) not in excluded_model_ids]
+        if not candidates:
+            return None, None
+
+        provider_name = (provider.name or "").lower().strip()
+        preferred_ids = {
+            "github-copilot": ["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"],
+        }.get(provider_name, [])
+
+        def sort_key(model: Model) -> tuple[int, str]:
+            model_id = (model.model_id or "").strip()
+            try:
+                preferred_rank = preferred_ids.index(model_id)
+            except ValueError:
+                preferred_rank = len(preferred_ids)
+            return preferred_rank, model_id
+
+        candidates.sort(key=sort_key)
+        return candidates[0], provider
+
     async def route_request(
         self,
         persona: Persona,
@@ -285,6 +338,45 @@ class Router:
 
         except Exception as e:
             logger.error(f"Primary model failed: {e}")
+
+            runtime_recovery_model = None
+            runtime_recovery_provider = None
+            if self._is_model_not_supported_error(e):
+                await self._mark_model_runtime_unsupported(primary_model)
+                runtime_recovery_model, runtime_recovery_provider = await self._find_runtime_recovery_model(
+                    provider,
+                    excluded_model_ids={str(primary_model.id)} if primary_model else set(),
+                )
+
+            if runtime_recovery_model and runtime_recovery_provider:
+                try:
+                    if stream:
+                        async def recovery_stream_generator():
+                            async for chunk in await model_client.call_model(
+                                runtime_recovery_model, runtime_recovery_provider, msg_dicts, stream=True, **params
+                            ):
+                                yield chunk
+
+                            if persona.memory_enabled and conversation_id:
+                                await self.memory.store_messages(
+                                    conversation_id, msg_dicts, persona.max_memory_messages
+                                )
+
+                        return recovery_stream_generator()
+                    else:
+                        response = await model_client.call_model(
+                            runtime_recovery_model, runtime_recovery_provider, msg_dicts, stream=False, **params
+                        )
+
+                        if persona.memory_enabled and conversation_id:
+                            await self.memory.store_messages(
+                                conversation_id, msg_dicts, persona.max_memory_messages
+                            )
+
+                        return response
+                except Exception as recovery_error:
+                    logger.error(f"Runtime recovery model failed: {recovery_error}")
+                    e = recovery_error
 
             if fallback_model:
                 try:

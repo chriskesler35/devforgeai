@@ -109,8 +109,13 @@ def has_provider_api_key(provider_name: str) -> bool:
     if provider_supports_codex_oauth(normalized):
         if get_provider_api_key(normalized):
             return True
-        # Auth tokens in ~/.codex/auth.json are usable directly against OpenAI
-        # even when the local proxy is offline — so treat them as valid.
+        # Codex CLI auth tokens can reach OpenAI models via the OAuth proxy.
+        # However, only the dedicated 'openai-codex' provider should be treated
+        # as usable from CLI auth alone — the plain 'openai' provider requires a
+        # direct OPENAI_API_KEY because non-gpt-5 models under it (gpt-4o, etc.)
+        # are not routed through the proxy and will fail at call time without a key.
+        if normalized == "openai":
+            return False  # require explicit OPENAI_API_KEY for the plain openai provider
         return has_codex_cli_auth()
     if normalized == "github-copilot":
         return bool(get_copilot_auth_token())

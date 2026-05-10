@@ -188,6 +188,10 @@ export default function ModelsPage() {
   const [showReviewSection, setShowReviewSection] = useState(false)
   const [confirmRemoveProvider, setConfirmRemoveProvider] = useState<string | null>(null)
   const [removingProvider, setRemovingProvider] = useState(false)
+  const [forceResyncing, setForceResyncing] = useState(false)
+  const [confirmForceResync, setConfirmForceResync] = useState(false)
+  const [diagnosingId, setDiagnosingId] = useState<string | null>(null)
+  const [diagnoseResult, setDiagnoseResult] = useState<any | null>(null)
   const [expandedValidatedProviders, setExpandedValidatedProviders] = useState<Record<string, boolean>>({})
   const [expandedReviewProviders, setExpandedReviewProviders] = useState<Record<string, boolean>>({})
   const [formData, setFormData] = useState<{
@@ -601,6 +605,57 @@ export default function ModelsPage() {
     }
   }
 
+  const handleDiagnoseModel = async (model: Model) => {
+    try {
+      setDiagnosingId(model.id)
+      setDiagnoseResult(null)
+      const res = await fetch(`${API_BASE}/v1/models/${model.id}/diagnose`, {
+        headers: AUTH_HEADERS,
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok) {
+        setDiagnoseResult(data)
+      } else {
+        alert(data.detail || 'Failed to diagnose model')
+      }
+    } catch (e) {
+      console.error('Failed to diagnose model:', e)
+    } finally {
+      setDiagnosingId(null)
+    }
+  }
+
+  const runForceResync = async () => {
+    setForceResyncing(true)
+    setSyncResult(null)
+    try {
+      const res = await fetch(`${API_BASE}/v1/models/cleanup`, { method: 'POST', headers: AUTH_HEADERS })
+      const data: any = await res.json().catch(() => ({}))
+      if (res.ok) {
+        setSyncResult({
+          ok: true,
+          message:
+            data.message ||
+            `Force resync complete. Deleted ${data.deleted_count ?? '?'}, added ${
+              (data.sync_result && data.sync_result.added && data.sync_result.added.length) || 0
+            }.`,
+          ...(data.sync_result || {}),
+        })
+        await fetchModels()
+        await fetchSyncStatus()
+        await fetchRuntimeStatus()
+      } else {
+        setSyncResult({ ok: false, message: data.detail || 'Force resync failed — check backend logs' })
+      }
+    } catch (_e) {
+      setSyncResult({ ok: false, message: 'Force resync failed — check backend logs' })
+    } finally {
+      setForceResyncing(false)
+      setConfirmForceResync(false)
+      setTimeout(() => setSyncResult(null), 7000)
+    }
+  }
+
   const handleRemoveProvider = async (providerName: string) => {
     setRemovingProvider(true)
     try {
@@ -790,6 +845,9 @@ export default function ModelsPage() {
                                 <button onClick={() => handleRevalidateModel(model)} disabled={revalidatingId === model.id} className="whitespace-nowrap text-left text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 disabled:opacity-50">
                                   {revalidatingId === model.id ? 'Checking…' : 'Revalidate'}
                                 </button>
+                                <button onClick={() => handleDiagnoseModel(model)} disabled={diagnosingId === model.id} className="whitespace-nowrap text-left text-indigo-600 hover:text-indigo-900 dark:text-indigo-400 dark:hover:text-indigo-300 disabled:opacity-50">
+                                  {diagnosingId === model.id ? 'Diagnosing…' : 'Diagnose'}
+                                </button>
                                 <button onClick={() => handleDeleteModel(model)} className="whitespace-nowrap text-left text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300">Delete</button>
                               </div>
                             </td>
@@ -853,6 +911,14 @@ export default function ModelsPage() {
             className="inline-flex items-center px-4 py-2 border border-blue-300 dark:border-blue-700 text-sm font-medium rounded-md text-blue-700 dark:text-blue-200 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30 disabled:opacity-50"
           >
             {catalogValidating ? 'Validating…' : 'Validate Catalog'}
+          </button>
+          <button
+            onClick={() => setConfirmForceResync(true)}
+            disabled={forceResyncing}
+            title="Destructive: deletes ALL models from the database, then re-syncs every provider catalog from scratch."
+            className="inline-flex items-center px-4 py-2 border border-red-300 dark:border-red-700 text-sm font-medium rounded-md text-red-700 dark:text-red-200 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 disabled:opacity-50"
+          >
+            {forceResyncing ? 'Resyncing…' : 'Force Resync + Revalidate'}
           </button>
           <div className="flex items-center gap-2">
             <select
@@ -999,6 +1065,145 @@ export default function ModelsPage() {
         </div>
       </div>
       {showReviewSection && renderModelGroups(reviewGrouped, expandedReviewProviders, setExpandedReviewProviders, 'No models need review.')}
+
+      {/* Force Resync Confirmation Modal */}
+      {confirmForceResync && (
+        <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full">
+            <h3 className="text-lg font-semibold text-red-700 dark:text-red-300">Force Resync + Revalidate</h3>
+            <p className="mt-2 text-sm text-gray-700 dark:text-gray-300">
+              This will <strong>delete every model</strong> from the database and re-sync all configured providers from scratch.
+              References to deleted models on personas, agents, and request logs will be cleared.
+            </p>
+            <p className="mt-2 text-sm text-gray-700 dark:text-gray-300">
+              Use this when models marked as validated are still being rejected at runtime, or when the catalog is corrupted.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => setConfirmForceResync(false)}
+                disabled={forceResyncing}
+                className="px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={runForceResync}
+                disabled={forceResyncing}
+                className="px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-md disabled:opacity-50"
+              >
+                {forceResyncing ? 'Resyncing…' : 'Yes, wipe and resync'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Diagnose Result Modal */}
+      {diagnoseResult && (
+        <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                  Diagnose: {diagnoseResult.model?.display_name || diagnoseResult.model?.model_id}
+                </h3>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {diagnoseResult.provider?.name || 'unknown provider'} · {diagnoseResult.model?.model_id}
+                </p>
+              </div>
+              <button
+                onClick={() => setDiagnoseResult(null)}
+                className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-3 text-sm">
+              <div className="rounded border border-gray-200 dark:border-gray-700 p-3">
+                <div className="font-medium text-gray-800 dark:text-gray-100">Runtime status</div>
+                <div className="mt-1">
+                  <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
+                    diagnoseResult.runtime?.status === 'ready'
+                      ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                      : diagnoseResult.runtime?.status === 'needs_live_probe'
+                        ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
+                        : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                  }`}>
+                    {diagnoseResult.runtime?.status || 'unknown'}
+                  </span>
+                  {diagnoseResult.runtime?.reason_code && (
+                    <span className="ml-2 text-xs text-gray-500">{diagnoseResult.runtime.reason_code}</span>
+                  )}
+                </div>
+                {diagnoseResult.runtime?.user_message && (
+                  <p className="mt-2 text-xs text-gray-700 dark:text-gray-300">{diagnoseResult.runtime.user_message}</p>
+                )}
+                {Array.isArray(diagnoseResult.runtime?.remediation) && diagnoseResult.runtime.remediation.length > 0 && (
+                  <ul className="mt-2 list-disc list-inside text-xs text-gray-600 dark:text-gray-400">
+                    {diagnoseResult.runtime.remediation.map((r: string, i: number) => (
+                      <li key={i}>{r}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div className="rounded border border-gray-200 dark:border-gray-700 p-3">
+                <div className="font-medium text-gray-800 dark:text-gray-100">Model row</div>
+                <ul className="mt-1 text-xs text-gray-600 dark:text-gray-400 space-y-0.5">
+                  <li>Active: <strong>{String(diagnoseResult.model?.is_active)}</strong></li>
+                  <li>Validation: <strong>{diagnoseResult.model?.validation_status}</strong></li>
+                  {diagnoseResult.model?.validated_at && <li>Validated at: {diagnoseResult.model.validated_at}</li>}
+                  {diagnoseResult.model?.validation_source && <li>Source: {diagnoseResult.model.validation_source}</li>}
+                  {diagnoseResult.model?.validation_warning && <li>Warning: {diagnoseResult.model.validation_warning}</li>}
+                  {diagnoseResult.model?.validation_error && <li>Error: {diagnoseResult.model.validation_error}</li>}
+                </ul>
+              </div>
+
+              <div className="rounded border border-gray-200 dark:border-gray-700 p-3">
+                <div className="font-medium text-gray-800 dark:text-gray-100">Provider</div>
+                <ul className="mt-1 text-xs text-gray-600 dark:text-gray-400 space-y-0.5">
+                  <li>Active: <strong>{String(diagnoseResult.provider?.is_active)}</strong></li>
+                  <li>Local: <strong>{String(diagnoseResult.provider?.is_local)}</strong></li>
+                  <li>Has API key: <strong>{String(diagnoseResult.provider?.has_api_key)}</strong></li>
+                  {diagnoseResult.provider?.is_local && (
+                    <li>Local reachable: <strong>{String(diagnoseResult.provider?.local_reachable)}</strong></li>
+                  )}
+                  {diagnoseResult.provider?.api_base_url && <li>Base URL: {diagnoseResult.provider.api_base_url}</li>}
+                </ul>
+              </div>
+
+              {diagnoseResult.ambiguity?.duplicate_model_id_across_providers && (
+                <div className="rounded border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3">
+                  <div className="font-medium text-amber-900 dark:text-amber-200">
+                    ⚠ Duplicate model_id across providers
+                  </div>
+                  <ul className="mt-1 text-xs text-amber-900 dark:text-amber-200 space-y-0.5">
+                    {diagnoseResult.ambiguity.siblings.map((s: any) => (
+                      <li key={s.id}>
+                        {s.provider_name} — {s.validation_status} {s.is_active ? '(active)' : '(inactive)'}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-1 text-xs text-amber-900 dark:text-amber-200">
+                    Use provider/model_id or model UUID when assigning, to avoid ambiguous resolution.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-4 flex justify-end">
+              <button
+                onClick={() => setDiagnoseResult(null)}
+                className="px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add Model Modal */}
       {showAddModal && (

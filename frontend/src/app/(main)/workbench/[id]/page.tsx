@@ -19,6 +19,13 @@ interface WBEvent {
   ts: string
 }
 
+interface ModelOption {
+  id: string
+  model_id: string
+  display_name?: string
+  provider_name?: string
+}
+
 interface FileEntry { path: string; status: 'created' | 'modified'; content?: string; diff?: string }
 
 const EVENT_STYLE: Record<string, { icon: string; color: string; label: string }> = {
@@ -414,6 +421,11 @@ export default function WorkbenchSessionPage() {
   const router = useRouter()
 
   const [session, setSession] = useState<any>(null)
+  const [models, setModels] = useState<ModelOption[]>([])
+  const [loadingModels, setLoadingModels] = useState(false)
+  const [modelDraft, setModelDraft] = useState('')
+  const [updatingModel, setUpdatingModel] = useState(false)
+  const [modelUpdateNote, setModelUpdateNote] = useState('')
   const [events, setEvents] = useState<WBEvent[]>([])
   const [files, setFiles] = useState<FileEntry[]>([])
   const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null)
@@ -434,6 +446,26 @@ export default function WorkbenchSessionPage() {
   const streamEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
+  useEffect(() => {
+    let cancelled = false
+    const loadModels = async () => {
+      setLoadingModels(true)
+      try {
+        const res = await fetch(
+          `${API_BASE}/v1/models?active_only=true&usable_only=true&validated_only=true&chat_only=true&limit=250`,
+          { headers: AUTH_HEADERS },
+        )
+        const payload = await res.json().catch(() => ({ data: [] }))
+        if (cancelled) return
+        setModels(Array.isArray(payload?.data) ? payload.data : [])
+      } finally {
+        if (!cancelled) setLoadingModels(false)
+      }
+    }
+    loadModels()
+    return () => { cancelled = true }
+  }, [])
+
   // Auto-scroll stream
   useEffect(() => {
     if (autoScroll) streamEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -450,6 +482,7 @@ export default function WorkbenchSessionPage() {
 
         if (evt.type === 'init') {
           setSession(evt.payload)
+          setModelDraft(String(evt.payload?.model || ''))
           setStatus(evt.payload.status || 'running')
           setBypassMode(!!evt.payload.bypass_approvals)
           // Clear local event state — the stream will replay events_log from DB.
@@ -513,6 +546,11 @@ export default function WorkbenchSessionPage() {
         if (evt.type === 'error') {
           setStatus('error')
         }
+        if (evt.type === 'model_changed') {
+          const nextModel = String(evt.payload?.model || '')
+          setSession((prev: any) => prev ? { ...prev, model: nextModel } : prev)
+          setModelDraft(nextModel)
+        }
 
         // Command execution events
         if (evt.type === 'command_awaiting_approval') {
@@ -553,6 +591,38 @@ export default function WorkbenchSessionPage() {
 
     return () => es.close()
   }, [id])
+
+  const applyModelChange = useCallback(async () => {
+    const nextModel = modelDraft.trim()
+    if (!nextModel || !session) return
+    if ((session.model || '') === nextModel) return
+
+    setUpdatingModel(true)
+    setModelUpdateNote('')
+    try {
+      const res = await fetch(`${API_BASE}/v1/workbench/sessions/${id}/model`, {
+        method: 'POST',
+        headers: AUTH_HEADERS,
+        body: JSON.stringify({ model: nextModel }),
+      })
+      const payload = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const detail = payload?.detail || `HTTP ${res.status}`
+        throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+      }
+      const updated = payload?.session
+      if (updated?.model) {
+        setSession((prev: any) => ({ ...(prev || {}), ...updated }))
+        setModelDraft(updated.model)
+      }
+      const appliesTo = payload?.applies_to === 'next_turn' ? 'Applies on next turn.' : 'Active now.'
+      setModelUpdateNote(`Model updated. ${appliesTo}`)
+    } catch (e: any) {
+      setModelUpdateNote(`Model update failed: ${e?.message || 'unknown error'}`)
+    } finally {
+      setUpdatingModel(false)
+    }
+  }, [id, modelDraft, session])
 
   const sendIntervention = useCallback(async () => {
     if (!intervention.trim() || sending) return
@@ -668,6 +738,55 @@ export default function WorkbenchSessionPage() {
           <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
             {session?.task || 'Loading…'}
           </p>
+          <div className="mt-1 flex items-center gap-2 max-w-full">
+            {loadingModels ? (
+              <span className="text-xs text-gray-500">Loading models…</span>
+            ) : models.length > 0 ? (
+              <select
+                value={modelDraft}
+                onChange={(e) => setModelDraft(e.target.value)}
+                className="max-w-[340px] rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-xs px-2 py-1 text-gray-700 dark:text-gray-200"
+                title="Change session model"
+              >
+                {Object.entries(
+                  models.reduce((acc, m) => {
+                    const provider = m.provider_name || 'other'
+                    if (!acc[provider]) acc[provider] = []
+                    acc[provider].push(m)
+                    return acc
+                  }, {} as Record<string, ModelOption[]>),
+                ).map(([provider, providerModels]) => (
+                  <optgroup key={provider} label={provider}>
+                    {providerModels.map((m) => (
+                      <option key={m.id} value={`${m.provider_name || 'unknown'}/${m.model_id}`}>
+                        {m.display_name || m.model_id}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            ) : (
+              <input
+                value={modelDraft}
+                onChange={(e) => setModelDraft(e.target.value)}
+                placeholder="provider/model"
+                className="max-w-[340px] rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-xs px-2 py-1 text-gray-700 dark:text-gray-200"
+              />
+            )}
+            <button
+              onClick={applyModelChange}
+              disabled={updatingModel || !modelDraft.trim() || modelDraft.trim() === String(session?.model || '').trim()}
+              className="px-2 py-1 text-xs rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {updatingModel ? 'Applying…' : 'Apply Model'}
+            </button>
+            {status === 'running' && (
+              <span className="text-[10px] text-amber-600">Takes effect next turn while running</span>
+            )}
+          </div>
+          {modelUpdateNote && (
+            <p className="mt-1 text-[10px] text-gray-500">{modelUpdateNote}</p>
+          )}
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">

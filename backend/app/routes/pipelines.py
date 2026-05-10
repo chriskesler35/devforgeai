@@ -43,6 +43,19 @@ _queues:     Dict[str, asyncio.Queue] = {}
 _event_logs: Dict[str, List[dict]]    = {}
 
 
+async def _resolve_runtime_model_ref(model_ref: str, *, intent: str = "pipeline"):
+    """Resolve runtime model/provider via shared resolver without workbench dependency."""
+    from app.services.runtime_model_resolver import resolve_runtime_model_row_for_lookup
+
+    async with AsyncSessionLocal() as db:
+        return await resolve_runtime_model_row_for_lookup(
+            db,
+            model_ref,
+            intent=intent,
+            include_fuzzy=True,
+        )
+
+
 # ─── Schemas ──────────────────────────────────────────────────────────────────
 class PipelineCreate(BaseModel):
     session_id: str
@@ -230,7 +243,6 @@ async def _build_phase_preview_rows(method_id: str) -> List[Dict[str, Any]]:
     from app.services.phase_templates import get_phases_for_method, list_supported_methods
     from app.models.agent import Agent
     from app.models.persona import Persona
-    from app.routes.workbench import _resolve_model
 
     try:
         phases = get_phases_for_method(method_id)
@@ -270,13 +282,13 @@ async def _build_phase_preview_rows(method_id: str) -> List[Dict[str, Any]]:
                     result["has_persona"] = True
                     result["persona_name"] = persona.name
                     if persona.primary_model_id:
-                        m, _ = await _resolve_model(str(persona.primary_model_id))
+                        m, _ = await _resolve_runtime_model_ref(str(persona.primary_model_id), intent="pipeline")
                         if m:
                             result["resolved_model"] = m.model_id
                             result["resolved_via"] = "agent→persona"
                             return result
             if agent.model_id:
-                m, _ = await _resolve_model(str(agent.model_id))
+                m, _ = await _resolve_runtime_model_ref(str(agent.model_id), intent="pipeline")
                 if m:
                     result["resolved_model"] = m.model_id
                     result["resolved_via"] = "agent→model"
@@ -287,7 +299,7 @@ async def _build_phase_preview_rows(method_id: str) -> List[Dict[str, Any]]:
             result["has_persona"] = True
             result["persona_name"] = persona.name
             if persona.primary_model_id:
-                m, _ = await _resolve_model(str(persona.primary_model_id))
+                m, _ = await _resolve_runtime_model_ref(str(persona.primary_model_id), intent="pipeline")
                 if m:
                     result["resolved_model"] = m.model_id
                     result["resolved_via"] = "persona name-match"
@@ -709,7 +721,11 @@ async def _run_phase(pipeline_id: str, phase_index: int, retry_count: int = 0, m
     from app.models.pipeline import Pipeline, PhaseRun
     from app.services.model_client import ModelClient
     from app.services.identity_context import build_identity_context
-    from app.routes.workbench import _build_runtime_model_chain, _humanize_model_error, _should_failover_error, _resolve_model
+    from app.services.runtime_model_resolver import (
+        build_runtime_model_chain_for_runtime,
+        humanize_runtime_model_error,
+        should_failover_on_runtime_error,
+    )
 
     # Load pipeline
     async with AsyncSessionLocal() as db:
@@ -890,17 +906,17 @@ async def _run_phase(pipeline_id: str, phase_index: int, retry_count: int = 0, m
                             if persona.system_prompt:
                                 extra_prompts.append(f"# Persona: {persona.name}\n{persona.system_prompt}")
                             if persona.primary_model_id:
-                                primary_resolved, _ = await _resolve_model(str(persona.primary_model_id))
+                                primary_resolved, _ = await _resolve_runtime_model_ref(str(persona.primary_model_id), intent="pipeline")
                                 if primary_resolved:
                                     resolved_model = primary_resolved.model_id
                                     resolved_via = f"agent '{agent.name}' → persona '{persona.name}'"
                             if persona.fallback_model_id:
-                                fallback_resolved, _ = await _resolve_model(str(persona.fallback_model_id))
+                                fallback_resolved, _ = await _resolve_runtime_model_ref(str(persona.fallback_model_id), intent="pipeline")
                                 if fallback_resolved:
                                     explicit_fallback_models.append(str(fallback_resolved.id))
                     # Fallback: agent's own model_id if no persona
                     if not resolved_model and agent.model_id:
-                        direct_resolved, _ = await _resolve_model(str(agent.model_id))
+                        direct_resolved, _ = await _resolve_runtime_model_ref(str(agent.model_id), intent="pipeline")
                         if direct_resolved:
                             resolved_model = direct_resolved.model_id
                             resolved_via = f"agent '{agent.name}' (direct model)"
@@ -913,14 +929,14 @@ async def _run_phase(pipeline_id: str, phase_index: int, retry_count: int = 0, m
                         select(Persona).where(sqlfunc.lower(Persona.name) == phase_name.lower())
                     )).scalar_one_or_none()
                     if persona and persona.primary_model_id:
-                        primary_resolved, _ = await _resolve_model(str(persona.primary_model_id))
+                        primary_resolved, _ = await _resolve_runtime_model_ref(str(persona.primary_model_id), intent="pipeline")
                         if primary_resolved:
                             resolved_model = primary_resolved.model_id
                             resolved_via = f"persona '{persona.name}' (name match, no agent)"
                             if persona.system_prompt:
                                 resolved_system_prompt = f"# Persona: {persona.name}\n{persona.system_prompt}"
                         if persona.fallback_model_id:
-                            fallback_resolved, _ = await _resolve_model(str(persona.fallback_model_id))
+                            fallback_resolved, _ = await _resolve_runtime_model_ref(str(persona.fallback_model_id), intent="pipeline")
                             if fallback_resolved:
                                 explicit_fallback_models.append(str(fallback_resolved.id))
         except Exception as e:
@@ -932,7 +948,7 @@ async def _run_phase(pipeline_id: str, phase_index: int, retry_count: int = 0, m
     model_id = phase_def.get("model") or resolved_model or phase_def.get("default_model") or "claude-sonnet-4-6"
     # Normalize any UUID/model reference to the provider-facing model_id string.
     # This protects phase execution if a caller accidentally passes a DB UUID.
-    normalized_model, _ = await _resolve_model(str(model_id))
+    normalized_model, _ = await _resolve_runtime_model_ref(str(model_id), intent="pipeline")
     if normalized_model:
         model_id = normalized_model.model_id
     persona_system_prompt = resolved_system_prompt  # used below when composing the phase system prompt
@@ -1038,33 +1054,40 @@ async def _run_phase(pipeline_id: str, phase_index: int, retry_count: int = 0, m
 
     # Run LLM
     client = ModelClient()
-    model_chain, preflight_note = await _build_runtime_model_chain(
-        model_id,
-        explicit_fallback_refs=explicit_fallback_models,
-    )
-    if not model_chain:
-        msg = (
-            f"Could not resolve model '{model_id}' for phase {phase_name}. "
-            "The model may be inactive, not live-validated, missing, or its provider has no working credentials, "
-            "and no validated fallback model was available. Revalidate it on the Models page or pick a different model for this phase."
+    async with AsyncSessionLocal() as db:
+        model_chain, preflight_note = await build_runtime_model_chain_for_runtime(
+            db,
+            model_id,
+            intent="pipeline",
+            explicit_fallback_refs=explicit_fallback_models,
         )
-        logger.error(msg)
-        await _db_update_phase(
-            phase_run_id,
-            status="failed",
-            raw_response=msg,
-            completed_at=datetime.utcnow(),
-        )
-        _push(
-            pipeline_id,
-            "phase_failed",
-            phase_index=phase_index,
-            phase_name=phase_name,
-            model_id=model_id,
-            error=msg,
-        )
-        await _advance_to_next(pipeline_id)
-        return
+        # If model_chain is empty, try to get the detailed error message from the runtime resolver
+        if not model_chain:
+            from app.services.runtime_model_resolver import resolve_model_for_runtime
+            result = await resolve_model_for_runtime(db, model_id, intent="pipeline")
+            user_message = getattr(result, "user_message", None)
+            msg = user_message or (
+                f"Could not resolve model '{model_id}' for phase {phase_name}. "
+                "The model may be inactive, not live-validated, missing, or its provider has no working credentials, "
+                "and no validated fallback model was available. Revalidate it on the Models page or pick a different model for this phase."
+            )
+            logger.error(msg)
+            await _db_update_phase(
+                phase_run_id,
+                status="failed",
+                raw_response=msg,
+                completed_at=datetime.utcnow(),
+            )
+            _push(
+                pipeline_id,
+                "phase_failed",
+                phase_index=phase_index,
+                phase_name=phase_name,
+                model_id=model_id,
+                error=msg,
+            )
+            await _advance_to_next(pipeline_id)
+            return
 
     model_orm = None
     provider_orm = None
@@ -1078,7 +1101,7 @@ async def _run_phase(pipeline_id: str, phase_index: int, retry_count: int = 0, m
     for idx, (candidate_model, candidate_provider, reason) in enumerate(model_chain):
         if idx > 0:
             previous_model = model_chain[idx - 1][0]
-            previous_error = _humanize_model_error(str(last_error), previous_model.model_id) if last_error else "The previous model was unavailable."
+            previous_error = humanize_runtime_model_error(str(last_error), previous_model.model_id) if last_error else "The previous model was unavailable."
             _push(
                 pipeline_id,
                 "info",
@@ -1105,11 +1128,11 @@ async def _run_phase(pipeline_id: str, phase_index: int, retry_count: int = 0, m
         except Exception as e:
             last_error = e
             logger.error(f"LLM call setup failed in phase {phase_name} of pipeline {pipeline_id} using {candidate_model.model_id}: {e}")
-            if idx + 1 >= len(model_chain) or not _should_failover_error(e):
+            if idx + 1 >= len(model_chain) or not should_failover_on_runtime_error(e):
                 break
 
     if not model_orm or not provider_orm or stream is None:
-        msg = _humanize_model_error(str(last_error) if last_error else "", model_id)
+        msg = humanize_runtime_model_error(str(last_error) if last_error else "", model_id)
         await _db_update_phase(
             phase_run_id,
             status="failed",
@@ -1888,6 +1911,110 @@ async def create_pipeline(body: PipelineCreate, request: Request, db: AsyncSessi
     return pipeline.to_dict()
 
 
+async def start_method_pipeline_for_chat(
+    *,
+    method_id: str,
+    task: str,
+    db: AsyncSession,
+    creator_id: str = "owner",
+    project_id: Optional[str] = None,
+    project_path: Optional[str] = None,
+    auto_approve: bool = True,
+    interaction_mode: str = "autonomous",
+) -> Dict[str, Any]:
+    """Spin up a workbench session + pipeline for an active method from chat.
+
+    Returns the persisted pipeline dict (includes `id`, `method_id`, `status`).
+    Raises ValueError if the method has no pipeline phases defined.
+    """
+    from app.models.pipeline import Pipeline
+    from app.models.workbench import WorkbenchSession
+    from app.services.phase_templates import (
+        get_method_phases_with_custom,
+        validate_phase_dag,
+    )
+
+    effective_method_id, _requested_stack, stacked_prompt, _layered = (
+        _resolve_pipeline_method_selection(method_id, None)
+    )
+
+    try:
+        template_phases = await get_method_phases_with_custom(effective_method_id, db)
+    except KeyError as exc:
+        raise ValueError(str(exc)) from exc
+
+    dag_errors = validate_phase_dag(template_phases)
+    if dag_errors:
+        raise ValueError(f"Invalid phase DAG: {'; '.join(dag_errors)}")
+
+    # Strip any model overrides — let runtime resolution apply.
+    for phase in template_phases:
+        phase.pop("model", None)
+        if stacked_prompt:
+            existing = phase.get("system_prompt", "")
+            phase["system_prompt"] = (
+                f"{existing}\n\n---\n\n# Additional method instructions (from stack)\n{stacked_prompt}"
+            )
+
+    template_phases = _apply_interaction_mode_to_phases(
+        template_phases,
+        interaction_mode=interaction_mode,
+        delegate_qa_to_agent=False,
+    )
+
+    # Create a workbench session to own the pipeline.
+    session_id = str(uuid.uuid4())
+    session = WorkbenchSession(
+        id=session_id,
+        task=task or f"Run {effective_method_id} pipeline",
+        agent_type="coder",
+        project_id=project_id,
+        project_path=project_path,
+        status="pending",
+        files=[],
+        events_log=[],
+        messages=[],
+    )
+    db.add(session)
+
+    pipeline_id = str(uuid.uuid4())
+    pipeline = Pipeline(
+        id=pipeline_id,
+        session_id=session_id,
+        method_id=effective_method_id,
+        phases=template_phases,
+        current_phase_index=0,
+        status="pending",
+        auto_approve=bool(auto_approve),
+        approvers=[],
+        approval_policy="any",
+        created_by=creator_id,
+        initial_task=task,
+    )
+    db.add(pipeline)
+    session.pipeline_id = pipeline_id
+    await db.commit()
+
+    _queues[pipeline_id] = asyncio.Queue(maxsize=1000)
+    _event_logs[pipeline_id] = []
+
+    _push(
+        pipeline_id, "pipeline_created",
+        method_id=effective_method_id,
+        phases=[
+            {"name": p["name"], "role": p["role"], "model": p.get("model")}
+            for p in template_phases
+        ],
+        auto_approve=bool(auto_approve),
+        interaction_mode=interaction_mode,
+        delegate_qa_to_agent=False,
+        source="chat",
+    )
+
+    await _advance_to_next(pipeline_id)
+    return pipeline.to_dict()
+
+
 @router.get("", dependencies=[Depends(verify_api_key)])
 async def list_pipelines(db: AsyncSession = Depends(get_db)):
     from app.models.pipeline import Pipeline
@@ -2372,7 +2499,6 @@ async def update_phase_model(
     unavailable, or simply not the right choice for the phase.
     """
     from app.models.pipeline import Pipeline, PhaseRun
-    from app.routes.workbench import _resolve_model
 
     p = (await db.execute(select(Pipeline).where(Pipeline.id == pipeline_id))).scalar_one_or_none()
     if not p:
@@ -2388,12 +2514,18 @@ async def update_phase_model(
     if not model_ref:
         raise HTTPException(status_code=400, detail="Model is required")
 
-    model_orm, _provider_orm = await _resolve_model(model_ref)
+    model_orm, _provider_orm = await _resolve_runtime_model_ref(model_ref, intent="pipeline")
     if not model_orm:
+        # Try to get the detailed error message from the runtime resolver
+        from app.services.runtime_model_resolver import resolve_model_for_runtime
+        async with AsyncSessionLocal() as db2:
+            result = await resolve_model_for_runtime(db2, model_ref, intent="pipeline")
+        user_message = getattr(result, "user_message", None)
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Model '{model_ref}' is not active, validated, and ready for runtime use. "
+                user_message
+                or f"Model '{model_ref}' is not active, validated, and ready for runtime use. "
                 "Choose another confirmed model from the dropdown."
             ),
         )

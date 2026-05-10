@@ -37,6 +37,9 @@ _TOKEN_CACHE: dict[str, Tuple[bool, float]] = {}
 # Session tokens expire in ~30 minutes; we refresh 60 s early.
 _SESSION_TOKEN_CACHE: dict[str, Tuple[str, float]] = {}
 
+# Live catalog cache: github_token_prefix -> (model_ids, expires_ts)
+_MODEL_LIST_CACHE: dict[str, Tuple[list[str], float]] = {}
+
 # DB-backed token cache: populated once at startup via init_db_token_cache().
 # Keys are provider names (e.g. "github"); values are decrypted tokens.
 _DB_TOKEN_CACHE: dict[str, str] = {}
@@ -116,6 +119,33 @@ def get_copilot_auth_token() -> Optional[str]:
 def is_pat_rejection_error_text(text: Optional[str]) -> bool:
     normalized = (text or "").lower()
     return "personal access tokens are not supported" in normalized
+
+
+def _copilot_alias_candidates(model_id: str) -> list[str]:
+    normalized = (model_id or "").strip()
+    lower = normalized.lower()
+    candidates: list[str] = []
+
+    def _add(candidate: str) -> None:
+        candidate = (candidate or "").strip()
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+
+    _add(normalized)
+
+    alias_map = {
+        "claude-opus-4-5": "claude-opus-4.5",
+        "claude-sonnet-4-5": "claude-sonnet-4.5",
+        "claude-haiku-4-5": "claude-haiku-4.5",
+    }
+    mapped = alias_map.get(lower)
+    if mapped:
+        _add(mapped)
+
+    if lower.startswith("claude-") and "-4-5" in lower:
+        _add(lower.replace("-4-5", "-4.5"))
+
+    return candidates
 
 
 async def exchange_for_copilot_token(github_token: str) -> Optional[str]:
@@ -227,14 +257,19 @@ async def list_copilot_models(github_token: str) -> list[str]:
     if not token:
         return []
 
-    # Use session token for the full model catalog when copilot scope is available.
-    api_token = await exchange_for_copilot_token(token) or token
+    # Session tokens (ghu_...) only return ~7 basic GPT models from the
+    # /models endpoint.  The raw GitHub PAT (gho_...) returns the full catalog
+    # including newer models like gpt-5.5.  Always prefer the raw PAT for
+    # model listing; fall back to the passed token only if no raw PAT is set.
+    raw_pat = (os.environ.get("GITHUB_TOKEN") or "").strip()
+    if raw_pat and not token.startswith("gho_"):
+        token = raw_pat
 
     async with httpx.AsyncClient(timeout=20.0) as client:
         response = await client.get(
             f"{COPILOT_API_BASE}/models",
             headers={
-                "Authorization": f"Bearer {api_token}",
+                "Authorization": f"Bearer {token}",
                 **_COPILOT_HEADERS,
             },
         )
@@ -249,6 +284,56 @@ async def list_copilot_models(github_token: str) -> list[str]:
         for item in payload.get("data", [])
         if (item.get("id") or "").strip()
     ]
+
+
+async def resolve_supported_copilot_model(model_id: str, github_token: Optional[str] = None) -> tuple[Optional[str], list[str]]:
+    """Resolve a requested Copilot model to a live-supported ID when possible.
+
+    Returns ``(resolved_model_id, live_models)`` where ``resolved_model_id`` is:
+    - the exact live model ID when supported
+    - an alias-normalized live model ID when a legacy local row maps cleanly
+    - ``None`` when the token does not currently expose the requested model
+    """
+    token = (github_token or get_copilot_auth_token() or "").strip()
+    if not token:
+        return None, []
+
+    # Session tokens (ghu_...) only return a narrow Copilot catalog. When a
+    # raw GitHub token is available, prefer it so runtime checks match the
+    # same full catalog used by model listing.
+    raw_pat = (os.environ.get("GITHUB_TOKEN") or "").strip()
+    if raw_pat and not token.startswith("gho_"):
+        token = raw_pat
+
+    cache_key = token[:16]
+    cached = _MODEL_LIST_CACHE.get(cache_key)
+    if cached and time.time() < cached[1]:
+        live_models = cached[0]
+    else:
+        live_models = await list_copilot_models(token)
+        _MODEL_LIST_CACHE[cache_key] = (live_models, time.time() + 300)
+
+    if not live_models:
+        return None, []
+
+    candidates = _copilot_alias_candidates(model_id)
+    lower_to_live = {(live or "").lower(): live for live in live_models}
+    for candidate in candidates:
+        resolved = lower_to_live.get(candidate.lower())
+        if resolved:
+            return resolved, live_models
+
+    # Avoid false negatives from short-lived stale cache snapshots.
+    # If no candidate matched, re-fetch once from the live endpoint and retry.
+    refreshed_live_models = await list_copilot_models(token)
+    _MODEL_LIST_CACHE[cache_key] = (refreshed_live_models, time.time() + 300)
+    lower_to_live = {(live or "").lower(): live for live in refreshed_live_models}
+    for candidate in candidates:
+        resolved = lower_to_live.get(candidate.lower())
+        if resolved:
+            return resolved, refreshed_live_models
+
+    return None, refreshed_live_models
 
 
 def get_copilot_headers() -> dict:
