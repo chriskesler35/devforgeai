@@ -1,6 +1,6 @@
 'use client'
 
-import { API_BASE, API_KEY, AUTH_HEADERS, getApiBase } from '@/lib/config'
+import { API_BASE, API_KEY, AUTH_HEADERS, getApiBase, probeAndCacheApiBase } from '@/lib/config'
 import { filterModelsByCatalogFeature } from '@/lib/modelCatalog'
 import VoiceMode, { VoiceModeToggle } from '@/components/VoiceMode'
 import MediaConverterModal from '@/components/MediaConverterModal'
@@ -2086,6 +2086,7 @@ export default function ChatPage() {
   }, [handleImageTaskComplete])
 
   const fetchValidatedChatModels = useCallback(async (): Promise<Model[]> => {
+    const base = await probeAndCacheApiBase().catch(() => getApiBase())
     const all: Model[] = []
     const pageSize = 200
     let offset = 0
@@ -2093,7 +2094,7 @@ export default function ChatPage() {
 
     while (hasMore) {
       const res = await fetch(
-        `${API_BASE}/v1/models?active_only=true&usable_only=true&validated_only=true&chat_only=true&limit=${pageSize}&offset=${offset}`,
+        `${base}/v1/models?active_only=true&usable_only=true&validated_only=true&chat_only=true&limit=${pageSize}&offset=${offset}`,
         { headers: AUTH_HEADERS }
       )
       if (!res.ok) break
@@ -2131,14 +2132,15 @@ export default function ChatPage() {
   useEffect(() => {
     const init = async () => {
       try {
+        const base = await probeAndCacheApiBase().catch(() => getApiBase())
         const [models, personasRes, convsRes, identityRes, methodsRes, activeMethodRes, skillsRes] = await Promise.all([
-          fetchValidatedChatModels(),
-          fetch(`${API_BASE}/v1/personas`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({ data: [] })),
-          fetch(`${API_BASE}/v1/conversations?limit=100&pinned_first=true`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({ data: [] })),
-          fetch(`${API_BASE}/v1/identity/status`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({})),
-          fetch(`${API_BASE}/v1/methods/`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({ data: [] })),
-          fetch(`${API_BASE}/v1/methods/active`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => null),
-          fetch(`${API_BASE}/v1/skills`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({ data: [] })),
+          fetchValidatedChatModels().catch(() => [] as Model[]),
+          fetch(`${base}/v1/personas`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({ data: [] })),
+          fetch(`${base}/v1/conversations?limit=100&pinned_first=true`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({ data: [] })),
+          fetch(`${base}/v1/identity/status`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({})),
+          fetch(`${base}/v1/methods/`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({ data: [] })),
+          fetch(`${base}/v1/methods/active`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => null),
+          fetch(`${base}/v1/skills`, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({ data: [] })),
         ])
 
         const ps: Persona[] = personasRes.data || []
