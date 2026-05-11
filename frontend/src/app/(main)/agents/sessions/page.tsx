@@ -4,7 +4,7 @@ import { API_BASE, AUTH_HEADERS } from '@/lib/config'
 import WorkbenchSessionCard from '@/components/WorkbenchSessionCard'
 import SessionListToolbar, { SessionFilterKey, SessionSortKey } from '@/components/SessionListToolbar'
 
-import { useState, useEffect, useCallback } from 'react'
+import { Suspense, useState, useEffect, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 
 
@@ -51,7 +51,7 @@ function StatCard({ label, value, sub, color = 'text-gray-900' }: {
 }
 
 // ─── Main page ────────────────────────────────────────────────────────────────
-export default function AgentSessionsPage() {
+function AgentSessionsPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [sessions, setSessions] = useState<WorkbenchSession[]>([])
@@ -258,5 +258,13 @@ export default function AgentSessionsPage() {
         </div>
       )}
     </div>
+  )
+}
+
+export default function AgentSessionsPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-gray-500">Loading sessions...</div>}>
+      <AgentSessionsPageContent />
+    </Suspense>
   )
 }

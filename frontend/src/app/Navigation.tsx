@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { NowLauncher } from '@/components/now/NowLive'
+import { ActiveRunsIndicator } from '@/components/ActiveRunsIndicator'
 
 const NAV_ITEMS = [
   { href: '/',                label: 'Dashboard',  icon: '◈' },
@@ -217,6 +218,12 @@ export default function Navigation() {
       {/* In Flight shortcut */}
       <div className="px-2 pt-3">
         <NowLauncher collapsed={collapsed} />
+      </div>
+
+      {/* Global active-runs indicator — surfaces in-flight pipelines/sessions
+          from every page so you never lose track of a kicked-off run. */}
+      <div className="px-2 pt-2">
+        <ActiveRunsIndicator collapsed={collapsed} />
       </div>
 
       {/* Nav items */}

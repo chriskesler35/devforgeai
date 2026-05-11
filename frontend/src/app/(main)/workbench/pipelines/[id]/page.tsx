@@ -168,6 +168,7 @@ const EVENT_REFRESH_TYPES = new Set([
   'phase_retry',
   'phase_retry_exhausted',
   'phase_model_changed',
+  'model_failover',
   'pipeline_done',
   'files_written',
 ])
@@ -242,6 +243,12 @@ function describeEvent(evt: PipelineEvent, phases?: PhaseDef[]) {
         tone: 'warning',
         title: `${phaseName} model changed`,
         detail: payload.message || `Switched to ${payload.model_id || 'a new model'} and restarted the phase.`,
+      }
+    case 'model_failover':
+      return {
+        tone: 'warning',
+        title: `${phaseName} model failover`,
+        detail: payload.message || `Switched from ${payload.previous_model || 'the selected model'} to ${payload.model_id || 'a fallback model'}.`,
       }
     case 'phase_skipped':
       return { tone: 'warning', title: `${phaseName} skipped`, detail: payload.reason || 'Skipped by user or branch logic.' }
@@ -1542,10 +1549,12 @@ export default function PipelinePage() {
         const eventType = getPipelineEventType(evt)
         if (eventType === 'ping') return
         if (eventType === 'init') {
-          setPipeline(evt.payload)
-          setPhaseRuns(evt.payload.phase_runs || [])
+          const payload = evt.payload as Pipeline | undefined
+          if (!payload) return
+          setPipeline(payload)
+          setPhaseRuns(payload.phase_runs || [])
           setLoading(false)
-          if (TERMINAL_PIPELINE_STATUSES.has(evt.payload?.status)) {
+          if (TERMINAL_PIPELINE_STATUSES.has(payload.status)) {
             // Replay-only streams for terminal pipelines close immediately.
             // Close client-side too so EventSource doesn't auto-reconnect forever.
             setConnectionState('live')

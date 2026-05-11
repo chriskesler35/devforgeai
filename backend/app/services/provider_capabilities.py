@@ -8,6 +8,7 @@ from typing import Any
 
 from app.config import settings
 from app.routes.model_sync import discover_provider_models
+from app.services.codex_oauth import has_codex_cli_auth
 from app.services.oauth_providers import get_provider_registry
 from app.services.provider_credentials import has_provider_api_key
 
@@ -57,7 +58,7 @@ async def get_provider_capability_snapshot() -> dict[str, Any]:
         },
         "openai-codex": {
             "has_credentials": has_provider_api_key("openai-codex"),
-            "oauth_configured": bool(settings.openai_api_key),
+            "oauth_configured": has_codex_cli_auth(),
             "auto_model_routing_exposed": False,
         },
         "github-copilot": {

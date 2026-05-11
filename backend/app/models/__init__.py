@@ -14,7 +14,7 @@ from app.models.agent_memory import AgentMemory
 from app.models.agent_run import AgentRun
 from app.models.task import Task
 from app.models.workbench import WorkbenchSession
-from app.models.pipeline import Pipeline, PhaseRun
+from app.models.pipeline import Pipeline, PhaseRun, PipelineEvent
 from app.models.command_execution import CommandExecution
 from app.models.preference import Preference
 from app.models.app_settings import AppSetting
@@ -34,7 +34,7 @@ __all__ = [
     "Base", "BaseMixin", "Provider", "Model", "ModelVerification", "ProviderHealth", "ModelSelectionLog", "SessionModelPin", "Persona",
     "Conversation", "Message", "ConversationShare", "RequestLog",
     "UserProfile", "MemoryFile", "PreferenceTracking", "SystemModification",
-    "Agent", "AgentMemory", "AgentRun", "Task", "WorkbenchSession", "Pipeline", "PhaseRun", "CommandExecution",
+    "Agent", "AgentMemory", "AgentRun", "Task", "WorkbenchSession", "Pipeline", "PhaseRun", "PipelineEvent", "CommandExecution",
     "Feedback",
     "CustomMethod",
     "CustomWorkflow",

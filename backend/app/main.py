@@ -108,6 +108,7 @@ from app.routes.context import router as context_router
 from app.routes.preferences import router as preferences_router
 from app.routes.app_settings import router as app_settings_router
 from app.routes.workflows import router as workflows_router
+from app.routes.documents import router as documents_router
 from app.routes.audio import router as audio_router
 from app.routes.websocket import router as websocket_router
 from app.routes.feedback import router as feedback_router
@@ -157,6 +158,23 @@ async def lifespan(app: FastAPI):
 
     from app.migrate import run_migrations
     await run_migrations()
+
+    # Zombie watchdog — any pipeline still marked running/pending in the DB
+    # can't have a live worker (asyncio tasks die with the process), so mark
+    # them failed with reason 'worker_lost' before we accept new requests.
+    try:
+        from app.routes.pipelines import recover_orphan_pipelines
+        recovery = await recover_orphan_pipelines()
+        if recovery.get("recovered_pipelines"):
+            import logging as _zlog
+            _zlog.getLogger(__name__).warning(
+                "Zombie watchdog recovered %s pipeline(s) and %s phase row(s) on startup",
+                recovery.get("recovered_pipelines"),
+                recovery.get("recovered_phase_runs"),
+            )
+    except Exception as _wd_exc:
+        import logging as _zlog
+        _zlog.getLogger(__name__).warning("Zombie watchdog failed (non-fatal): %s", _wd_exc)
 
     # Auto-cleanup conversations older than 30 days
     try:
@@ -371,6 +389,7 @@ app.include_router(chat_attachments_router)
 app.include_router(tools_router)
 app.include_router(routing_router)
 app.include_router(metrics_router)
+app.include_router(documents_router)
 
 
 @app.get("/")

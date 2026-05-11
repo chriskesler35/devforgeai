@@ -1,6 +1,6 @@
 # DevForgeAI Completion Gap Checklist
 
-Updated: 2026-05-10
+Updated: 2026-05-11
 Scope source: REQUIREMENTS.md acceptance criteria for Pattern 1, Pattern 2, Pattern 3.
 
 ## Status Legend
@@ -148,7 +148,13 @@ Status: DONE across documented acceptance criteria in this repository snapshot.
 
 ## Remaining High-Impact Gaps (Priority)
 
-None. Pattern 1, Pattern 2, and Pattern 3 acceptance matrices are now fully marked DONE in this repository snapshot.
+See `docs/GAP_CLOSURE_LOG.md` for the active gap log from the 2026-05-11 laptop sync/review.
+
+Current open items:
+
+- Codex-family model transport needs explicit endpoint mapping (`chat_completions` vs `responses`) before Responses-only models can be considered fully supported.
+- Credentialed live runtime smoke tests still need local secrets/proxy availability; backend startup and `/health` are now verified.
+- Release readiness should require frontend build, focused backend runtime tests, and Alembic single-head/migration checks.
 
 ## Definition of Fully Completed
 

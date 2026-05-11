@@ -44,6 +44,7 @@ interface Model {
   model_id: string
   display_name: string
   is_active: boolean
+  capabilities?: Record<string, any>
   provider_id?: string
   provider_name?: string
 }
@@ -1633,7 +1634,7 @@ export default function ChatPage() {
     { cmd: '/model',       hint: '<model-id>',  desc: 'Override model for this conversation' },
     { cmd: '/image',       hint: '<prompt>',    desc: 'Generate an image' },
     { cmd: '/pin',         hint: '',            desc: 'Pin current conversation' },
-    { cmd: '/export',      hint: '',            desc: 'Export conversation as markdown' },
+    { cmd: '/export',      hint: '[md|pdf|docx|html|txt|json]', desc: 'Export conversation (default: md)' },
     { cmd: '/theme',       hint: '',            desc: 'Toggle dark/light mode' },
     { cmd: '/clear',       hint: '',            desc: 'Clear chat display' },
     { cmd: '/settings',    hint: '',            desc: 'Open settings page' },
@@ -1824,14 +1825,92 @@ export default function ChatPage() {
       }
       case '/export': {
         if (messages.length === 0) break
-        const md = messages.map(m => `**${m.role === 'user' ? 'You' : 'AI'}:** ${m.content}`).join('\n\n')
-        const blob = new Blob([md], { type: 'text/markdown' })
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = `conversation-${activeConvId || Date.now()}.md`
-        a.click()
-        URL.revokeObjectURL(url)
+        const fmt = (arg || 'md').trim().toLowerCase()
+        const SUPPORTED = ['md', 'pdf', 'docx', 'xlsx', 'pptx', 'csv', 'html', 'txt', 'json']
+        if (!SUPPORTED.includes(fmt)) {
+          addToast({ type: 'error', title: 'Unsupported format', message: `Try one of: ${SUPPORTED.join(', ')}`, autoClose: 4000 })
+          break
+        }
+
+        // Client-side markdown export (fast path, no backend needed)
+        if (fmt === 'md' && !activeConvId) {
+          const md = messages.map(m => `**${m.role === 'user' ? 'You' : 'AI'}:** ${m.content}`).join('\n\n')
+          const blob = new Blob([md], { type: 'text/markdown' })
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = `conversation-${Date.now()}.md`
+          a.click()
+          URL.revokeObjectURL(url)
+          break
+        }
+
+        // If we have a persisted conversation, use the backend export endpoint
+        // (handles PDF/DOCX/XLSX/PPTX/HTML and includes timestamps)
+        if (activeConvId) {
+          try {
+            const res = await fetch(`${API_BASE}/v1/documents/conversations/${activeConvId}/export?format=${fmt}`, {
+              headers: { ...AUTH_HEADERS },
+            })
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }))
+              addToast({ type: 'error', title: 'Export failed', message: err.detail || 'Unknown error', autoClose: 4000 })
+              break
+            }
+            const blob = await res.blob()
+            const disp = res.headers.get('Content-Disposition') || ''
+            const m = disp.match(/filename="?([^";]+)"?/i)
+            const filename = m ? m[1] : `conversation-${activeConvId}.${fmt}`
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = filename
+            a.click()
+            URL.revokeObjectURL(url)
+            addToast({ type: 'success', title: 'Exported', message: filename, autoClose: 2500 })
+          } catch (e: any) {
+            addToast({ type: 'error', title: 'Export failed', message: String(e?.message || e), autoClose: 4000 })
+          }
+          break
+        }
+
+        // Unsaved conversation + non-md format: build content client-side and POST to /generate
+        try {
+          const content = messages
+            .map(m => {
+              const speaker = m.role === 'user' ? 'You' : 'AI'
+              return `## ${speaker}\n\n${m.content}\n`
+            })
+            .join('\n')
+          const res = await fetch(`${API_BASE}/v1/documents/generate`, {
+            method: 'POST',
+            headers: { ...AUTH_HEADERS, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              format: fmt,
+              title: titleValue || 'Conversation',
+              filename: (titleValue || 'conversation').replace(/[^a-zA-Z0-9_-]+/g, '-'),
+              content,
+            }),
+          })
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }))
+            addToast({ type: 'error', title: 'Export failed', message: err.detail || 'Unknown error', autoClose: 4000 })
+            break
+          }
+          const blob = await res.blob()
+          const disp = res.headers.get('Content-Disposition') || ''
+          const m = disp.match(/filename="?([^";]+)"?/i)
+          const filename = m ? m[1] : `conversation-${Date.now()}.${fmt}`
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = filename
+          a.click()
+          URL.revokeObjectURL(url)
+          addToast({ type: 'success', title: 'Exported', message: filename, autoClose: 2500 })
+        } catch (e: any) {
+          addToast({ type: 'error', title: 'Export failed', message: String(e?.message || e), autoClose: 4000 })
+        }
         break
       }
       default: {
@@ -2857,29 +2936,54 @@ export default function ChatPage() {
   }
 
   const promoteToProject = async () => {
-    if (!activeConvId) {
-      addToast({ type: 'error', title: 'No conversation selected', message: 'Open a conversation first.', autoClose: 3000 })
+    // Allow promotion even without a persisted conversation — we'll fall back to
+    // an unsaved-chat id and pass the in-memory messages so the backend can
+    // build the project anyway. Only block when we have literally nothing.
+    if (!activeConvId && messages.length === 0) {
+      addToast({ type: 'error', title: 'Nothing to promote', message: 'Send at least one message first, or open an existing chat.', autoClose: 3500 })
       return
     }
-    const suggestedName = (activeConv?.title || 'Project from chat').trim()
+    const suggestedName = (activeConv?.title || titleValue || 'Project from chat').trim()
     const projectName = window.prompt('Project name', suggestedName)
     if (!projectName || !projectName.trim()) return
 
+    // If we have no conv id at all, mint a transient one so the URL is stable.
+    const convIdForPromote = activeConvId || (typeof crypto !== 'undefined' && (crypto as any).randomUUID
+      ? (crypto as any).randomUUID()
+      : `unsaved-${Date.now()}`)
+
     setPromotingProject(true)
     try {
-      const res = await fetch(`${API_BASE}/v1/projects/promote/conversation/${activeConvId}`, {
+      // Include in-memory transcript so promotion still works if the
+      // conversation row is missing from the backend (unsaved chat, stale id, etc.)
+      const fallbackMessages = messages
+        .filter(m => m.content && !m.streaming)
+        .map(m => ({
+          role: m.role,
+          content: m.content,
+          created_at: m.created_at || null,
+        }))
+      const res = await fetch(`${API_BASE}/v1/projects/promote/conversation/${convIdForPromote}`, {
         method: 'POST',
         headers: { ...AUTH_HEADERS, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: projectName.trim(),
+          title: titleValue || projectName.trim(),
           template: 'blank',
           include_transcript: true,
           sandbox_mode: 'full',
+          messages: fallbackMessages,
         }),
       })
       if (!res.ok) {
-        const errText = await res.text()
-        throw new Error(errText || 'Failed to promote conversation')
+        let errMsg = 'Failed to promote conversation'
+        try {
+          const errJson = await res.json()
+          errMsg = errJson.detail || errMsg
+        } catch {
+          errMsg = (await res.text()) || errMsg
+        }
+        throw new Error(errMsg)
       }
       const project = await res.json()
       addToast({ type: 'success', title: 'Project created', message: `Promoted to ${project.name}`, autoClose: 2500 })

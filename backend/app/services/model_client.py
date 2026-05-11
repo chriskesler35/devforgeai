@@ -15,6 +15,7 @@ from app.services.codex_oauth import (
     is_codex_proxy_reachable,
     should_use_codex_oauth_proxy,
 )
+from app.services.model_capabilities import requires_openai_responses_api
 from app.services.provider_credentials import get_provider_api_key
 
 logger = logging.getLogger(__name__)
@@ -84,17 +85,14 @@ def _normalize_codex_model_id(model_id: str) -> str:
     """Map legacy/alias Codex model IDs to provider-canonical IDs.
 
     Some stored rows or older templates still reference aliases such as
-    `gpt-5-codex`, while current OpenAI/Codex catalogs expose `gpt-5`.
-    Never remaps real versioned model IDs (e.g. gpt-5.5) that are exposed
-    directly by the GitHub Copilot or Codex APIs.
+    Never remaps real versioned model IDs that are exposed directly by the
+    GitHub Copilot or Codex APIs.
     """
     normalized = (model_id or "").strip().lower()
     # Never remap real versioned model IDs — they are not aliases.
     if normalized in _REAL_VERSIONED_MODEL_IDS:
         return model_id
-    alias_map = {
-        "gpt-5-codex": "gpt-5",
-    }
+    alias_map = {}
     mapped = alias_map.get(normalized)
     if mapped:
         return mapped
@@ -133,6 +131,11 @@ class ModelClient:
         runtime_model_id = getattr(model, "_runtime_model_id", None)
         raw_model_id = runtime_model_id or configured_model_id
         raw_model_id_lower = raw_model_id.lower()
+        if provider_name in ("openai", "openai-codex") and requires_openai_responses_api(raw_model_id):
+            raise ValueError(
+                f"Model '{raw_model_id}' requires the OpenAI Responses API. "
+                "DevForgeAI does not yet route this model through Responses; choose a chat-completions-compatible model."
+            )
         # GitHub Copilot exposes real versioned model IDs directly; never remap them.
         effective_model_id = raw_model_id if provider_name == "github-copilot" else _normalize_codex_model_id(raw_model_id)
         model_id_lower = effective_model_id.lower()
@@ -204,7 +207,7 @@ class ModelClient:
             kwargs["api_base"] = get_codex_proxy_base_url()
             if codex_proxy_rejects_temperature(effective_model_id):
                 kwargs.pop("temperature", None)
-        elif is_openai_provider and is_codex_family_model:
+        elif is_openai_provider and is_codex_family_model and not api_key:
             # Codex-family models are expected to run through OAuth proxy mode.
             # If we are here, the proxy path was not selected/reachable.
             proxy_base = get_codex_proxy_base_url()

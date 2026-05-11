@@ -189,7 +189,7 @@ export default function GtrackPage() {
         {/* Main: Mapping view */}
         <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 space-y-3">
           <div className="flex items-center justify-between gap-2">
-            <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">Issue -> Agent Mapping</div>
+            <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">Issue {'->'} Agent Mapping</div>
             <div className="flex items-center gap-2">
               <button onClick={selectAll} className="px-2 py-1 text-[11px] rounded border border-gray-300 text-gray-600">Select all</button>
               <button onClick={clearSelection} className="px-2 py-1 text-[11px] rounded border border-gray-300 text-gray-600">Clear</button>

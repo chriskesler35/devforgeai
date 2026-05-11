@@ -24,6 +24,8 @@ class Model(Base, BaseMixin):
     validation_source = Column(String(50), nullable=True)
     validation_warning = Column(String(500), nullable=True)
     validation_error = Column(String(500), nullable=True)
+    is_pinned_default = Column(Boolean, default=False)
+    fallback_priority = Column(Integer, nullable=True, default=999)
     
     # Relationships
     provider = relationship("Provider", backref="models")

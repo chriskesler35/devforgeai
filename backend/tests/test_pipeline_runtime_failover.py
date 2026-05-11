@@ -125,10 +125,15 @@ async def test_pipeline_phase_failover_emits_humanized_info_message(db_session, 
     info_messages = [
         evt["payload"].get("message", "")
         for evt in emitted
-        if evt.get("type") == "info"
+        if evt.get("type") in ("info", "model_failover")
     ]
     assert any("Model failover: switched from 'gpt-bad' to 'gpt-good'" in msg for msg in info_messages)
     assert any("out of credits" in msg.lower() for msg in info_messages)
+
+    failover_events = [evt for evt in emitted if evt.get("type") == "model_failover"]
+    assert failover_events
+    assert failover_events[0]["payload"]["previous_model"] == "gpt-bad"
+    assert failover_events[0]["payload"]["model_id"] == "gpt-good"
 
     failed_messages = [
         evt["payload"].get("error", "")

@@ -69,6 +69,9 @@ MIGRATIONS = [
     "ALTER TABLE models ADD COLUMN validation_source VARCHAR(50)",
     "ALTER TABLE models ADD COLUMN validation_warning VARCHAR(500)",
     "ALTER TABLE models ADD COLUMN validation_error VARCHAR(500)",
+    "ALTER TABLE models ADD COLUMN is_pinned_default BOOLEAN DEFAULT 0",
+    "ALTER TABLE models ADD COLUMN fallback_priority INTEGER DEFAULT 999",
+    "CREATE INDEX IF NOT EXISTS idx_models_fallback_priority ON models(fallback_priority)",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_models_provider_model_id ON models(provider_id, model_id)",
     """CREATE TABLE IF NOT EXISTS installed_skills (
         id VARCHAR(36) PRIMARY KEY,

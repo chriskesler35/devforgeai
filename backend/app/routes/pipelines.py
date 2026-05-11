@@ -33,6 +33,7 @@ from pydantic import BaseModel
 from app.middleware.auth import verify_api_key
 from app.database import get_db, AsyncSessionLocal
 from app.services.agentic_events import canonical_event_fields, normalize_sse_event
+from app.services.project_registry import ensure_run_project
 
 logger = logging.getLogger(__name__)
 
@@ -413,6 +414,127 @@ def _push(pipeline_id: str, type: str, **payload):
             q.put_nowait(evt)
         except asyncio.QueueFull:
             pass
+    # Persist to DB so the event log survives backend restarts. Non-fatal:
+    # in-memory delivery is the source of truth for live subscribers, the DB
+    # row is only used to replay history when the in-memory log is empty
+    # (e.g. after a restart, or for a brand-new SSE subscriber).
+    #   - "ping" events are noise and intentionally not persisted.
+    if type != "ping":
+        try:
+            asyncio.create_task(_persist_event(pipeline_id, evt))
+        except RuntimeError:
+            # No running loop (rare — only when called from sync test contexts)
+            pass
+
+
+_event_seq_counters: Dict[str, int] = {}
+
+
+async def _persist_event(pipeline_id: str, evt: dict) -> None:
+    """Best-effort write of one pipeline event to the DB. Never raises."""
+    from app.models.pipeline import PipelineEvent
+    from sqlalchemy import func as _sa_func
+    try:
+        async with AsyncSessionLocal() as db:
+            # Resolve next seq from DB on first write (or after restart) so we
+            # don't collide with rows persisted in a previous process.
+            cached = _event_seq_counters.get(pipeline_id)
+            if cached is None:
+                row = (await db.execute(
+                    select(_sa_func.coalesce(_sa_func.max(PipelineEvent.seq), 0))
+                    .where(PipelineEvent.pipeline_id == pipeline_id)
+                )).scalar() or 0
+                cached = int(row)
+            seq = cached + 1
+            _event_seq_counters[pipeline_id] = seq
+            row = PipelineEvent(
+                pipeline_id=pipeline_id,
+                seq=seq,
+                event_type=evt.get("type") or "unknown",
+                payload=evt.get("payload") or {},
+            )
+            db.add(row)
+            await db.commit()
+    except Exception as e:
+        logger.debug("PipelineEvent persistence failed for %s: %s", pipeline_id, e)
+
+
+async def recover_orphan_pipelines() -> dict:
+    """Zombie-pipeline watchdog — run once on app startup.
+
+    Pipeline execution lives in asyncio.create_task workers that die with the
+    process. After a crash or restart, any row in ``workbench_pipelines`` with
+    status in ``{pending, running}`` is therefore an orphan — the DB claims it
+    is in progress, but no worker exists, no events will ever arrive, and the
+    frontend would sit forever showing a "running" run.
+
+    This function marks every such orphan as ``failed`` with reason
+    ``worker_lost`` so it surfaces in Run Center and stops being counted as
+    active in the nav indicator. Phase rows stuck on ``pending``/``running``
+    are also marked ``failed`` and annotated for audit.
+
+    We do **not** auto-relaunch: the previous worker may have already issued
+    LLM calls or written files, and a blind retry could duplicate work. The
+    user can hit the existing "Retry" / "Restart stuck phase" button.
+
+    Returns ``{"recovered_pipelines": N, "recovered_phase_runs": M}``.
+    """
+    from app.models.pipeline import Pipeline, PhaseRun
+
+    recovered_pipelines = 0
+    recovered_phase_runs = 0
+    orphan_statuses = ("pending", "running")
+    now = datetime.utcnow()
+
+    try:
+        async with AsyncSessionLocal() as db:
+            pipelines = (await db.execute(
+                select(Pipeline).where(Pipeline.status.in_(orphan_statuses))
+            )).scalars().all()
+
+            for p in pipelines:
+                p.status = "failed"
+                p.completed_at = now
+                recovered_pipelines += 1
+
+                phase_rows = (await db.execute(
+                    select(PhaseRun)
+                    .where(PhaseRun.pipeline_id == p.id)
+                    .where(PhaseRun.status.in_(orphan_statuses))
+                )).scalars().all()
+                for pr in phase_rows:
+                    pr.status = "failed"
+                    pr.completed_at = now
+                    suffix = " [recovered: worker_lost - backend restart]"
+                    pr.user_feedback = (pr.user_feedback or "") + suffix
+                    recovered_phase_runs += 1
+
+            if recovered_pipelines:
+                await db.commit()
+    except Exception as e:
+        logger.warning("recover_orphan_pipelines failed: %s", e)
+        return {"recovered_pipelines": 0, "recovered_phase_runs": 0, "error": str(e)}
+
+    if recovered_pipelines:
+        logger.warning(
+            "Zombie watchdog: marked %d pipeline(s) and %d phase row(s) as failed (worker_lost)",
+            recovered_pipelines, recovered_phase_runs,
+        )
+        # Emit a final pipeline_done event for each so SSE replay shows the
+        # outcome. _push persists to DB too, so reconnecting subscribers see it.
+        for p in pipelines:
+            _push(
+                p.id,
+                "pipeline_done",
+                status="failed",
+                reason="worker_lost",
+                message="Pipeline marked failed by the zombie watchdog after a backend restart. The previous worker died mid-run.",
+            )
+
+    return {
+        "recovered_pipelines": recovered_pipelines,
+        "recovered_phase_runs": recovered_phase_runs,
+    }
 
 
 async def _db_update_pipeline(pipeline_id: str, **kwargs):
@@ -943,15 +1065,27 @@ async def _run_phase(pipeline_id: str, phase_index: int, retry_count: int = 0, m
             return
 
     # Model resolution chain (highest priority wins):
-    #   1. Per-phase user override (phase_def["model"] from model_overrides)
-    #   2. Agent bound to this method_phase → its persona → persona.primary_model
-    #   3. Agent bound to this method_phase → its own model_id (if no persona)
-    #   4. Persona matching phase name (legacy, direct persona match)
-    #   5. Template default_model (fallback)
+    #   1. Per-phase user override (phase_def["model"] from model_overrides/manual changes)
+    #   2. Session/workflow model selected by the user
+    #   3. Agent bound to this method_phase → its persona → persona.primary_model
+    #   4. Agent bound to this method_phase → its own model_id (if no persona)
+    #   5. Persona matching phase name (legacy, direct persona match)
+    #   6. Template default_model (fallback)
     resolved_model = None
     resolved_system_prompt = None  # persona + agent prompts prepended to phase prompt
     resolved_via = None             # for logging
     explicit_fallback_models: list[str] = []
+    session_model_id: Optional[str] = None
+    try:
+        from app.models.workbench import WorkbenchSession
+        async with AsyncSessionLocal() as db:
+            sess = (await db.execute(
+                select(WorkbenchSession).where(WorkbenchSession.pipeline_id == pipeline_id)
+            )).scalar_one_or_none()
+            if sess and sess.model:
+                session_model_id = str(sess.model).strip() or None
+    except Exception as e:
+        logger.debug(f"Could not resolve session model for pipeline {pipeline_id}: {e}")
 
     if not phase_def.get("model"):
         try:
@@ -1022,7 +1156,7 @@ async def _run_phase(pipeline_id: str, phase_index: int, retry_count: int = 0, m
     if resolved_via:
         logger.info(f"Phase '{phase_name}' → {resolved_via} → model '{resolved_model}'")
 
-    model_id = phase_def.get("model") or resolved_model or phase_def.get("default_model") or "claude-sonnet-4-6"
+    model_id = phase_def.get("model") or session_model_id or resolved_model or phase_def.get("default_model") or "claude-sonnet-4-6"
     # Normalize any UUID/model reference to the provider-facing model_id string.
     # This protects phase execution if a caller accidentally passes a DB UUID.
     normalized_model, _ = await _resolve_runtime_model_ref(str(model_id), intent="pipeline")
@@ -1189,9 +1323,13 @@ async def _run_phase(pipeline_id: str, phase_index: int, retry_count: int = 0, m
             previous_error = humanize_runtime_model_error(str(last_error), previous_model.model_id) if last_error else "The previous model was unavailable."
             _push(
                 pipeline_id,
-                "info",
+                "model_failover",
                 phase_index=phase_index,
                 phase_name=phase_name,
+                previous_model=previous_model.model_id,
+                model_id=candidate_model.model_id,
+                fallback_reason=reason,
+                error=previous_error,
                 message=(
                     f"Model failover: switched from '{previous_model.model_id}' to '{candidate_model.model_id}' "
                     f"using {reason}. Reason: {previous_error}"
@@ -1913,25 +2051,33 @@ async def create_pipeline(body: PipelineCreate, request: Request, db: AsyncSessi
     if not session:
         raise HTTPException(status_code=404, detail=f"Workbench session {body.session_id} not found")
 
-    # Warn if no project is attached — code phases will produce artifacts but
-    # files won't land on disk. Not a hard failure because pure analysis
-    # pipelines can still be useful without a project.
     if not session.project_path:
-        logger.warning(
-            f"Pipeline created for session {body.session_id} WITHOUT a project_path. "
-            f"Code phases will produce artifacts but files won't be written to disk. "
-            f"Attach the session to a project for the full workflow."
-        )
+        try:
+            project = ensure_run_project(
+                task=body.task or session.task,
+                source_type="pipeline",
+                project_id=session.project_id,
+                project_path=None,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        session.project_id = project["id"]
+        session.project_path = project["path"]
 
-    # Apply only explicit per-phase model overrides from the user.
-    # If no override is provided, keep phase model unset so runtime resolution
-    # can follow phase binding -> agent -> persona -> template default.
+    # Preserve one workflow model unless the user explicitly changes a phase.
+    # Priority: per-phase override -> session/workflow model -> persona/agent/default.
     overrides = body.model_overrides or {}
+    session_model_ref = (session.model or "").strip()
     for phase in template_phases:
         if phase["name"] in overrides:
             phase["model"] = overrides[phase["name"]]
+            phase["model_source"] = "phase_override"
+        elif session_model_ref:
+            phase["model"] = session_model_ref
+            phase["model_source"] = "session"
         else:
             phase.pop("model", None)
+            phase.pop("model_source", None)
         # Inject stacked method prompts into each phase so secondary methods
         # (e.g., GTrack "commit after every change") apply to all phases.
         if stacked_prompt:
@@ -2047,14 +2193,30 @@ async def start_method_pipeline_for_chat(
         delegate_qa_to_agent=False,
     )
 
+    try:
+        if project_id or project_path:
+            project = ensure_run_project(
+                task=task,
+                source_type="chat_pipeline",
+                project_id=project_id,
+                project_path=project_path,
+            )
+        else:
+            project = ensure_run_project(
+                task=task,
+                source_type="chat_pipeline",
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
     # Create a workbench session to own the pipeline.
     session_id = str(uuid.uuid4())
     session = WorkbenchSession(
         id=session_id,
         task=task or f"Run {effective_method_id} pipeline",
         agent_type="coder",
-        project_id=project_id,
-        project_path=project_path,
+        project_id=project["id"],
+        project_path=project["path"],
         status="pending",
         files=[],
         events_log=[],
@@ -2888,6 +3050,7 @@ async def delete_pipeline(pipeline_id: str, db: AsyncSession = Depends(get_db)):
     await db.commit()
     _queues.pop(pipeline_id, None)
     _event_logs.pop(pipeline_id, None)
+    _event_seq_counters.pop(pipeline_id, None)
     return {"ok": True, "deleted_phase_runs": len(runs)}
 
 
@@ -3187,8 +3350,25 @@ async def stream_pipeline(pipeline_id: str, request: Request):
 
         queue = _queues.get(pipeline_id)
         if not queue:
-            # Pipeline exists but no live queue — replay stored events
-            for evt in _event_logs.get(pipeline_id, []):
+            # Pipeline exists but no live queue — replay stored events.
+            # Prefer the in-memory log (hot path); fall back to the persisted
+            # workbench_pipeline_events table so history survives backend
+            # restarts that would otherwise wipe `_event_logs`.
+            replay = _event_logs.get(pipeline_id) or []
+            if not replay:
+                try:
+                    from app.models.pipeline import PipelineEvent
+                    async with AsyncSessionLocal() as db2:
+                        rows = (await db2.execute(
+                            select(PipelineEvent)
+                            .where(PipelineEvent.pipeline_id == pipeline_id)
+                            .order_by(PipelineEvent.seq)
+                        )).scalars().all()
+                    replay = [r.to_event_dict() for r in rows]
+                except Exception as e:
+                    logger.debug("PipelineEvent replay failed for %s: %s", pipeline_id, e)
+                    replay = []
+            for evt in replay:
                 yield f"data: {json.dumps(normalize_sse_event(evt, source='pipeline'))}\n\n"
                 await asyncio.sleep(0.02)
             # Terminal pipelines should emit one final done event and end.

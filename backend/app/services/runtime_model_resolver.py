@@ -86,7 +86,6 @@ def _normalize_model_ref_for_lookup(model_ref: str) -> str:
     ref = (model_ref or "").strip()
     low = ref.lower()
     alias_map = {
-        "gpt-5-codex": "gpt-5",
         "gpt-5.3": "gpt-5",
         "gpt-5.4": "gpt-5",
         "gpt-5.3-codex": "gpt-5",
@@ -302,10 +301,7 @@ async def collect_runtime_fallback_candidates(
         if str(model_obj.id) in seen:
             continue
         if normalized_feature:
-            verification = await get_model_verification(db, model_obj.id)
-            if not verification or verification.verification_status != "verified":
-                continue
-            if not (verification.capabilities or {}).get(normalized_feature, False):
+            if not await _model_supports_feature(db, model_obj, normalized_feature):
                 continue
         seen.add(str(model_obj.id))
         candidates.append((model_obj, provider_obj, "configured fallback"))
@@ -324,10 +320,7 @@ async def collect_runtime_fallback_candidates(
         if str(model_obj.id) in seen:
             continue
         if normalized_feature:
-            verification = await get_model_verification(db, model_obj.id)
-            if not verification or verification.verification_status != "verified":
-                continue
-            if not (verification.capabilities or {}).get(normalized_feature, False):
+            if not await _model_supports_feature(db, model_obj, normalized_feature):
                 continue
         seen.add(str(model_obj.id))
         candidates.append((model_obj, provider_obj, "user configured fallback"))
@@ -351,10 +344,7 @@ async def collect_runtime_fallback_candidates(
             continue
 
         if normalized_feature:
-            verification = await get_model_verification(db, model_obj.id)
-            if not verification or verification.verification_status != "verified":
-                continue
-            if not (verification.capabilities or {}).get(normalized_feature, False):
+            if not await _model_supports_feature(db, model_obj, normalized_feature):
                 continue
 
         candidate_caps = _enabled_capabilities(getattr(model_obj, "capabilities", None))
@@ -415,13 +405,17 @@ async def build_runtime_model_chain_for_runtime(
         chain.append((primary_model, primary_provider, "selected model"))
         seen.add(str(primary_model.id))
 
+    # Always allow catalog fallbacks. When the primary resolves we use them as
+    # secondary backups; when the primary fails (unknown provider/model, missing
+    # creds, inactive, not validated) we still need a working validated model
+    # so the agent/pipeline can run rather than hard-failing.
     for model_obj, provider_obj, reason in await collect_runtime_fallback_candidates(
         db,
         model_ref,
         intent=intent,
         feature_required=feature_required,
         explicit_fallback_refs=explicit_fallback_refs,
-        allow_catalog_fallbacks=bool(primary_model),
+        allow_catalog_fallbacks=True,
         limit=limit,
     ):
         if str(model_obj.id) in seen:
@@ -925,6 +919,19 @@ async def resolve_with_verification(
     # First try exact resolve
     exact = await resolve_model_for_runtime(db, model_ref, intent=intent)
     
+    if isinstance(exact, NeedsLiveProbe):
+        await log_selection_decision(
+            db,
+            feature=normalized_feature,
+            requested_model_ref=model_ref,
+            intent=intent,
+            candidates=[exact.model.model_id],
+            selected=exact.model,
+            result="success",
+            reason_code=exact.reason_code,
+        )
+        return exact
+
     if isinstance(exact, Ready):
         # Check if verified and supports feature
         verification = await get_model_verification(db, exact.model.id)
@@ -941,6 +948,18 @@ async def resolve_with_verification(
                     result="success"
                 )
                 return exact
+        elif await _model_supports_feature(db, exact.model, normalized_feature):
+            await log_selection_decision(
+                db,
+                feature=normalized_feature,
+                requested_model_ref=model_ref,
+                intent=intent,
+                candidates=[exact.model.model_id],
+                selected=exact.model,
+                result="success",
+                reason_code="exact_model_capability_match",
+            )
+            return exact
     
     # Try verified models for feature
     verified_models = await get_verified_models_for_feature(db, normalized_feature)
@@ -1027,6 +1046,20 @@ async def get_verified_models_for_feature(
             matched.append((model, provider))
     
     return matched
+
+
+async def _model_supports_feature(db: AsyncSession, model: Model, feature: str) -> bool:
+    normalized_feature = _normalize_feature_name(feature)
+    verification = await get_model_verification(db, model.id)
+    if verification and verification.verification_status == "verified":
+        return bool((verification.capabilities or {}).get(normalized_feature, False))
+
+    capabilities = getattr(model, "capabilities", None) or {}
+    if not capabilities:
+        # Older seeded rows predate detailed capability verification. Keep an
+        # explicit selected model usable and let runtime probing validate it.
+        return True
+    return bool(capabilities.get(normalized_feature, False))
 
 
 async def get_model_verification(db: AsyncSession, model_id: UUID) -> Optional[ModelVerification]:

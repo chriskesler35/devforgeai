@@ -48,6 +48,7 @@ const DEFAULT_CANONICAL_EVENT_ALIAS: Record<string, string> = {
   'phase.skipped': 'phase_skipped',
   'phase.branch': 'phase_branch',
   'phase.model_changed': 'phase_model_changed',
+  'model.failover': 'model_failover',
   'phase.approved': 'phase_approved',
   'phase.rejected': 'phase_rejected',
 }

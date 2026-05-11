@@ -14,8 +14,9 @@ from typing import Optional
 
 from app.config import settings
 from app.services.codex_oauth import (
-    get_codex_oauth_tokens,
     has_codex_cli_auth,
+    is_codex_proxy_reachable,
+    codex_proxy_url_is_supported,
     provider_supports_codex_oauth,
 )
 from app.services.github_copilot import get_copilot_auth_token
@@ -96,11 +97,6 @@ def get_provider_api_key(provider_name: str) -> Optional[str]:
         if value:
             return value
 
-    if provider_supports_codex_oauth(normalized):
-        codex_access_token = (get_codex_oauth_tokens().get("access_token") or "").strip()
-        if codex_access_token:
-            return codex_access_token
-
     return None
 
 
@@ -109,14 +105,19 @@ def has_provider_api_key(provider_name: str) -> bool:
     if provider_supports_codex_oauth(normalized):
         if get_provider_api_key(normalized):
             return True
-        # Codex CLI auth tokens can reach OpenAI models via the OAuth proxy.
+        # Codex CLI auth tokens can reach OpenAI models only through an
+        # OpenAI-compatible OAuth proxy. They are not OpenAI API keys.
         # However, only the dedicated 'openai-codex' provider should be treated
         # as usable from CLI auth alone — the plain 'openai' provider requires a
         # direct OPENAI_API_KEY because non-gpt-5 models under it (gpt-4o, etc.)
         # are not routed through the proxy and will fail at call time without a key.
         if normalized == "openai":
             return False  # require explicit OPENAI_API_KEY for the plain openai provider
-        return has_codex_cli_auth()
+        return (
+            has_codex_cli_auth()
+            and codex_proxy_url_is_supported()
+            and is_codex_proxy_reachable(cache_ttl_seconds=0)
+        )
     if normalized == "github-copilot":
         return bool(get_copilot_auth_token())
     return bool(get_provider_api_key(provider_name))

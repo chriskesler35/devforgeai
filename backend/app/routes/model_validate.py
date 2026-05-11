@@ -13,12 +13,12 @@ import litellm
 from app.middleware.auth import verify_api_key
 from app.config import settings
 from app.services.codex_oauth import (
-    get_codex_oauth_tokens,
     get_codex_proxy_api_key,
     get_codex_proxy_base_url,
     get_codex_proxy_configuration_issue,
     should_use_codex_oauth_proxy,
 )
+from app.services.model_capabilities import requires_openai_responses_api
 from app.services.github_copilot import (
     COPILOT_API_BASE,
     exchange_for_copilot_token,
@@ -114,13 +114,11 @@ def _get_api_key(provider: str) -> Optional[str]:
                 or os.environ.get("GOOGLE_API_KEY")
                 or settings.gemini_api_key
                 or settings.google_api_key)
-    codex_access_token = (get_codex_oauth_tokens().get("access_token") or "").strip() or None
     key_map = {
         "anthropic":  os.environ.get("ANTHROPIC_API_KEY") or settings.anthropic_api_key,
         "openrouter": os.environ.get("OPENROUTER_API_KEY") or settings.openrouter_api_key,
-        # If OPENAI_API_KEY is missing, fall back to Codex CLI OAuth access_token.
-        "openai": os.environ.get("OPENAI_API_KEY") or settings.openai_api_key or codex_access_token,
-        "openai-codex": os.environ.get("OPENAI_API_KEY") or settings.openai_api_key or codex_access_token,
+        "openai": os.environ.get("OPENAI_API_KEY") or settings.openai_api_key,
+        "openai-codex": os.environ.get("OPENAI_API_KEY") or settings.openai_api_key,
         "ollama": None,
     }
     return key_map.get(p)
@@ -196,9 +194,16 @@ async def validate_model_config(model_id: str, provider: str) -> dict:
         display_name = _humanize(model_id)
 
     is_image_only = "imagen" in model_id.lower() or "dall-e" in model_id.lower() or "comfyui" in model_id.lower()
+    responses_only = provider in {"openai", "openai-codex"} and requires_openai_responses_api(model_id)
     probe_valid: Optional[bool] = None
 
-    if provider != "ollama":
+    if responses_only:
+        source = "metadata_endpoint_constraint"
+        warning = (
+            "This model requires the OpenAI Responses API. "
+            "DevForgeAI has not enabled Responses routing for this model yet."
+        )
+    elif provider != "ollama":
         try:
             from app.routes.model_sync import discover_provider_models, get_catalog_model_viability
 
@@ -256,7 +261,7 @@ async def validate_model_config(model_id: str, provider: str) -> dict:
         except Exception as e:
             probe_valid = None
             warning = f"Could not verify local Ollama model — {type(e).__name__}"
-    elif not is_image_only and probe_valid is None:
+    elif not responses_only and not is_image_only and probe_valid is None:
         api_key = _get_api_key(provider)
         try:
             kwargs = {

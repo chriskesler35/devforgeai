@@ -11,7 +11,7 @@ from sqlalchemy.dialects.postgresql import UUID
 
 # revision identifiers
 revision = 'add_user_profile'
-down_revision = None
+down_revision = '001'
 branch_labels = None
 depends_on = None
 

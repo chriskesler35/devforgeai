@@ -94,3 +94,28 @@ class PhaseRun(Base):
             "completed_at":    self.completed_at.isoformat() if self.completed_at else None,
             "created_at":      self.created_at.isoformat() if self.created_at else None,
         }
+
+
+class PipelineEvent(Base):
+    """Persisted SSE event for a pipeline — survives backend restarts.
+
+    Before this table existed, pipeline event logs lived only in the
+    `_event_logs` in-memory dict in routes/pipelines.py. A backend restart
+    would erase every event, leaving the UI unable to replay history and
+    making "zombie" pipelines look completely silent.
+    """
+    __tablename__ = "workbench_pipeline_events"
+
+    id          = Column(CHAR(36), primary_key=True, default=lambda: str(_uuid.uuid4()))
+    pipeline_id = Column(CHAR(36), ForeignKey("workbench_pipelines.id", ondelete="CASCADE"), nullable=False, index=True)
+    seq         = Column(Integer, nullable=False)                 # monotonic per pipeline
+    event_type  = Column(String(60), nullable=False)
+    payload     = Column(JSON, nullable=True)
+    ts          = Column(DateTime, server_default=func.now(), nullable=False, index=True)
+
+    def to_event_dict(self) -> dict:
+        return {
+            "type":    self.event_type,
+            "payload": self.payload or {},
+            "ts":      self.ts.isoformat() if self.ts else None,
+        }

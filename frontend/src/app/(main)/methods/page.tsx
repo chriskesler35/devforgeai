@@ -357,7 +357,7 @@ export default function MethodsPage() {
                   const next = stackMethods[idx + 1]
                   return (
                     <div key={`${method.id}-handoff-${next.id}`} className="rounded border border-indigo-200 dark:border-indigo-700 bg-white/80 dark:bg-gray-900/30 px-2 py-1.5 text-xs">
-                      <div className="font-semibold text-indigo-800 dark:text-indigo-300">{method.name} -> {next.name}</div>
+                      <div className="font-semibold text-indigo-800 dark:text-indigo-300">{method.name} {'->'} {next.name}</div>
                       <div className="text-[11px] text-indigo-700 dark:text-indigo-200 mt-0.5">
                         Handoff includes produced artifacts, phase state, and unresolved decisions.
                       </div>

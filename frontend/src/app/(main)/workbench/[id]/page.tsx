@@ -72,6 +72,7 @@ const EVENT_STYLE: Record<string, { icon: string; color: string; label: string }
   user_message:  { icon: '💬', color: 'text-indigo-600 dark:text-indigo-400',  label: 'You'          },
   agent_reply:   { icon: '🤖', color: 'text-emerald-600 dark:text-emerald-400', label: 'Agent'       },
   info:          { icon: 'ℹ️',  color: 'text-gray-500 dark:text-gray-400',      label: 'Info'         },
+  model_failover:{ icon: '↪',  color: 'text-amber-700 dark:text-amber-300',     label: 'Failover'     },
   done:          { icon: '✅', color: 'text-green-600 dark:text-green-400',    label: 'Done'         },
   verification_required: { icon: '🧪', color: 'text-amber-700 dark:text-amber-300', label: 'Verify' },
   session_paused:{ icon: '⏸️', color: 'text-amber-600 dark:text-amber-400',    label: 'Paused'       },
@@ -107,6 +108,7 @@ function getAgentStateFromEvent(evt: WBEvent): string {
 
   const type = getEventType(evt)
   if (type === 'agent_thought' || type === 'info' || type === 'phase_progress' || type === 'phase_thinking') return 'THINKING'
+  if (type === 'model_failover') return 'AWAITING_APPROVAL'
   if (type === 'tool_call' || type === 'command_running') return 'WAITING_FOR_TOOL'
   if (type === 'agent_reply' || type === 'done') return 'YIELDED'
   if (type === 'error' || type === 'phase_failed') return 'ERROR'
@@ -164,6 +166,7 @@ function EventRow({ evt, index }: { evt: WBEvent; index: number }) {
       case 'user_message':  return p.message
       case 'agent_reply':    return p.message
       case 'info':          return p.message
+      case 'model_failover': return p.message || `Model failover: ${p.previous_model || 'selected model'} → ${p.model_id || 'fallback model'}`
       case 'done':          return p.message
       default: return JSON.stringify(p).slice(0, 100)
     }
@@ -2336,6 +2339,7 @@ export default function WorkbenchSessionPage() {
                 </div>
 
                 {monitorView === 'timeline' ? (
+                <>
                 <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
                   <div className="px-2 py-1.5 bg-gray-50 dark:bg-gray-800/50 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                     Lifecycle Timeline
@@ -2440,6 +2444,7 @@ export default function WorkbenchSessionPage() {
                     </pre>
                   </div>
                 )}
+                </>
                 ) : monitorView === 'transcript' ? (
                   <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
                     <div className="px-2 py-1.5 bg-gray-50 dark:bg-gray-800/50 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">

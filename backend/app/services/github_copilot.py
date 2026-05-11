@@ -40,6 +40,11 @@ _SESSION_TOKEN_CACHE: dict[str, Tuple[str, float]] = {}
 # Live catalog cache: github_token_prefix -> (model_ids, expires_ts)
 _MODEL_LIST_CACHE: dict[str, Tuple[list[str], float]] = {}
 
+# Sticky last-known-good catalog: survives transient empty/failed fetches so
+# we don't falsely report "model unavailable" when GitHub's /models endpoint
+# briefly returns nothing. Keyed by token prefix; never auto-expired.
+_MODEL_LIST_LAST_GOOD: dict[str, list[str]] = {}
+
 # DB-backed token cache: populated once at startup via init_db_token_cache().
 # Keys are provider names (e.g. "github"); values are decrypted tokens.
 _DB_TOKEN_CACHE: dict[str, str] = {}
@@ -310,8 +315,22 @@ async def resolve_supported_copilot_model(model_id: str, github_token: Optional[
     if cached and time.time() < cached[1]:
         live_models = cached[0]
     else:
-        live_models = await list_copilot_models(token)
-        _MODEL_LIST_CACHE[cache_key] = (live_models, time.time() + 300)
+        try:
+            live_models = await list_copilot_models(token)
+        except Exception as exc:
+            logger.warning("Copilot live /models fetch failed: %s", exc)
+            live_models = []
+        if live_models:
+            _MODEL_LIST_CACHE[cache_key] = (live_models, time.time() + 300)
+            _MODEL_LIST_LAST_GOOD[cache_key] = live_models
+        else:
+            # Transient empty/failed fetch: fall back to last known good snapshot
+            # so a momentary GitHub blip doesn't make every model look missing.
+            sticky = _MODEL_LIST_LAST_GOOD.get(cache_key)
+            if sticky:
+                live_models = sticky
+                # Short-TTL cache the sticky result so we retry soon.
+                _MODEL_LIST_CACHE[cache_key] = (sticky, time.time() + 30)
 
     if not live_models:
         return None, []
@@ -325,8 +344,19 @@ async def resolve_supported_copilot_model(model_id: str, github_token: Optional[
 
     # Avoid false negatives from short-lived stale cache snapshots.
     # If no candidate matched, re-fetch once from the live endpoint and retry.
-    refreshed_live_models = await list_copilot_models(token)
-    _MODEL_LIST_CACHE[cache_key] = (refreshed_live_models, time.time() + 300)
+    try:
+        refreshed_live_models = await list_copilot_models(token)
+    except Exception as exc:
+        logger.warning("Copilot live /models refresh failed: %s", exc)
+        refreshed_live_models = []
+    if refreshed_live_models:
+        _MODEL_LIST_CACHE[cache_key] = (refreshed_live_models, time.time() + 300)
+        _MODEL_LIST_LAST_GOOD[cache_key] = refreshed_live_models
+    else:
+        # Refresh failed: keep using whatever live_models we already have so we
+        # don't downgrade from a working snapshot to None.
+        refreshed_live_models = live_models
+
     lower_to_live = {(live or "").lower(): live for live in refreshed_live_models}
     for candidate in candidates:
         resolved = lower_to_live.get(candidate.lower())

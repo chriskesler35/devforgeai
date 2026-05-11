@@ -165,6 +165,12 @@ function eventLabel(evt: RunEvent): { title: string; detail: string; tone: 'neut
       return { title: 'Awaiting approval', detail: p.message || 'Review required before continuing.', tone: 'warn' }
     case 'phase_failed':
       return { title: `${p.phase_name || 'Phase'} failed`, detail: p.error || 'Execution failed.', tone: 'bad' }
+    case 'model_failover':
+      return {
+        title: 'Model failover',
+        detail: p.message || `Switched from ${p.previous_model || 'selected model'} to ${p.model_id || 'fallback model'}.`,
+        tone: 'warn',
+      }
     case 'pipeline_retry':
     case 'phase_retry':
       return { title: 'Retry started', detail: p.message || 'Retrying failed work.', tone: 'warn' }
@@ -572,10 +578,16 @@ export default function RunsPage() {
 
   const latestEventTs = events.length > 0 ? events[events.length - 1]?.ts : undefined
   const secondsSinceEvent = eventAgeSeconds(latestEventTs)
+  // Fallback when no SSE events have arrived (e.g. backend restarted and the
+  // in-memory event log was lost, or the worker died before emitting anything):
+  // measure inactivity from the run's own created_at instead, otherwise a
+  // "zombie" run with status=running but no events would never trip this banner.
+  const secondsSinceRunCreated = selected ? eventAgeSeconds(selected.created_at || undefined) : null
+  const inactivitySeconds = secondsSinceEvent ?? secondsSinceRunCreated
   const likelyStuck = !!selected
     && ['pending', 'running', 'awaiting_approval', 'waiting', 'paused'].includes(selected.status)
-    && secondsSinceEvent !== null
-    && secondsSinceEvent >= 120
+    && inactivitySeconds !== null
+    && inactivitySeconds >= 120
 
   return (
     <div className="space-y-6">
@@ -753,7 +765,9 @@ export default function RunsPage() {
       {likelyStuck && (
         <div className="rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-xs text-amber-800 dark:text-amber-300 flex items-center justify-between gap-3">
           <span>
-            This run may be stuck: no new events for about {Math.floor((secondsSinceEvent || 0) / 60)}m {((secondsSinceEvent || 0) % 60)}s.
+            {secondsSinceEvent === null
+              ? `This run may be stuck: no progress events received since it was created about ${Math.floor((inactivitySeconds || 0) / 60)}m ${((inactivitySeconds || 0) % 60)}s ago. The worker may have died (try Reset, then re-launch).`
+              : `This run may be stuck: no new events for about ${Math.floor((inactivitySeconds || 0) / 60)}m ${((inactivitySeconds || 0) % 60)}s.`}
           </span>
           <div className="flex items-center gap-2">
           {canAbortHard && (

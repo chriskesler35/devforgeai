@@ -195,8 +195,14 @@ def _get_runtime_credential_status() -> dict:
         usability_summary = "Authentication and an OpenAI-compatible HTTP proxy are both ready."
         recommended_action = None
     elif auth_ready and access_token and not proxy_reachable:
-        usability_summary = "Codex CLI OAuth token is active. Requests route directly to api.openai.com (no local proxy needed)."
-        recommended_action = None
+        usability_summary = (
+            "Codex CLI OAuth token is active, but DevForgeAI needs an OpenAI-compatible HTTP proxy "
+            "to use it for model routing."
+        )
+        recommended_action = (
+            "Start/configure a Codex OAuth HTTP proxy at CODEX_OAUTH_PROXY_BASE_URL, "
+            "or set OPENAI_API_KEY for direct OpenAI API access."
+        )
     elif configuration_issue:
         usability_summary = (
             "Codex CLI is authenticated (ChatGPT mode), but its app-server does not expose an HTTP API. "

@@ -55,17 +55,17 @@ jobs:
       - name: Install backend dependencies
         run: |
           cd backend
-          pip install -r requirements.txt
+          pip install -r requirements.postgres.txt
           pip install ruff
 
       - name: Lint backend (ruff)
-        run: cd backend && ruff check . --select E,W,F --ignore E501 || true
+        run: cd backend && ruff check . --select E,W,F --ignore E501
 
       - name: Test backend (pytest)
         env:
           DATABASE_URL: postgresql+asyncpg://modelmesh:modelmesh@localhost:5432/modelmesh
           REDIS_URL: redis://localhost:6379
-        run: cd backend && python -m pytest tests/ -v --tb=short || true
+        run: cd backend && python -m pytest tests/ -v --tb=short
 
       - name: Test migrations (fresh DB)
         env:
@@ -78,12 +78,12 @@ jobs:
           PGPASSWORD=modelmesh psql -h localhost -U modelmesh -d postgres \
             -c "CREATE DATABASE modelmesh_migrate_test;"
           # Run full migration chain against fresh database
-          ALEMBIC_DB_URL="postgresql://modelmesh:modelmesh@localhost:5432/modelmesh_migrate_test"
-          alembic -x sqlalchemy.url="${ALEMBIC_DB_URL}" upgrade head
+          export DATABASE_URL="postgresql://modelmesh:modelmesh@localhost:5432/modelmesh_migrate_test"
+          alembic upgrade head
           echo "Migration chain: OK"
           # Verify downgrade works
-          alembic -x sqlalchemy.url="${ALEMBIC_DB_URL}" downgrade -1
-          alembic -x sqlalchemy.url="${ALEMBIC_DB_URL}" upgrade head
+          alembic downgrade -1
+          alembic upgrade head
           echo "Downgrade/upgrade cycle: OK"
           # Cleanup
           PGPASSWORD=modelmesh psql -h localhost -U modelmesh -d postgres \
@@ -100,10 +100,10 @@ jobs:
         run: cd frontend && npm ci
 
       - name: Lint frontend (next lint)
-        run: cd frontend && npm run lint || true
+        run: cd frontend && npm run lint
 
       - name: Type-check frontend (tsc)
-        run: cd frontend && npx tsc --noEmit || true
+        run: cd frontend && npx tsc --noEmit
 
       - name: Build frontend (next build)
         run: cd frontend && npm run build

@@ -551,23 +551,13 @@ export default function WorkbenchListPage() {
   const createSession = async (forcedProjectId?: string) => {
     const launchProjectId = forcedProjectId || projectId
     if (!task.trim() || creating) return
-    if (!launchProjectId) {
-      if (projects.length === 0) {
-        alert('Create a project first, then start a run.')
-        router.push('/projects')
-        return
-      }
-      setProjectPickerSelection('')
-      setShowProjectPicker(true)
-      return
-    }
     setCreating(true)
     try {
       const apiBase = getApiBase()
       const authHeaders = getAuthHeaders()
       const body: any = { task: task.trim(), agent_type: agentType }
       if (model) body.model = model
-      body.project_id = launchProjectId
+      if (launchProjectId) body.project_id = launchProjectId
       if (!asPipeline) {
         body.require_spawn_approval = requireSpawnApproval
       }
@@ -1264,7 +1254,7 @@ export default function WorkbenchListPage() {
                 <div className="rounded-lg border border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
                   <div className="flex items-center gap-2">
                     <span>📌</span>
-                    <span className="font-medium">No project selected yet. Launch will ask you to pick one.</span>
+                    <span className="font-medium">No project selected. Launch will create a project workspace automatically.</span>
                   </div>
                 </div>
               )}
@@ -1338,8 +1328,8 @@ export default function WorkbenchListPage() {
                     </div>
                     {!projectId && (
                       <div className="p-2 rounded bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 text-[11px] text-amber-800 dark:text-amber-200">
-                        <div className="font-semibold">⚠ No project attached</div>
-                        <div>Code phases will generate files but they won't be saved to disk. Go back and launch this session from a project to enable file writes + command execution.</div>
+                        <div className="font-semibold">Auto project workspace</div>
+                        <div>Code phases will save files into a new project unless you attach an existing one before launch.</div>
                       </div>
                     )}
                     {activeStack.length > 1 ? (
@@ -1535,7 +1525,7 @@ export default function WorkbenchListPage() {
             <div className="px-6 py-4 border-t border-gray-100 dark:border-gray-800 flex gap-3 justify-end flex-shrink-0">
               <button onClick={() => setShowNew(false)}
                 className="px-4 py-2 text-sm font-medium rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">Cancel</button>
-              <button onClick={createSession} disabled={!task.trim() || creating || stackLaunchBlocked}
+              <button onClick={() => createSession()} disabled={!task.trim() || creating || stackLaunchBlocked}
                 className="px-4 py-2 text-sm font-medium rounded-lg bg-orange-500 hover:bg-orange-600 disabled:bg-gray-200 text-white disabled:text-gray-400 transition-colors">
                 {creating ? 'Launching...' : stackLaunchBlocked ? 'Fix stack to launch' : '🚀 Launch'}
               </button>

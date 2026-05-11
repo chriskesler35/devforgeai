@@ -1,11 +1,11 @@
 # DevForgeAI — Session Handoff (Live)
 
-**Last updated:** 2026-05-09
-**Active branch:** main (worktree: `.claude/worktrees/agent-a60cd3bf` for chat/page.tsx edits)
-**Backend:** `:19001` (port 19000 stale — frontend pinned to 19001)
+**Last updated:** 2026-05-11
+**Active branch:** main
+**Backend:** `:19001` (launcher startup and status verified)
 **Frontend:** `:3001`
-**Python:** `C:\Python314\python.exe`, repo venv `G:\Model_Mesh\.venv`
-**DB:** `G:\Model_Mesh\data\devforgeai.db`
+**Python:** repo venv `.\.venv`, backend launcher venv `backend\venv`
+**DB:** local SQLite DB under `data\`
 
 > Keep this file updated as work progresses. It is the canonical resume point if context is lost.
 
@@ -15,6 +15,8 @@
 
 1. **Clean up the interface** — too many paths to the same info, not enough visibility into what agents are actually doing.
 2. **Unify model routing** — providers/models that work in chat must also work agentically. End the "works in chat, fails agentically" divergence.
+
+Current gap pack: see `docs/GAP_CLOSURE_LOG.md` for the May 2026 pull/review closure log.
 
 User accepted roadmap: **F → D1 → D2 → M2 → implement.**
 
@@ -140,9 +142,11 @@ Output:
 
 ## Immediate Next Action (when resuming)
 
-1. Ask user to retry pipeline `f88a7392`; confirm phase Executor advances.
-2. Optional hardening pass: migrate remaining duplicated fallback/recovery helpers in `chat.py` and `workbench.py` into shared resolver internals.
-3. If new runtime errors appear during validation, patch and append to bug table above.
+1. Continue the 2026-05-11 gap closure pack in `docs/GAP_CLOSURE_LOG.md`.
+2. Start backend and rerun live runtime checks, especially `/v1/api-keys/runtime-status` and OpenAI/OpenAI-Codex model routing.
+3. Close the Codex transport gap: add explicit endpoint mapping for OpenAI/OpenAI-Codex models and route/hide Responses-only models correctly.
+4. Ask user to retry pipeline `f88a7392`; confirm phase Executor advances.
+5. If new runtime errors appear during validation, patch and append to the gap log.
 
 ## M2 Execution Delta (2026-05-09)
 

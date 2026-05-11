@@ -188,7 +188,7 @@ export default function BmadPage() {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">BMAD Flow</h1>
-          <p className="text-sm text-gray-600 dark:text-gray-300">Discovery -> Ideation -> Planning -> Handoff -> Dev</p>
+          <p className="text-sm text-gray-600 dark:text-gray-300">Discovery {'->'} Ideation {'->'} Planning {'->'} Handoff {'->'} Dev</p>
         </div>
         <button
           onClick={fetchPipelines}

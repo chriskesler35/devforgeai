@@ -28,11 +28,13 @@ import time
 import shutil
 import urllib.request
 import urllib.error
+import ctypes
 from pathlib import Path
 
 ROOT = Path(__file__).parent.resolve()
 BACKEND_DIR = ROOT / "backend"
 FRONTEND_DIR = ROOT / "frontend"
+LOG_DIR = ROOT / "logs"
 IS_WIN = platform.system() == "Windows"
 ROOT_ENV_FILE = ROOT / ".env"
 BACKEND_ENV_FILE = BACKEND_DIR / ".env"
@@ -205,11 +207,16 @@ def preflight_cleanup():
 def is_alive(pid):
     try:
         if IS_WIN:
-            result = subprocess.run(
-                f"tasklist /FI \"PID eq {pid}\" /FO CSV /NH",
-                capture_output=True, text=True, shell=True
-            )
-            return str(pid) in result.stdout
+            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+            if not handle:
+                return False
+            try:
+                exit_code = ctypes.c_ulong()
+                if not ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    return False
+                return exit_code.value == 259
+            finally:
+                ctypes.windll.kernel32.CloseHandle(handle)
         else:
             os.kill(pid, 0)
             return True
@@ -272,6 +279,19 @@ def wait_for_http(url: str, timeout_sec: int = 120) -> bool:
     return False
 
 
+def _popen_creationflags() -> int:
+    if not IS_WIN:
+        return 0
+    return subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+
+
+def _open_process_logs(name: str):
+    LOG_DIR.mkdir(exist_ok=True)
+    stdout = (LOG_DIR / f"{name}_stdout.log").open("ab")
+    stderr = (LOG_DIR / f"{name}_stderr.log").open("ab")
+    return stdout, stderr
+
+
 def start_backend():
     if not VENV_PYTHON.exists():
         print(c(RED, "  ✗  Virtual environment not found. Run: python install.py"))
@@ -289,13 +309,27 @@ def start_backend():
     env["DEVFORGEAI_BACKEND_PORT"] = str(backend_port)
 
     print(f"  {CYAN}→{RESET}  Starting backend on :{backend_port} ...")
-    proc = subprocess.Popen(
-        [str(VENV_PYTHON), "-m", "uvicorn", "app.main:app",
-         "--host", "0.0.0.0", "--port", str(backend_port), "--reload"],
-        cwd=BACKEND_DIR,
-        env=env,
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if IS_WIN else 0,
-    )
+    stdout_log, stderr_log = _open_process_logs("backend")
+    backend_cmd = [
+        str(VENV_PYTHON), "-m", "uvicorn", "app.main:app",
+        "--host", "0.0.0.0", "--port", str(backend_port),
+    ]
+    reload_requested = os.environ.get("DEVFORGEAI_BACKEND_RELOAD", "").strip().lower() in {"1", "true", "yes", "on"}
+    if reload_requested:
+        backend_cmd.append("--reload")
+    try:
+        proc = subprocess.Popen(
+            backend_cmd,
+            cwd=BACKEND_DIR,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=stdout_log,
+            stderr=stderr_log,
+            creationflags=_popen_creationflags(),
+        )
+    finally:
+        stdout_log.close()
+        stderr_log.close()
     return proc, backend_port
 
 
@@ -313,12 +347,20 @@ def start_frontend(backend_port: int):
     env = os.environ.copy()
     env["DEVFORGEAI_BACKEND_PORT"] = str(backend_port)
     env["NEXT_PUBLIC_API_URL"] = f"http://localhost:{backend_port}"
-    proc = subprocess.Popen(
-        [npm, "run", "dev:clean"],
-        cwd=FRONTEND_DIR,
-        env=env,
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if IS_WIN else 0,
-    )
+    stdout_log, stderr_log = _open_process_logs("frontend")
+    try:
+        proc = subprocess.Popen(
+            [npm, "run", "dev:clean"],
+            cwd=FRONTEND_DIR,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=stdout_log,
+            stderr=stderr_log,
+            creationflags=_popen_creationflags(),
+        )
+    finally:
+        stdout_log.close()
+        stderr_log.close()
     return proc
 
 
@@ -376,15 +418,13 @@ def cmd_start(target=None):
         release_start_lock()
         sys.exit(1)
 
-    print(f"""
-  {GREEN}{BOLD}Running!{RESET}
-
-    Frontend  →  {CYAN}http://localhost:3001{RESET}
-        Backend   →  {CYAN}http://localhost:{backend_port}{RESET}
-        API Docs  →  {CYAN}http://localhost:{backend_port}/docs{RESET}
-
-  Use {BOLD}python devforgeai.py stop{RESET} to stop the dev servers.
-""")
+    print(f"\n  {GREEN}{BOLD}Running!{RESET}\n")
+    if target in (None, "frontend"):
+        print(f"    Frontend  →  {CYAN}http://localhost:3001{RESET}")
+    if target in (None, "backend"):
+        print(f"    Backend   →  {CYAN}http://localhost:{backend_port}{RESET}")
+        print(f"    API Docs  →  {CYAN}http://localhost:{backend_port}/docs{RESET}")
+    print(f"\n  Use {BOLD}python devforgeai.py stop{RESET} to stop the dev servers.\n")
 
     release_start_lock()
     return

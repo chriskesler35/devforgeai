@@ -9,7 +9,7 @@ import { RemoteAccessTab } from './remote'
 import { useToast } from '@/app/ToastProvider'
 import { useSearchParams } from 'next/navigation'
 
-import { useState, useEffect, useCallback } from 'react'
+import { Suspense, useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/api'
 
 
@@ -49,7 +49,6 @@ interface ProviderHealthSummary {
   last_checked_at?: string | null
   message?: string | null
   notes?: string | null
-}
 }
 
 interface RuntimeCredentialStatus {
@@ -1665,7 +1664,7 @@ function ServerTab() {
   )
 }
 
-export default function SettingsPage() {
+function SettingsPageContent() {
   const searchParams = useSearchParams()
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [memoryFiles, setMemoryFiles] = useState<MemoryFile[]>([])
@@ -2288,5 +2287,13 @@ export default function SettingsPage() {
         </div>
       )}
     </div>
+  )
+}
+
+export default function SettingsPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-gray-500">Loading settings...</div>}>
+      <SettingsPageContent />
+    </Suspense>
   )
 }

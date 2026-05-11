@@ -35,6 +35,7 @@ from app.services.agentic_events import (
     compute_agentic_score,
     normalize_sse_event,
 )
+from app.services.project_registry import ensure_run_project
 
 logger = logging.getLogger(__name__)
 
@@ -633,7 +634,11 @@ async def _run_turn(
             previous_error = _humanize_model_error(str(last_error), previous_model.model_id) if last_error else "The previous model was unavailable."
             _push(
                 session_id,
-                "info",
+                "model_failover",
+                previous_model=previous_model.model_id,
+                model_id=candidate_model.model_id,
+                fallback_reason=reason,
+                error=previous_error,
                 message=(
                     f"Model failover: switched from '{previous_model.model_id}' to '{candidate_model.model_id}' "
                     f"using {reason}. Reason: {previous_error}"
@@ -680,9 +685,6 @@ async def _run_turn(
             events_log=_event_logs.get(session_id, []),
         )
         return
-
-    if model_orm.model_id != model_id:
-        await _db_update(session_id, model=model_orm.model_id)
 
     _push(
         session_id,
@@ -1106,7 +1108,17 @@ async def create_session(body: WorkbenchCreate, db: AsyncSession = Depends(get_d
         model_id = "llama3.1:8b"
     else:
         model_id = requested_model
-    project_path = _resolve_project_path(body.project_id, body.project_path)
+    try:
+        project = ensure_run_project(
+            task=body.task,
+            source_type="workbench_session",
+            project_id=body.project_id,
+            project_path=body.project_path,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    project_id = project["id"]
+    project_path = Path(project["path"])
 
     # Persist to DB
     session = WorkbenchSession(
@@ -1114,7 +1126,7 @@ async def create_session(body: WorkbenchCreate, db: AsyncSession = Depends(get_d
         task=body.task,
         agent_type=body.agent_type,
         model=model_id,
-        project_id=body.project_id,
+        project_id=project_id,
         project_path=str(project_path) if project_path else None,
         status="awaiting_approval" if body.require_spawn_approval else "pending",
         files=[],

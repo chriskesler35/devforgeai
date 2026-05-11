@@ -4,6 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
+ModelEndpoint = str
+
+_OPENAI_MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
+    # Official OpenAI docs list these Codex aliases as Responses API only.
+    "gpt-5-codex": "responses",
+    "gpt-5.1-codex": "responses",
+}
+
 _ALLOWED_CAPABILITY_KEYS = {
     "chat",
     "streaming",
@@ -66,3 +74,13 @@ def validate_model_capabilities_strict(value: Any, *, context: str = "capabiliti
         issue_text = "; ".join(issues)
         raise ValueError(f"{issue_text}. Allowed capability keys: {allowed}")
     return normalized
+
+
+def get_openai_model_endpoint(model_id: str) -> ModelEndpoint:
+    """Return the required OpenAI endpoint for model IDs with known constraints."""
+    normalized = (model_id or "").strip().lower()
+    return _OPENAI_MODEL_ENDPOINTS.get(normalized, "chat_completions")
+
+
+def requires_openai_responses_api(model_id: str) -> bool:
+    return get_openai_model_endpoint(model_id) == "responses"

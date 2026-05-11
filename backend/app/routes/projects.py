@@ -79,12 +79,22 @@ class ProjectUpdate(BaseModel):
     sandbox_mode: Optional[str] = None  # "restricted" | "full"
 
 
+class TranscriptMessage(BaseModel):
+    role: str
+    content: str
+    created_at: Optional[str] = None
+
+
 class PromoteConversationRequest(BaseModel):
     name: Optional[str] = None
     path: Optional[str] = None
     template: str = "blank"
     include_transcript: bool = True
     sandbox_mode: str = "full"
+    # Optional fallback transcript used when the conversation row is missing
+    # from the DB (e.g. unsaved chat, stale localStorage id).
+    messages: Optional[List[TranscriptMessage]] = None
+    title: Optional[str] = None
 
 
 def _safe_slug(value: str) -> str:
@@ -212,25 +222,65 @@ async def promote_conversation_to_project(
     body: PromoteConversationRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a project directly from an existing conversation and persist a chat intake artifact."""
+    """Create a project directly from a conversation.
+
+    Falls back to the request-supplied `messages` transcript when the DB row
+    is missing (unsaved chat, stale id, etc.) so the user is never blocked.
+    """
+    conv = None
+    transcript: list = []
+    conv_title: Optional[str] = None
+
     try:
         conv_uuid = uuid.UUID(conversation_id)
     except (ValueError, AttributeError):
-        raise HTTPException(status_code=404, detail="Conversation not found")
+        conv_uuid = None
 
-    conv_result = await db.execute(select(Conversation).where(Conversation.id == conv_uuid))
-    conv = conv_result.scalar_one_or_none()
-    if not conv:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+    if conv_uuid is not None:
+        conv_result = await db.execute(select(Conversation).where(Conversation.id == conv_uuid))
+        conv = conv_result.scalar_one_or_none()
 
-    msg_result = await db.execute(
-        select(Message)
-        .where(Message.conversation_id == conv_uuid)
-        .order_by(Message.created_at.asc())
-    )
-    transcript = list(msg_result.scalars().all())
+    if conv is not None:
+        msg_result = await db.execute(
+            select(Message)
+            .where(Message.conversation_id == conv_uuid)
+            .order_by(Message.created_at.asc())
+        )
+        transcript = list(msg_result.scalars().all())
+        conv_title = conv.title
+    else:
+        # No DB record — accept a client-supplied transcript instead.
+        if not body.messages and not body.name and not body.title:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Conversation '{conversation_id}' was not found and no fallback "
+                    "messages/name were provided. Send `messages` in the request body "
+                    "to promote an unsaved chat."
+                ),
+            )
+        conv_title = body.title or body.name
 
-    suggested_name = (body.name or conv.title or f"Project from chat {str(conv.id)[:8]}").strip()
+        class _MsgShim:
+            def __init__(self, role: str, content: str, created_at: Optional[str] = None):
+                self.role = role
+                self.content = content
+                # parse iso timestamp if given, else leave as None
+                self.created_at = None
+                if created_at:
+                    try:
+                        self.created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                    except Exception:
+                        self.created_at = None
+
+        for m in body.messages or []:
+            transcript.append(_MsgShim(m.role, m.content, m.created_at))
+        logger.info(
+            "Promote: conversation %s not in DB; using %d client-supplied message(s).",
+            conversation_id, len(transcript),
+        )
+
+    suggested_name = (body.name or conv_title or f"Project from chat {conversation_id[:8]}").strip()
     slug = _safe_slug(suggested_name)
 
     if body.path:
@@ -260,8 +310,8 @@ async def promote_conversation_to_project(
     intake_path = project_path / "CHAT-INTAKE.md"
     if body.include_transcript:
         intake_md = _build_chat_intake_markdown(
-            conversation_title=conv.title or suggested_name,
-            conversation_id=str(conv.id),
+            conversation_title=conv_title or suggested_name,
+            conversation_id=str(conv.id) if conv is not None else conversation_id,
             message_count=len(transcript),
             transcript=transcript,
         )
@@ -273,7 +323,7 @@ async def promote_conversation_to_project(
         "path": str(project_path.resolve()),
         "template": body.template,
         "description": (
-            f"Promoted from chat conversation '{conv.title or 'Untitled conversation'}' "
+            f"Promoted from chat conversation '{conv_title or 'Untitled conversation'}' "
             f"({len(transcript)} messages)."
         ),
         "agents": [],
@@ -283,10 +333,11 @@ async def promote_conversation_to_project(
         "scaffolded": scaffold,
         "source": {
             "type": "conversation",
-            "conversation_id": str(conv.id),
-            "conversation_title": conv.title,
+            "conversation_id": str(conv.id) if conv is not None else conversation_id,
+            "conversation_title": conv_title,
             "message_count": len(transcript),
             "intake_file": "CHAT-INTAKE.md" if body.include_transcript else None,
+            "db_record": conv is not None,
         },
     }
 
