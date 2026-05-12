@@ -110,8 +110,14 @@ run_messages
   content                   text          NOT NULL
   image_url                 text          nullable
   created_at                timestamptz   NOT NULL
+  -- index hint for migration: btree (run_id, created_at) — chat pane queries
+  -- always paginate by recency within a single run.
 
 run_events
+  -- index hint for migration: btree (run_id, created_at) — timeline render
+  -- + btree (run_id, phase_id) — phase-anchor jumps from the top strip.
+
+run_events                  -- (see also: index hints above)
   id                        uuid          PK
   run_id                    uuid          FK → runs.id  NOT NULL  ON DELETE CASCADE
   phase_id                  uuid          nullable          FK → run_phases.id
@@ -159,7 +165,7 @@ projects (existing table — Scratch row guaranteed)
 - `awaiting_approval` — a method phase gate is open. UI surfaces an Approve / Skip / Edit-brief affordance.
 - `paused` — user pressed Pause. Agents halted at last checkpoint. Resume re-enters `running`.
 - `completed` — every phase reached `done` (or method exited cleanly for empty Runs); `completed_at` set.
-- `failed` — terminal error; carries the last `run_event` of kind `error` for diagnosis. Stays in rail/grid until acknowledged.
+- `failed` — terminal error; `failed_at` is **derived** from the latest `run_event` of kind `error` (no separate column on `runs`). UIs render the diagnosis from that event. Stays in rail/grid until acknowledged.
 - `cancelled` — user terminated mid-flight.
 - `archived` — user-managed; removes from default views, retained in search and API.
 
@@ -223,6 +229,8 @@ Layout:
    130px        ~38%                  ~42%                  ~20%
 ```
 
+> **Note on pane widths:** the percentages above are illustrative defaults; the implementation plan should lock the CSS grid template explicitly (likely a `grid-template-columns: 130px minmax(360px, 1.1fr) minmax(420px, 1.2fr) minmax(260px, 0.9fr)` shape) and verify the breakpoint math, rather than treating "38/42/20" as a literal constraint.
+
 **Top strip:**
 - Title (editable inline).
 - Project name (click → project page).
@@ -241,7 +249,7 @@ Layout:
 **Chat pane:**
 - Identical input affordances to today's `/chat` (slash commands, image-gen intent detection, persona/model dropdowns gated by `modelRuntimeReadiness`).
 - `messages` come from `run_messages` for this run.
-- Slash commands relevant here: `/method <name>` to attach a method, `/onboard`, `/image`, `/pin`, `/export`, `/model`.
+- Slash commands relevant here: `/method <name>` to attach a method, `/onboard`, `/image`, `/pin`, `/export`, `/model`, `/fork` (power-tools-gated; only valid inside an expanded event drawer).
 - When `state = awaiting_input`, the input is highlighted/focused.
 
 **Event timeline pane:**
@@ -295,7 +303,7 @@ For power users running 10+ concurrent Runs, the rail's "Active" list virtualize
 
 - A failing tool / model / phase emits a `run_event` of kind `error` with the full traceback in `payload`.
 - The Run transitions to `failed`. `completed_at` is **not** set (preserves `failed_at` semantics via the most recent error event).
-- The error event's `payload.recovery_candidates` (when populated by the runtime resolver — see D2 work) surfaces in the expanded drawer with "Retry with X" buttons.
+- The error event's `payload.recovery_candidates` (when populated by the runtime resolver — see D2 work) surfaces in the expanded drawer with "Retry with X" buttons. **Render rule:** the "Retry with X" UI only renders when the field is present. The implementation plan must NOT block on D2 to ship the error-path rendering; absent the field, the drawer falls back to "Manual retry" + the raw error.
 
 ### 7.2 Frontend errors
 
