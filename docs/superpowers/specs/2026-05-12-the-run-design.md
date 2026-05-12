@@ -2,6 +2,7 @@
 
 > **Date:** 2026-05-12
 > **Status:** Design approved through Section 3 (concept, data model, UI architecture). Sections 4-5 (error handling, testing) drafted in this doc but not walked through interactively due to session time. **User must review this doc before writing-plans is invoked.**
+> **Implementation plan:** [docs/superpowers/plans/2026-05-12-the-run-implementation.md](../plans/2026-05-12-the-run-implementation.md)
 > **Companion:** Doc 2 (`Sidebar IA + migration`) is a separate brainstorm — not yet started.
 > **Slot:** E (from the audit menu — "5-item sidebar brainstorm," reframed to "the Run as the unit of work").
 
