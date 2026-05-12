@@ -142,11 +142,24 @@ Output:
 
 ## Immediate Next Action (when resuming)
 
-1. Continue the 2026-05-11 gap closure pack in `docs/GAP_CLOSURE_LOG.md`.
-2. Start backend and rerun live runtime checks, especially `/v1/api-keys/runtime-status` and OpenAI/OpenAI-Codex model routing.
-3. Close the Codex transport gap: add explicit endpoint mapping for OpenAI/OpenAI-Codex models and route/hide Responses-only models correctly.
-4. Ask user to retry pipeline `f88a7392`; confirm phase Executor advances.
-5. If new runtime errors appear during validation, patch and append to the gap log.
+### Most recent session (2026-05-12) — major progress
+
+**Slot A (F-class closure) — COMPLETE.** ruff lint clean (229 → 0), alembic migration chain fixed, 7 real bugs closed (dead-code overrides, missing imports, dropped params, sandbox gap, orphan operator block). Pre-commit hook added. Commits: `09ccf4d` → `e12873e` → `e21544d`.
+
+**Bug 1 + Bug 2 (chat dropdown stale UUID + Copilot static-catalog gating) — COMPLETE.** Predicate module `frontend/src/lib/modelRuntimeReadiness.ts` is the single source of truth for "is this model usable right now?" Wired into chat dropdown, persona forms (new + edit), agent form. Commits: `32d0587` → `ad9679b`.
+
+**Slot B (audit Bucket 2 — "stop lying to users") — COMPLETE.** Home page Status card wired to `/v1/health`, method "installed" relabeled and dynamicized, first-run banner added when identity is unset, Settings Reset-Onboarding navigates to chat instead of telling user to refresh, dead `skillsMarketplaceAlpha` flag removed, `project-context.md` + `CHARTER.md` refreshed to match SQLite + post-Phase-8 reality. Commit: `3c35a14`.
+
+**Slot E Doc 1 (The Run — work model + viewer UX) — DESIGN DOC WRITTEN, AWAITING USER REVIEW.** See `docs/superpowers/specs/2026-05-12-the-run-design.md`. All 7 brainstorm decisions logged in §2 of that doc. Wireframes for the assembled design are embedded in §5.3 as text. Visual companion mockups preserved locally at `.superpowers/brainstorm/671-1778623161/` but gitignored.
+
+### To pick up
+
+1. **User reviews `docs/superpowers/specs/2026-05-12-the-run-design.md`** — approve, request changes, or override decisions. Only proceed once approved.
+2. **Spec review loop** — if/when user approves, dispatch `spec-document-reviewer` subagent for an independent review pass. (Not done this session due to time.)
+3. **Slot E Doc 2 — Sidebar IA + migration.** Brainstorm covering: the 5-item sidebar's final shape given Doc 1's Run-as-unit-of-work model, URL migration for `/chat/:id` → `/runs/:id` etc., transitional aliases, deprecation timeline. Depends on Doc 1 sign-off.
+4. **D2 implementation continuation** (the original roadmap). UI consolidation still blocked behind this.
+5. **gpt-5-codex Responses API transport** — gap log open item 1. Still pending.
+6. **Live runtime smoke tests** — `/v1/api-keys/runtime-status` + Codex routing — pending credentials/proxy availability.
 
 ## M2 Execution Delta (2026-05-09)
 

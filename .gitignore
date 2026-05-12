@@ -109,3 +109,4 @@ tests/e2e/playwright-report/
 tests/e2e/test-results/
 tests/e2e/.tmp-regression-output.txt
 
+.superpowers/
