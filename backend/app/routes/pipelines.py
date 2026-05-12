@@ -962,10 +962,12 @@ async def _run_phase(pipeline_id: str, phase_index: int, retry_count: int = 0, m
     if phase_def.get("phase_type") == "branch":
         from app.services.phase_templates import evaluate_branch
 
-        # Get parent output from the most recent prior run
+        # Get parent output from the most recent prior run.
+        # NOTE: prior_run_dicts is built later in this function (line ~1015) after
+        # the branch block returns, so use all_prior_runs directly here.
         parent_output = ""
-        if prior_run_dicts:
-            last = prior_run_dicts[-1]
+        if all_prior_runs:
+            last = all_prior_runs[-1].to_dict()
             artifact = last.get("output_artifact") or {}
             if artifact.get("type") == "json" and artifact.get("data") is not None:
                 parent_output = json.dumps(artifact["data"])
@@ -1437,7 +1439,7 @@ async def _run_phase(pipeline_id: str, phase_index: int, retry_count: int = 0, m
     except Exception as e:
         err_str = str(e)
         logger.error(f"LLM call failed in phase {phase_name} of pipeline {pipeline_id}: {e}")
-        friendly = _humanize_model_error(err_str, model_orm.model_id if model_orm else model_id)
+        friendly = humanize_runtime_model_error(err_str, model_orm.model_id if model_orm else model_id)
         llm_success = False
         llm_error = friendly
 

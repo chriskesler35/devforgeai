@@ -1300,6 +1300,23 @@ def _convert_workflow_to_masked_inpaint(
         )
 
         if not decode_id:
+            # Resolve VAE source from existing CheckpointLoader or VAELoader.
+            vae_source = None
+            for nid, node in workflow.items():
+                if not isinstance(node, dict):
+                    continue
+                ct = node.get("class_type")
+                if ct in ("CheckpointLoaderSimple", "CheckpointLoader", "unCLIPCheckpointLoader"):
+                    vae_source = [nid, 2]
+                    break
+                if ct == "VAELoader":
+                    vae_source = [nid, 0]
+                    break
+            if not vae_source:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot prepare masked edit workflow — no VAE source found",
+                )
             decode_id = str(_next_node_id(workflow))
             workflow[decode_id] = {
                 "class_type": "VAEDecode",

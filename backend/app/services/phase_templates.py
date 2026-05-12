@@ -1007,30 +1007,50 @@ def _resolve_field(data: Any, field_path: str) -> Any:
 
 
 def _evaluate_operator(actual: Any, operator: str, expected: Any) -> bool:
-    """Evaluate a single condition operator against *actual* and *expected* values."""
-    if operator == "exists":
+    """Evaluate a single condition operator.
+
+    Supported operators:
+        equals, not_equals, contains, not_contains,
+        greater_than (alias: gt), less_than (alias: lt),
+        exists, not_exists, in, not_in
+    """
+    op = (operator or "equals").lower().strip()
+
+    if op == "exists":
         return actual is not None
-    if operator == "not_exists":
+    if op == "not_exists":
         return actual is None
-    if actual is None:
-        return False
-    if operator == "equals":
-        return str(actual).lower() == str(expected).lower()
-    if operator == "not_equals":
-        return str(actual).lower() != str(expected).lower()
-    if operator == "contains":
-        return str(expected).lower() in str(actual).lower()
-    if operator == "gt":
+
+    # Coerce to strings for text comparisons when types differ
+    if op == "equals":
+        return str(actual).lower() == str(expected).lower() if actual is not None else expected is None
+    if op == "not_equals":
+        return str(actual).lower() != str(expected).lower() if actual is not None else expected is not None
+    if op == "contains":
+        return str(expected).lower() in str(actual).lower() if actual is not None else False
+    if op == "not_contains":
+        return str(expected).lower() not in str(actual).lower() if actual is not None else True
+
+    # Numeric comparisons (accept verbose names and gt/lt aliases)
+    if op in ("greater_than", "less_than", "gt", "lt"):
         try:
-            return float(actual) > float(expected)
+            a_num = float(actual) if actual is not None else 0
+            e_num = float(expected) if expected is not None else 0
+            return a_num > e_num if op in ("greater_than", "gt") else a_num < e_num
         except (ValueError, TypeError):
             return False
-    if operator == "lt":
-        try:
-            return float(actual) < float(expected)
-        except (ValueError, TypeError):
-            return False
-    # Unknown operator -- default to False (safe)
+
+    # List membership
+    if op == "in":
+        if isinstance(expected, list):
+            return actual in expected
+        return str(actual).lower() in str(expected).lower() if actual is not None else False
+    if op == "not_in":
+        if isinstance(expected, list):
+            return actual not in expected
+        return str(actual).lower() not in str(expected).lower() if actual is not None else True
+
+    # Unknown operator — default to false
     logger.warning("Unknown condition operator: %s", operator)
     return False
 
@@ -1079,52 +1099,6 @@ def validate_phase_dag(phases: List[Dict[str, Any]]) -> List[str]:
             dfs(n)
 
     return errors
-
-    """Evaluate a single condition operator.
-
-    Supported operators:
-        equals, not_equals, contains, not_contains,
-        greater_than, less_than, exists, not_exists,
-        in, not_in
-    """
-    op = (operator or "equals").lower().strip()
-
-    if op == "exists":
-        return actual is not None
-    if op == "not_exists":
-        return actual is None
-
-    # Coerce to strings for text comparisons when types differ
-    if op == "equals":
-        return str(actual).lower() == str(expected).lower() if actual is not None else expected is None
-    if op == "not_equals":
-        return str(actual).lower() != str(expected).lower() if actual is not None else expected is not None
-    if op == "contains":
-        return str(expected).lower() in str(actual).lower() if actual is not None else False
-    if op == "not_contains":
-        return str(expected).lower() not in str(actual).lower() if actual is not None else True
-
-    # Numeric comparisons
-    if op in ("greater_than", "less_than"):
-        try:
-            a_num = float(actual) if actual is not None else 0
-            e_num = float(expected) if expected is not None else 0
-            return a_num > e_num if op == "greater_than" else a_num < e_num
-        except (ValueError, TypeError):
-            return False
-
-    # List membership
-    if op == "in":
-        if isinstance(expected, list):
-            return actual in expected
-        return str(actual).lower() in str(expected).lower() if actual is not None else False
-    if op == "not_in":
-        if isinstance(expected, list):
-            return actual not in expected
-        return str(actual).lower() not in str(expected).lower() if actual is not None else True
-
-    # Unknown operator — default to false
-    return False
 
 
 def evaluate_branch(phase: dict, parent_output: str) -> str:

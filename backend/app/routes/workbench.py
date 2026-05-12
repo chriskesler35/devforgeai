@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from pydantic import BaseModel
 from app.middleware.auth import verify_api_key
+from app.config import settings
 from app.database import get_db, AsyncSessionLocal
 from app.services.runtime_model_resolver import (
     build_runtime_model_chain_for_runtime,

@@ -133,6 +133,11 @@ async def _run_image_gen(task_id: str, params: dict):
                             comfyui_dir=comfyui_dir,
                             progress_cb=_report_progress,
                             poll_timeout_seconds=poll_timeout_seconds,
+                            size=size,
+                            negative_prompt=negative_prompt,
+                            checkpoint=checkpoint,
+                            lora=lora,
+                            lora_strength=lora_strength,
                         )
                     except Exception as comfy_err:
                         err_detail = str(comfy_err)

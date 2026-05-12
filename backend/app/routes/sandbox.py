@@ -190,7 +190,18 @@ async def install_packages(project_id: str, body: EnvCreate):
     """Install packages into the project's venv."""
     project = _get_project(project_id)
     guard = _get_guard(project)
-    # pip install is allowed in both modes — it only affects the project's venv
+    # pip install setup.py hooks can execute arbitrary code at install time,
+    # which would let installed packages escape the project sandbox. Block
+    # in restricted mode and require an explicit switch to full access.
+    if guard.is_restricted:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "pip install is blocked in restricted mode because package "
+                "install hooks can execute arbitrary code. Switch the project "
+                "to full access mode to install packages."
+            ),
+        )
     path = Path(project["path"])
     pip_exe = path / ".venv" / "Scripts" / "pip.exe"
 
