@@ -1,8 +1,8 @@
 # DevForgeAI — Project Context & AI Rules
 
-> **Date:** April 8, 2026  
-> **Project:** AgentMesh / DevForgeAI (Agentic AI Platform)  
-> **Status:** Active Development (Phase 2.0)
+> **Last Updated:** May 12, 2026
+> **Project:** DevForgeAI (Agentic AI Platform — repo name `model_mesh`)
+> **Status:** Phase 8+ complete (core, providers, personas, resilience, personalization, UI polish, self-healing, model management). Currently driving the F → D1 → D2 → M2 → Implement → UI consolidation roadmap. **The canonical live-state doc is `docs/SESSION_HANDOFF.md` — defer to it for current bugs, in-flight work, and immediate next actions.**
 
 ---
 
@@ -51,7 +51,8 @@ Transform ModelMesh from a simple API gateway into an **autonomous agentic platf
 │  • Model routing & failover                 │
 │  • Cost bucketing                           │
 │  • Token accounting                         │
-│  • Context management (Redis/PostgreSQL)    │
+│  • Context management (SQLite + optional    │
+│    Redis for rate-limit / multi-turn cache) │
 └─────────────────────────────────────────────┘
                     ↓
 ┌──────────┬──────────┬──────────┬──────────┐
@@ -64,12 +65,12 @@ Transform ModelMesh from a simple API gateway into an **autonomous agentic platf
 
 | Component | Technology | Rationale |
 |-----------|-----------|-----------|
-| **Backend** | Python 3.11+ / FastAPI | Native AI library support; async-native for streaming |
-| **Database** | PostgreSQL | Relational storage for users, personas, memory, config |
-| **Cache/Queue** | Redis | Rate limiting, conversation memory, temporary context |
-| **Frontend** | React + Next.js | Modern UX, dark mode support, SSR capability |
-| **Infrastructure** | Docker Compose | Local LLM support; consistent dev/prod environment |
-| **Model Routing** | LiteLLM | Unified interface across Anthropic, OpenAI, Gemini, Ollama |
+| **Backend** | Python 3.11–3.13 / FastAPI | Native AI library support; async-native for streaming |
+| **Database** | SQLite (aiosqlite) for local dev; PostgreSQL supported via `requirements.postgres.txt` for CI/prod | Zero-setup local dev; Postgres available for multi-user deployments |
+| **Cache/Queue** | Redis (optional) | Rate limiting + multi-turn memory; backend degrades gracefully when unavailable |
+| **Frontend** | Next.js 14 + React 18 + TailwindCSS | Modern UX with dark mode, SSR, and dev-time hot reload |
+| **Infrastructure** | Docker Compose (optional) | Useful for paired services (Redis); local Python venv runs fine without Docker |
+| **Model Routing** | LiteLLM + custom `runtime_model_resolver` | Unified provider interface plus dedicated chat ↔ agentic resolver |
 
 ---
 
@@ -320,31 +321,32 @@ When agents (external or internal) interact with this codebase, follow these pri
 
 ## 7. Current Status & Key Metrics
 
-### Completed (Phase 1.0)
-✅ Core FastAPI gateway  
-✅ PostgreSQL data layer  
-✅ Redis caching layer  
-✅ LiteLLM model routing  
-✅ User authentication (JWT)  
-✅ Persona system  
-✅ Basic conversations endpoint  
-✅ Docker Compose deployment  
+### Completed (Phases 1–8 — see `CHARTER.md` for per-phase scope)
+✅ Core FastAPI gateway + LiteLLM routing
+✅ SQLite data layer (Postgres optional for prod)
+✅ Multi-provider adapters (Anthropic, Google, OpenRouter, OpenAI/Codex, Ollama, GitHub Copilot)
+✅ Persona system + memory files (SOUL.md, USER.md, MEMORY.md)
+✅ Routing engine with failover + cost-aware gating
+✅ Streaming SSE, rate limiting (Redis), Swagger docs
+✅ Personalization: learned preferences + system-modification audit trail
+✅ UI/UX: dark mode, Settings, persona forms, model CRUD
+✅ Self-healing: health checks, snapshots, rollback, last-known-good commit
+✅ Image generation: Gemini Imagen + ComfyUI (workflow templates, LoRA, checkpoint picker)
+✅ Telegram bot + remote access (LAN / Tailscale)
+✅ Agents (7 built-in types), Workbench live monitor, Projects, Methods (BMAD/GSD/Superpowers/gtrack)
 
-### In Progress (Phase 2.0)
-🔄 Agent Orchestrator framework  
-🔄 Parallel agent execution  
-🔄 Workflow engine  
-🔄 Memory synthesis  
-🔄 Web UI improvements  
-🔄 E2E testing suite  
+### In Progress (May 2026 — see `docs/SESSION_HANDOFF.md` for live state)
+🔄 D2 — unified `resolve_model_for_runtime` resolver (Tasks 1–6 done; remaining wiring + smoke tests)
+🔄 Responses API transport for OpenAI Codex models (gpt-5-codex still blocked pending Responses client)
+🔄 UI consolidation — 5-item sidebar + unified Run viewer (blocked behind D2 completion; static mocks at `/mocks/now`)
 
-### Backlog (Phase 3.0 & Beyond)
-⏳ Image generation agents (Flux/Gemini)  
-⏳ Voice input/output  
-⏳ Collaboration (shared workspaces, @mentions)  
-⏳ Custom agent creation UI  
-⏳ Kubernetes deployment  
-⏳ Analytics dashboard  
+### Backlog / parking lot
+⏳ Frontend god-file refactors (chat/page.tsx 3.7K LOC, workbench/[id] 3.0K LOC, settings 2.3K LOC)
+⏳ Onboarding extraction from chat-page (`IdentityWizard` is reusable; entry surface needs work)
+⏳ Pipeline phase picker + project launch picker gating (Bug 2 follow-up)
+⏳ Centralized notification system (currently split between `tasks.py` and unwired `notifications.py`)
+⏳ K8s production deployment
+⏳ Multi-user RBAC hardening
 
 ### Key Commit References
 - `last_good_commit.txt` — Stable reference point
@@ -435,4 +437,4 @@ GOOGLE_API_KEY=...
 
 **Last Updated:** April 8, 2026  
 **Maintained By:** Development Team  
-**Next Review:** After Phase 2.0 completion
+**Next Review:** After F-class closure + D2/UI consolidation lands. Live state lives in `docs/SESSION_HANDOFF.md` and `docs/GAP_CLOSURE_LOG.md` — those are the source of truth between reviews.

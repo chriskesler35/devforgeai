@@ -1,5 +1,7 @@
 # Project Charter: DevForgeAI (Agentic AI Platform)
 
+> **Note for AI agents reading this file:** This Charter captures the original goals and architectural decisions. For *current* state — what's in flight, known bugs, immediate next actions — read `docs/SESSION_HANDOFF.md`. For closure history, read `docs/GAP_CLOSURE_LOG.md`. This Charter is the long-term north star; those two are the day-to-day.
+
 ## 1. Project Overview
 
 **Vision:** To create a unified API interface that intelligently routes development requests to the optimal AI model, balancing cost, performance, and capability. The system should learn from user interactions and personalize responses over time.
@@ -18,11 +20,11 @@ We use a **Modular Monolith** architecture (easier to develop/test) which can be
 
 | Component | Choice | Rationale |
 |-----------|--------|-----------|
-| Backend Language | Python (FastAPI) | Python is the native language of AI. Libraries like litellm are Python-first. Handles async requests natively (crucial for streaming). |
-| Database | PostgreSQL | Relational data for user configs, API keys, personas, memory files, preferences. |
-| Cache/Queue | Redis | Rate limiting, conversation memory, temporary context storage. |
-| Frontend | React + Next.js | Modern UI with dark mode, client-side rendering for better UX. |
-| Infrastructure | Docker | Essential for local LLM containers and consistent deployment. |
+| Backend Language | Python 3.11–3.13 / FastAPI | Native AI library ecosystem (litellm, anthropic, openai SDKs); async-native for streaming. |
+| Database | SQLite (aiosqlite) for local dev; PostgreSQL supported in CI/prod via `requirements.postgres.txt` | Zero-setup local dev; Postgres available for multi-user production deployments. |
+| Cache/Queue | Redis (optional) | Rate limiting + multi-turn conversation memory. Backend degrades gracefully when not configured (status reported in `/v1/health`). |
+| Frontend | Next.js 14 + React 18 + TailwindCSS | Modern UI with dark mode, SSR, client-side state, dev-time hot reload. |
+| Infrastructure | Local venv + npm (default); Docker Compose available for paired services (Redis/Postgres) | Most users can run with just `python devforgeai.py start` — Docker is not required. |
 
 ### System Diagram
 

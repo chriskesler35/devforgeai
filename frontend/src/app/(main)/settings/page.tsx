@@ -1291,7 +1291,7 @@ function IdentityTab() {
   }
 
   const resetOnboarding = async () => {
-    if (!confirm('This will clear your profile and re-run setup next time you open chat. Continue?')) return
+    if (!confirm('This will clear your profile and immediately re-run setup in chat. Continue?')) return
     await fetch(`${API_BASE}/v1/identity/user`, {
       method: 'PUT', headers: AUTH_HEADERS, body: JSON.stringify({ content: '' })
     })
@@ -1301,7 +1301,10 @@ function IdentityTab() {
     setUserContent('')
     setSoulContent('')
     setIdentityContent('')
-    alert('Reset complete — refresh the chat page to run setup again.')
+    // Navigate the user into the wizard rather than asking them to find chat.
+    // The chat page checks /v1/identity/status on mount and fires the
+    // OnboardingOverlay when first_run is true.
+    window.location.href = '/chat'
   }
 
   if (loading) return <div className="text-sm text-gray-500 py-8 text-center">Loading...</div>

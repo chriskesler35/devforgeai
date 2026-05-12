@@ -4,6 +4,26 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { GpuStatusWidget } from '@/components/ModelFitnessCheck'
 import { api } from '@/lib/api'
+import { API_BASE, AUTH_HEADERS } from '@/lib/config'
+
+interface HealthResponse {
+  status: string
+  database?: string
+  redis?: string
+}
+
+interface BackendMethod {
+  id: string
+  name: string
+  description?: string
+  is_custom: boolean
+  phases?: string[]
+}
+
+interface IdentityStatus {
+  first_run: boolean
+  ai_name?: string
+}
 
 interface Persona {
   id: string
@@ -227,20 +247,60 @@ export default function Home() {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [loading, setLoading] = useState(true)
   const [methodSearch, setMethodSearch] = useState('')
+  // `null` while in-flight; `{status:'unreachable'}` if /v1/health fetch fails.
+  const [health, setHealth] = useState<HealthResponse | null>(null)
+  const [customMethods, setCustomMethods] = useState<BackendMethod[]>([])
+  // When identity files are missing/empty, surface a one-click path into the
+  // wizard. Previously users had to discover that onboarding only fires on
+  // the Chat page; now home tells them.
+  const [identity, setIdentity] = useState<IdentityStatus | null>(null)
 
   useEffect(() => {
     async function fetchData() {
+      // Run main data fetch and health probe in parallel; degraded health
+      // shouldn't block stats from rendering.
+      const dataPromise = Promise.all([
+        api.getPersonas(),
+        api.getModels(),
+        api.getConversations(),
+      ])
+      const healthPromise: Promise<HealthResponse> = fetch(`${API_BASE}/v1/health`, {
+        signal: AbortSignal.timeout(3000),
+      })
+        .then((r) => (r.ok ? r.json() : { status: 'unreachable' }))
+        .catch(() => ({ status: 'unreachable' }))
+      // Custom methods aren't hardcoded in METHOD_CARDS; pull them so they
+      // surface in the Available section alongside built-ins.
+      const methodsPromise: Promise<BackendMethod[]> = fetch(`${API_BASE}/v1/methods/`, {
+        headers: AUTH_HEADERS,
+        signal: AbortSignal.timeout(3000),
+      })
+        .then((r) => (r.ok ? r.json() : { data: [] }))
+        .then((j) => (j?.data || []).filter((m: BackendMethod) => m.is_custom))
+        .catch(() => [])
+      const identityPromise: Promise<IdentityStatus | null> = fetch(`${API_BASE}/v1/identity/status`, {
+        headers: AUTH_HEADERS,
+        signal: AbortSignal.timeout(3000),
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null)
+
       try {
-        const [personasRes, modelsRes, conversationsRes] = await Promise.all([
-          api.getPersonas(),
-          api.getModels(),
-          api.getConversations(),
+        const [[personasRes, modelsRes, conversationsRes], healthRes, customRes, identityRes] = await Promise.all([
+          dataPromise,
+          healthPromise,
+          methodsPromise,
+          identityPromise,
         ])
         setPersonas(personasRes.data)
         setModels(modelsRes.data)
         setConversations(conversationsRes.data)
+        setHealth(healthRes)
+        setCustomMethods(customRes)
+        setIdentity(identityRes)
       } catch (e) {
         console.error('Failed to fetch data:', e)
+        setHealth({ status: 'unreachable' })
       } finally {
         setLoading(false)
       }
@@ -248,9 +308,37 @@ export default function Home() {
     fetchData()
   }, [])
 
+  // Translate the /v1/health payload into a stat-card label + subtitle pair.
+  function healthBadge(): { value: string; sub: string } {
+    if (!health) return { value: 'Checking…', sub: 'Probing backend' }
+    if (health.status === 'healthy') return { value: 'Healthy', sub: 'All systems operational' }
+    if (health.status === 'unreachable') return { value: 'Offline', sub: 'Backend not reachable' }
+    const parts: string[] = []
+    if (health.database === 'unhealthy') parts.push('DB down')
+    if (health.redis === 'unhealthy') parts.push('Redis down')
+    return { value: 'Degraded', sub: parts.join(' · ') || 'Subsystem degraded' }
+  }
+  const healthInfo = healthBadge()
+
   const activeModels = models.filter(m => m.is_active)
   const normalizedSearch = methodSearch.trim().toLowerCase()
-  const filteredMethods = METHOD_CARDS.filter((m) =>
+
+  // Built-in methods are always available (shipped with the app). Custom
+  // methods are fetched live from /v1/methods/.
+  const customAsCards: MethodCard[] = customMethods.map((m) => ({
+    id: m.id,
+    title: m.name,
+    description: m.description || 'Custom method',
+    duration: 'Varies',
+    requiredContext: 'Per method',
+    roadmap: m.phases && m.phases.length > 0 ? m.phases : ['Custom phase chain'],
+    href: `/methods?focus=${encodeURIComponent(m.id)}`,
+    icon: (m.name || '?').charAt(0).toUpperCase(),
+    group: 'installed',
+  }))
+
+  const allMethods = [...METHOD_CARDS, ...customAsCards]
+  const filteredMethods = allMethods.filter((m) =>
     !normalizedSearch ||
     m.title.toLowerCase().includes(normalizedSearch) ||
     m.description.toLowerCase().includes(normalizedSearch)
@@ -272,6 +360,28 @@ export default function Home() {
 
   return (
     <div className="space-y-8">
+
+      {/* First-run banner — only visible when identity files haven't been set.
+          Clicking the button takes the user into chat, where the OnboardingOverlay
+          fires automatically based on the same identity/status check. */}
+      {identity?.first_run && (
+        <div className="rounded-2xl border border-orange-300 dark:border-orange-700 bg-orange-50 dark:bg-orange-900/20 px-5 py-4">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold text-orange-900 dark:text-orange-200">Welcome — let's set up your AI</h2>
+              <p className="mt-1 text-sm text-orange-800 dark:text-orange-300">
+                A 2-minute setup tunes your AI's personality, your profile, and the preferences it uses everywhere.
+              </p>
+            </div>
+            <Link
+              href="/chat"
+              className="inline-flex items-center px-4 py-2 rounded-lg text-sm font-semibold bg-orange-600 hover:bg-orange-700 text-white shadow-sm whitespace-nowrap"
+            >
+              Start setup →
+            </Link>
+          </div>
+        </div>
+      )}
 
       {/* Header */}
       <div>
@@ -300,11 +410,11 @@ export default function Home() {
         </div>
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
           <div className="space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500">Installed</h3>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500">Available</h3>
             <div className="space-y-3">
               {installedMethods.map((method) => <MethodTile key={method.id} method={method} />)}
               {installedMethods.length === 0 && (
-                <div className="text-xs text-gray-500 rounded-lg border border-dashed border-gray-300 dark:border-gray-700 px-3 py-4">No installed methods match your search.</div>
+                <div className="text-xs text-gray-500 rounded-lg border border-dashed border-gray-300 dark:border-gray-700 px-3 py-4">No methods match your search.</div>
               )}
             </div>
           </div>
@@ -325,7 +435,7 @@ export default function Home() {
         <StatCard label="Personas" value={personas.length} sub="Manage personas →" href="/personas" />
         <StatCard label="Models" value={models.length} sub={`${activeModels.length} active →`} href="/models" />
         <StatCard label="Conversations" value={conversations.length} sub="View history →" href="/conversations" />
-        <StatCard label="Status" value="Healthy" sub="All systems operational" />
+        <StatCard label="Status" value={healthInfo.value} sub={healthInfo.sub} />
       </div>
 
       {/* GPU Status */}

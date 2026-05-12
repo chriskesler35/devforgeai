@@ -1,7 +1,6 @@
 type FeatureFlags = {
   uiGuidedMode: boolean
   methodLauncherV1: boolean
-  skillsMarketplaceAlpha: boolean
 }
 
 function envFlag(value: string | undefined, fallback: boolean): boolean {
@@ -17,6 +16,4 @@ export const featureFlags: FeatureFlags = {
   uiGuidedMode: envFlag(process.env.NEXT_PUBLIC_UI_GUIDED_MODE, true),
   // New method launcher recommendation UX.
   methodLauncherV1: envFlag(process.env.NEXT_PUBLIC_METHOD_LAUNCHER_V1, false),
-  // Skills/tools marketplace alpha.
-  skillsMarketplaceAlpha: envFlag(process.env.NEXT_PUBLIC_SKILLS_MARKETPLACE_ALPHA, false),
 }
