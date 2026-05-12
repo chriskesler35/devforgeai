@@ -2,6 +2,7 @@
 
 import { API_BASE, API_KEY, AUTH_HEADERS, getApiBase, probeAndCacheApiBase } from '@/lib/config'
 import { filterModelsByCatalogFeature } from '@/lib/modelCatalog'
+import { validateModelOverride, explainReason } from '@/lib/modelRuntimeReadiness'
 import VoiceMode, { VoiceModeToggle } from '@/components/VoiceMode'
 import MediaConverterModal from '@/components/MediaConverterModal'
 
@@ -2601,12 +2602,33 @@ export default function ChatPage() {
     const historyMsgs = [...messages, userMsg].map(m => ({ role: m.role, content: m.content }))
     let sentSuccessfully = false
 
+    // Validate stale model selection before submit. The dropdown's models[] is
+    // fetched once on chat init; if a model is deactivated server-side (or was
+    // a catalog-only fallback) between then and now, the backend will reject
+    // the submit with a UUID-laden error the user can't easily decode. Catch
+    // it here and fall back to persona default with a clear toast instead.
+    let effectiveOverride = selectedModelId
+    if (selectedModelId) {
+      const v = validateModelOverride(selectedModelId, models)
+      if (!v.valid) {
+        const label = v.model?.display_name || v.model?.model_id || selectedModelId
+        addToast({
+          type: 'info',
+          title: 'Model unavailable',
+          message: explainReason(v.reason, label),
+          autoClose: 4500,
+        })
+        effectiveOverride = ''
+        setSelectedModelId('')
+      }
+    }
+
     try {
       const body: any = {
         model: selectedPersonaId,
         messages: historyMsgs,
         stream: false,
-        ...(selectedModelId ? { model_override: selectedModelId } : {}),
+        ...(effectiveOverride ? { model_override: effectiveOverride } : {}),
       }
       if (activeConvId) body.conversation_id = activeConvId
 
