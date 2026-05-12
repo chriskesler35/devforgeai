@@ -11,7 +11,7 @@ import secrets
 import logging
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-from typing import Optional, List, Literal
+from typing import Optional, Literal
 from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 from app.middleware.auth import verify_api_key

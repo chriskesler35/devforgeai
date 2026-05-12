@@ -1,9 +1,8 @@
 """Integration tests for ModelMesh."""
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from httpx import AsyncClient
-import json
 
 
 # ============================================================
@@ -36,7 +35,6 @@ async def test_rate_limit_headers_in_response(client: AsyncClient):
 async def test_router_fails_over_on_primary_error():
     """Router should try fallback model when primary fails."""
     from app.services.router import Router
-    from app.models import Persona, Model, Provider
     from decimal import Decimal
     
     # Setup mocks
@@ -80,8 +78,7 @@ async def test_router_fails_over_on_primary_error():
 @pytest.mark.asyncio
 async def test_router_raises_when_all_models_fail():
     """Router should raise AllModelsFailedError when all models fail."""
-    from app.services.router import Router, AllModelsFailedError
-    from app.services.model_client import model_client
+    from app.services.router import AllModelsFailedError
     
     db = AsyncMock()
     memory = MagicMock()
@@ -132,7 +129,7 @@ async def test_cost_limit_blocks_expensive_requests():
 @pytest.mark.asyncio
 async def test_memory_degrades_gracefully_when_redis_unavailable():
     """Memory manager should degrade gracefully when Redis is down."""
-    from app.services.memory import MemoryManager, RedisUnavailableError
+    from app.services.memory import MemoryManager
     
     # Create memory manager with mock Redis
     mock_redis = AsyncMock()
@@ -204,7 +201,6 @@ async def test_chat_endpoint_validates_messages(client: AsyncClient):
 async def test_estimate_tokens_basic():
     """Model client should estimate tokens reasonably."""
     from app.services.model_client import model_client
-    from app.models import Model
     from decimal import Decimal
     
     model = MagicMock()
@@ -227,7 +223,6 @@ async def test_estimate_tokens_basic():
 async def test_estimate_cost_calculation():
     """Model client should calculate cost correctly."""
     from app.services.model_client import model_client
-    from app.models import Model
     from decimal import Decimal
     
     model = MagicMock()

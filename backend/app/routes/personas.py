@@ -111,7 +111,6 @@ async def get_persona(
     db: AsyncSession = Depends(get_db)
 ):
     """Get persona details."""
-    import uuid
     persona = None
     try:
         persona_uuid = _uuid.UUID(persona_id)
@@ -140,7 +139,6 @@ async def update_persona(
     db: AsyncSession = Depends(get_db)
 ):
     """Update a persona."""
-    import uuid
     persona_uuid = _parse_uuid(persona_id)
     persona = await db.get(Persona, persona_uuid)
     
@@ -170,7 +168,6 @@ async def delete_persona(
     db: AsyncSession = Depends(get_db)
 ):
     """Delete a persona."""
-    import uuid
     persona_uuid = _parse_uuid(persona_id)
     persona = await db.get(Persona, persona_uuid)
     

@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import AsyncGenerator, Optional
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import AsyncSessionLocal
 from app.models import Model, Provider

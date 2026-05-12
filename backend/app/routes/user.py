@@ -7,9 +7,9 @@ from sqlalchemy import select
 from app.database import get_db
 from app.models import UserProfile, MemoryFile, SystemModification
 from app.schemas.user_profile import (
-    UserProfileCreate, UserProfileUpdate, UserProfileResponse,
+    UserProfileUpdate, UserProfileResponse,
     MemoryFileCreate, MemoryFileUpdate, MemoryFileResponse, MemoryFileList,
-    ModificationResponse, ModificationList
+    ModificationList
 )
 from app.middleware.auth import verify_api_key
 import logging

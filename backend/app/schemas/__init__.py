@@ -6,7 +6,7 @@ from app.schemas.persona import PersonaCreate, PersonaUpdate, PersonaResponse, P
 from app.schemas.conversation import ConversationCreate, ConversationResponse, ConversationList, MessageResponse, MessageList
 from app.schemas.chat import ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStreamResponse
 from app.schemas.stats import CostSummary, UsageSummary, DailyCostEntry, DailyCostSummary, DailyCostResponse
-from app.schemas.stats import CostSummary, UsageSummary, ModelPerformanceSummary, CostForecast, BudgetUpdate
+from app.schemas.stats import ModelPerformanceSummary, CostForecast, BudgetUpdate
 from app.schemas.user_profile import (
     UserProfileCreate, UserProfileUpdate, UserProfileResponse,
     MemoryFileCreate, MemoryFileUpdate, MemoryFileResponse, MemoryFileList,

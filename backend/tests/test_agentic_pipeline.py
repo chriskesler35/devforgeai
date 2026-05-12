@@ -11,11 +11,10 @@ Run with:
 
 from __future__ import annotations
 
-import asyncio
 import pytest
 from typing import Any, Dict, List
 
-from app.schemas.agentic import AgenticRunState, AgenticGoal, AgenticPlan
+from app.schemas.agentic import AgenticRunState
 from app.services.agentic_goal import extract_goal
 from app.services.agentic_planner import build_plan, summary_for_prompt
 from app.services.agentic_verifier import verify_step, verify_plan_completion

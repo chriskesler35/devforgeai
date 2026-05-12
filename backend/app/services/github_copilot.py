@@ -190,7 +190,7 @@ async def exchange_for_copilot_token(github_token: str) -> Optional[str]:
                 # Parse expiry; tokens usually live ~30 min. Refresh 60 s early.
                 expires_at_str = data.get("expires_at") or ""
                 try:
-                    from datetime import datetime, timezone
+                    from datetime import datetime
                     expires_ts = datetime.fromisoformat(
                         expires_at_str.replace("Z", "+00:00")
                     ).timestamp() - 60.0

@@ -3,7 +3,6 @@
 import subprocess
 import logging
 import httpx
-from pathlib import Path
 from fastapi import APIRouter, Depends
 from app.middleware.auth import verify_api_key
 
@@ -159,7 +158,7 @@ async def check_model_fitness(model_id: str):
     elif already_loaded:
         verdict = "loaded"
         label = "✅ Already loaded"
-        detail = f"Model is currently in VRAM — ready to use"
+        detail = "Model is currently in VRAM — ready to use"
         ok = True
     elif vram_needed == 0:
         verdict = "fits"

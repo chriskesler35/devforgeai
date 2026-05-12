@@ -5,7 +5,7 @@ import base64
 import httpx
 from fastapi import APIRouter, HTTPException, Request, BackgroundTasks
 from pydantic import BaseModel
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 import logging
 import mimetypes
@@ -431,7 +431,7 @@ async def telegram_status():
                     "configured": True,
                     "bot_username": bot_info.get("result", {}).get("username"),
                     "authorized_chats": AUTHORIZED_CHAT_IDS,
-                    "webhook_url": f"/v1/telegram/webhook"
+                    "webhook_url": "/v1/telegram/webhook"
                 }
     except Exception as e:
         logger.error(f"Failed to get bot info: {e}")
@@ -687,7 +687,7 @@ async def handle_run_command(chat_id: int, args: str):
                 f"✅ Session started\n\nID: `{session['session_id'][:8]}`\nAgent: {agent_type}\nTask: {task[:50]}..."
             )
         else:
-            await send_telegram_message(chat_id, f"⚠️ Failed to start session")
+            await send_telegram_message(chat_id, "⚠️ Failed to start session")
     except Exception as e:
         await send_telegram_message(chat_id, f"⚠️ Error: {e}")
 
@@ -847,7 +847,7 @@ async def handle_cancel_command(chat_id: int, args: str):
         if response.status_code == 200:
             await send_telegram_message(chat_id, f"✅ Session `{session_id}` cancelled")
         else:
-            await send_telegram_message(chat_id, f"⚠️ Session not found or already completed")
+            await send_telegram_message(chat_id, "⚠️ Session not found or already completed")
     except Exception as e:
         await send_telegram_message(chat_id, f"⚠️ Error: {e}")
 

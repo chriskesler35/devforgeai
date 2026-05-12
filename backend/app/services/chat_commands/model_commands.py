@@ -124,7 +124,7 @@ async def _add_model(
             entity_id=existing.id,
             before_value={"is_active": False},
             after_value={"is_active": True},
-            reason=f"Reactivated via chat command",
+            reason="Reactivated via chat command",
             conversation_id=conversation_id,
         )
         return f"Model **{name}** was previously deactivated and has been reactivated."
@@ -182,7 +182,7 @@ async def _add_model(
             "provider": provider.display_name or provider.name,
             "provider_id": str(provider.id),
         },
-        reason=f"Added via chat command",
+        reason="Added via chat command",
         conversation_id=conversation_id,
     )
 
@@ -231,7 +231,7 @@ async def _delete_model(
         entity_id=model.id,
         before_value=before,
         after_value={"is_active": False},
-        reason=f"Deactivated via chat command",
+        reason="Deactivated via chat command",
         conversation_id=conversation_id,
     )
 

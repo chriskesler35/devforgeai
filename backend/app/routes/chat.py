@@ -10,9 +10,9 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy import and_, cast, func, or_, select, String
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.dependencies import get_memory
@@ -1954,7 +1954,7 @@ async def _save_messages(db, conversation_id: str, user_content: str, assistant_
                     notif = Notification(
                         user_id=target_id,
                         type="mention",
-                        title=f"You were mentioned in a conversation",
+                        title="You were mentioned in a conversation",
                         message=preview,
                         conversation_id=conv_str,
                         message_id=str(user_msg.id),

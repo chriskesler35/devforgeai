@@ -180,7 +180,7 @@ async def lifespan(app: FastAPI):
     try:
         from app.database import AsyncSessionLocal as _ASL
         from datetime import datetime, timezone, timedelta
-        from sqlalchemy import select, delete
+        from sqlalchemy import select
         from app.models import Conversation
         async with _ASL() as _db:
             cutoff = datetime.now(timezone.utc) - timedelta(days=30)

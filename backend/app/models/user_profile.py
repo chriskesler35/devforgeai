@@ -4,8 +4,6 @@ from sqlalchemy import Column, String, Text, Boolean, JSON, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
 from app.models.base import BaseMixin
-from datetime import datetime
-import uuid
 
 
 class UserProfile(Base, BaseMixin):

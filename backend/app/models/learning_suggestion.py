@@ -1,7 +1,6 @@
 """Learning suggestion model for routing auto-tuning."""
 
 import uuid as _uuid
-from datetime import datetime
 from sqlalchemy import Column, String, Float, Text, DateTime
 from sqlalchemy.types import TypeDecorator, CHAR
 from app.database import Base

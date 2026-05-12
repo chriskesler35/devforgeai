@@ -155,7 +155,7 @@ async def ensure_git_repo(cwd: Path, github_token: Optional[str] = None) -> list
                     },
                     json={
                         "name": repo_name,
-                        "description": f"Created by DevForgeAI",
+                        "description": "Created by DevForgeAI",
                         "private": False,
                         "auto_init": False,
                     },

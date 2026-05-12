@@ -1,6 +1,5 @@
 """Self-healing system for automatic recovery and rollback."""
 
-import os
 import json
 import subprocess
 import logging
@@ -60,7 +59,7 @@ class SelfHealingSystem:
                 else:
                     await _redis_client.ping()
                     health["checks"]["redis"] = "healthy"
-        except Exception as e:
+        except Exception:
             # Redis is optional — never mark system as degraded because of it
             health["checks"]["redis"] = "not configured (optional)"
         

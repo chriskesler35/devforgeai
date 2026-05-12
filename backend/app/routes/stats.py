@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from app.database import get_db
 from app.schemas import CostSummary, UsageSummary, DailyCostEntry, DailyCostSummary, DailyCostResponse
-from app.schemas import CostSummary, UsageSummary, ModelPerformanceSummary
+from app.schemas import ModelPerformanceSummary
 from app.schemas.stats import ModelPerformanceMetrics, ModelPerformanceHighlights
 from app.schemas.stats import CostForecast, BudgetUpdate
 from app.middleware.auth import verify_api_key

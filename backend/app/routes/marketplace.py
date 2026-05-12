@@ -283,9 +283,9 @@ async def get_install_progress(skill_id: str, job_id: str):
 
     step_messages = {
         "0": f"✓ Resolved {skill_id} from catalog",
-        "1": f"✓ Validated package integrity",
-        "2": f"✓ Registered skill files",
-        "3": f"✓ Health check passed",
+        "1": "✓ Validated package integrity",
+        "2": "✓ Registered skill files",
+        "3": "✓ Health check passed",
         "4": f"✓ {skill_id} installed successfully",
     }
 

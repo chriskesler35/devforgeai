@@ -1,9 +1,8 @@
 """Background task model."""
 
 import uuid as _uuid
-from sqlalchemy import Column, String, Text, Integer, JSON, DateTime
+from sqlalchemy import Column, String, Text, Integer, JSON
 from sqlalchemy.types import TypeDecorator, CHAR
-from sqlalchemy.sql import func
 from app.database import Base
 from app.models.base import BaseMixin
 

@@ -4,12 +4,11 @@ import uuid
 import json
 import asyncio
 import logging
-import os
 import re
 import subprocess
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Dict, Any, AsyncGenerator, Literal
+from typing import Optional, Dict, AsyncGenerator, Literal
 from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -2038,7 +2037,7 @@ async def approve_command(session_id: str, command_id: str):
     """Approve a pending command and execute it."""
     from app.models.command_execution import CommandExecution
     from app.models.workbench import WorkbenchSession
-    from app.services.command_executor import execute_and_record, format_command_for_context
+    from app.services.command_executor import execute_and_record
 
     async with AsyncSessionLocal() as db:
         cmd_rec = (await db.execute(select(CommandExecution).where(CommandExecution.id == command_id))).scalar_one_or_none()

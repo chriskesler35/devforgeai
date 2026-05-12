@@ -1,6 +1,5 @@
 """Authentication middleware — accepts master API key OR per-user JWT tokens."""
 
-import os
 from fastapi import HTTPException, Security, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.config import settings

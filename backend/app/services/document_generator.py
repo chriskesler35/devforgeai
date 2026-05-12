@@ -29,7 +29,7 @@ import io
 import json as _json
 import re
 from html import escape as _html_escape
-from typing import Any, Tuple
+from typing import Tuple
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -298,7 +298,6 @@ def _build_docx(spec: dict) -> bytes:
 
 def _build_pptx(spec: dict) -> bytes:
     from pptx import Presentation  # type: ignore
-    from pptx.util import Inches, Pt  # type: ignore
 
     prs = Presentation()
 

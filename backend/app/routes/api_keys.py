@@ -504,7 +504,7 @@ async def get_clear_impact(provider: str):
     if provider in CONFIG_ONLY_KEYS:
         raise HTTPException(status_code=400, detail=f"{provider} is a runtime configuration key and cannot be provider-cleared")
 
-    from sqlalchemy import select, or_
+    from sqlalchemy import select
     from app.database import AsyncSessionLocal
     from app.models.model import Model as ModelORM
     from app.models.provider import Provider as ProviderORM

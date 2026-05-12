@@ -4,7 +4,6 @@ from sqlalchemy import Column, String, Boolean, Integer, Text, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
 from app.models.base import BaseMixin
-import uuid
 
 
 class Agent(Base, BaseMixin):

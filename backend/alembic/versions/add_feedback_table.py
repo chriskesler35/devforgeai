@@ -4,7 +4,6 @@ Revision ID: 003_feedback
 Revises: add_user_profile
 Create Date: 2026-04-08
 """
-from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 

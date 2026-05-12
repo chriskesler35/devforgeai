@@ -4,7 +4,6 @@ Revision ID: 004_conversation_shares
 Revises: 003_feedback
 Create Date: 2026-04-09
 """
-from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 

@@ -5,7 +5,6 @@ import os
 import logging
 import time
 from typing import Optional
-from urllib.parse import urlparse
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 import litellm

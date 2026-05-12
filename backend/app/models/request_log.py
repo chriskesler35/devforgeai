@@ -1,7 +1,7 @@
 """Request log model for analytics."""
 
 import uuid as _uuid
-from sqlalchemy import Column, String, Boolean, Integer, ForeignKey, Text, Numeric
+from sqlalchemy import Column, Boolean, Integer, ForeignKey, Text, Numeric
 from sqlalchemy.types import TypeDecorator, CHAR
 from app.database import Base
 from app.models.base import BaseMixin

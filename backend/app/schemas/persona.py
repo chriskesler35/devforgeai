@@ -1,6 +1,6 @@
 """Persona schemas."""
 
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Union
 from pydantic import BaseModel, UUID4, field_validator
 from datetime import datetime
 import uuid

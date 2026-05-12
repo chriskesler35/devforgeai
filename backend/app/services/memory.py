@@ -3,7 +3,6 @@
 import json
 import uuid
 import logging
-from typing import Optional
 import redis.asyncio as redis
 from app.config import settings
 

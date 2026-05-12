@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Awaitable, Callable, Optional, Literal
 
 import httpx
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Provider

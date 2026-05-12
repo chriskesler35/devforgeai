@@ -127,10 +127,8 @@ async def health_check():
     """Get system health status for remote monitoring."""
     from app.database import AsyncSessionLocal
     from app.models import Model, Persona
-    from app.models.agent import Agent
     from app.routes.agents import DEFAULT_AGENTS
     from sqlalchemy import select
-    from sqlalchemy.ext.asyncio import AsyncSession
     
     # Get counts
     async with AsyncSessionLocal() as db:
@@ -333,7 +331,7 @@ async def get_tailscale_info():
         "frontend_url": f"http://{tailscale_ip or hostname}:3001",
         "instructions": {
             "tailscale": f"Connect via Tailscale: http://{tailscale_ip or '100.106.217.99'}:3001",
-            "local": f"Local access: http://localhost:3001"
+            "local": "Local access: http://localhost:3001"
         }
     }
 

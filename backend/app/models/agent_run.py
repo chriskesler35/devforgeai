@@ -1,6 +1,6 @@
 """AgentRun model — stores history of agent executions."""
 
-from sqlalchemy import Column, String, Text, Integer, JSON, DateTime, ForeignKey
+from sqlalchemy import Column, String, Text, Integer, JSON, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
 from app.models.base import BaseMixin

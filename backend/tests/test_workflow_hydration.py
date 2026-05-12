@@ -1,7 +1,6 @@
 """Tests for workflow template variable replacement."""
 
 import json
-import random
 import sys
 from pathlib import Path
 

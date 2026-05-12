@@ -3,7 +3,6 @@
 import uuid
 import logging
 from datetime import datetime
-from collections import defaultdict
 from sqlalchemy import select, func, case, extract, text, String
 from sqlalchemy.ext.asyncio import AsyncSession
 

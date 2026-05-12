@@ -6,7 +6,6 @@ interacts with the user. Ensures consistent identity across all interactions.
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 

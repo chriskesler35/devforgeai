@@ -9,7 +9,6 @@ import json
 import uuid
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 

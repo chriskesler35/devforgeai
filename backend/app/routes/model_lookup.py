@@ -1,7 +1,7 @@
 """Model lookup endpoints for fetching model info from providers."""
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import logging

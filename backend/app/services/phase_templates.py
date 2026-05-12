@@ -892,37 +892,6 @@ def list_supported_methods() -> List[str]:
     return list(METHOD_PHASE_TEMPLATES.keys())
 
 
-def validate_phase_dag(phases: List[Dict[str, Any]]) -> bool:
-    """Validate that phases form a valid DAG (no circular dependencies).
-
-    Returns True if valid, raises ValueError if circular dependency detected.
-    Also validates that all referenced dependencies actually exist as phase names.
-    """
-    from graphlib import TopologicalSorter
-
-    phase_names = {p["name"] for p in phases}
-
-    # Check that all depends_on references point to real phase names
-    for phase in phases:
-        for dep in phase.get("depends_on", []):
-            if dep not in phase_names:
-                raise ValueError(
-                    f"Phase '{phase['name']}' depends on '{dep}', "
-                    f"which is not a known phase. Available: {sorted(phase_names)}"
-                )
-
-    graph: Dict[str, set] = {}
-    for phase in phases:
-        graph[phase["name"]] = set(phase.get("depends_on", []))
-
-    try:
-        ts = TopologicalSorter(graph)
-        list(ts.static_order())
-        return True
-    except Exception as e:
-        raise ValueError(f"Circular dependency detected: {e}")
-
-
 def get_ready_phases(
     phases: List[Dict[str, Any]], completed: set[str]
 ) -> List[Dict[str, Any]]:
@@ -1014,21 +983,6 @@ def format_condition_reason(condition: Dict[str, Any]) -> str:
     value = condition.get("value", "")
     return f"Condition not met: {field} {operator} {value!r}"
 
-
-def _resolve_field(data: Any, field_path: str) -> Any:
-    """Resolve a dot-notation field path in a dict.
-
-    Returns ``None`` if the path cannot be resolved.
-    """
-    if not field_path:
-        return data if isinstance(data, dict) else None
-    if not isinstance(data, dict):
-        return None
-    parts = field_path.split(".")
-    current: Any = data
-    for part in parts:
-        if isinstance(current, dict) and part in current:
-            current = current[part]
 
 # ─── Condition / branch evaluation helpers ───────────────────────────────────
 

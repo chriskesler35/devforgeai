@@ -4,11 +4,11 @@ import uuid
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import select
 from pydantic import BaseModel
 from app.database import get_db, AsyncSessionLocal
 from app.models import Task
@@ -44,7 +44,6 @@ class TaskResponse(BaseModel):
     @classmethod
     def from_orm(cls, obj):
         import uuid as _uuid
-        from datetime import datetime
         d = {}
         for f in cls.model_fields:
             val = getattr(obj, f, None)
@@ -85,7 +84,7 @@ async def _run_image_gen(task_id: str, params: dict):
             # Import image gen functions
             from app.routes.images import (
                 ensure_comfyui, generate_with_comfyui, _resolve_comfyui_endpoint,
-                generate_with_gemini_imagen, IMAGE_STORAGE, _get_comfyui_poll_timeout_seconds
+                generate_with_gemini_imagen, _get_comfyui_poll_timeout_seconds
             )
             from app.services.app_settings_helper import get_setting as _get_setting
 

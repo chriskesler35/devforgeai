@@ -13,9 +13,7 @@ import shlex
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 from app.database import get_db
-from app.models import Model
 from app.middleware.auth import verify_api_key
 from app.config import settings
 from app.services.app_settings_helper import get_setting
@@ -972,7 +970,7 @@ def _convert_txt2img_to_img2img(workflow: dict, uploaded_image_name: str, denois
                 inputs = node.setdefault("inputs", {})
                 if "denoise" in inputs:
                     inputs["denoise"] = denoise
-        logger.info(f"Workflow has LoadImage — using as-is with uploaded image")
+        logger.info("Workflow has LoadImage — using as-is with uploaded image")
         return workflow
 
     # Case 2: txt2img workflow — find EmptyLatentImage to replace

@@ -14,7 +14,6 @@ commands file.
 from __future__ import annotations
 
 import re
-import shlex
 from enum import Enum
 from pathlib import Path
 from typing import Optional

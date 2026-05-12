@@ -158,7 +158,7 @@ async def _update_persona(
     if description:
         persona.description = description
         persona.system_prompt = description
-        changes.append(f"system prompt updated")
+        changes.append("system prompt updated")
 
     if not changes:
         return f"Nothing to update. Specify a model or description. Example: 'update persona {name} to use claude-sonnet'"
@@ -253,8 +253,8 @@ async def _show_persona(
 
     lines = [
         f"**Persona: {persona.name}**\n",
-        f"| Field | Value |",
-        f"|-------|-------|",
+        "| Field | Value |",
+        "|-------|-------|",
         f"| Description | {persona.description or '—'} |",
         f"| System Prompt | {(persona.system_prompt or '—')[:100]}{'…' if persona.system_prompt and len(persona.system_prompt) > 100 else ''} |",
         f"| Primary Model | {(primary.display_name or primary.model_id) if primary else '—'} |",

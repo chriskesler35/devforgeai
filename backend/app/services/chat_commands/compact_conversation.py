@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete

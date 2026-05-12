@@ -4,7 +4,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import AsyncSessionLocal
 from app.redis import get_redis
 from app.services.memory import MemoryManager
-import redis.asyncio as redis
 
 
 async def get_db() -> AsyncSession:

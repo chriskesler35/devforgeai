@@ -55,7 +55,6 @@ async def test_get_persona_by_name(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_update_persona(client: AsyncClient):
     """Test updating a persona."""
-    import uuid
     
     # Create persona
     create_response = await client.post(
@@ -80,7 +79,6 @@ async def test_update_persona(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_delete_persona(client: AsyncClient):
     """Test deleting a persona."""
-    import uuid
     
     # Create persona
     create_response = await client.post(

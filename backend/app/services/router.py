@@ -1,6 +1,5 @@
 """Router service for routing requests to appropriate models."""
 
-import time
 from typing import Optional, AsyncGenerator, Union
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -65,7 +64,7 @@ class AllModelsFailedError(ModelMeshError):
             detail = " | ".join(non_empty) if non_empty else repr(errors)
             message = f"Model call failed: {detail}"
         else:
-            message = f"All models in failover chain failed (no error detail)"
+            message = "All models in failover chain failed (no error detail)"
         super().__init__(
             message,
             "all_models_failed",

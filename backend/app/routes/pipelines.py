@@ -1886,7 +1886,7 @@ async def _retry_upstream_with_feedback(
     Returns True if retry was initiated, False if max_retries exhausted
     (pipeline pauses for manual approval in that case).
     """
-    from app.models.pipeline import Pipeline, PhaseRun
+    from app.models.pipeline import Pipeline
 
     # Check if retries exhausted
     if retry_count >= max_retries:
@@ -2013,7 +2013,7 @@ async def create_pipeline(body: PipelineCreate, request: Request, db: AsyncSessi
     """Create and start a multi-agent pipeline attached to a workbench session."""
     from app.models.pipeline import Pipeline
     from app.models.workbench import WorkbenchSession
-    from app.services.phase_templates import get_phases_for_method, list_supported_methods, validate_phase_dag, get_method_phases_with_custom
+    from app.services.phase_templates import list_supported_methods, validate_phase_dag, get_method_phases_with_custom
 
     # Resolve method — if "stack" or "active", use the currently-active method
     # stack from the Methods page. The primary (first) method in the stack
@@ -3109,7 +3109,7 @@ async def save_pipeline_as_template(
 
     new_method = CustomMethod(
         name=body.name,
-        description=body.description or f"Template created from pipeline run",
+        description=body.description or "Template created from pipeline run",
         phases=template_phases,
         is_active=True,
     )

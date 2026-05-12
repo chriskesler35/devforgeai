@@ -1,7 +1,7 @@
 """Agent memory model for persisting run context across agent executions."""
 
 import uuid as _uuid
-from sqlalchemy import Column, String, Text, DateTime, Index
+from sqlalchemy import Column, Text, DateTime, Index
 from sqlalchemy.types import CHAR
 from sqlalchemy.sql import func
 from app.database import Base

@@ -14,7 +14,6 @@ Snapshot layout:
       session_{conv_id_short}_{HH-MM}.md   ← per-exchange snapshot
 """
 
-import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -89,19 +88,19 @@ def write_snapshot(
 
     # Build human-readable snapshot
     lines = [
-        f"# Session Snapshot",
-        f"",
-        f"| Field | Value |",
-        f"|-------|-------|",
+        "# Session Snapshot",
+        "",
+        "| Field | Value |",
+        "|-------|-------|",
         f"| Conversation ID | `{conversation_id}` |",
         f"| Title | {title or 'Untitled'} |",
         f"| Persona | {persona_name or '—'} |",
         f"| Model | {model_name or '—'} |",
         f"| Snapshot time | {now.strftime('%Y-%m-%d %H:%M:%S UTC')} |",
         f"| Message count | {len(messages)} |",
-        f"",
-        f"## Conversation",
-        f"",
+        "",
+        "## Conversation",
+        "",
     ]
 
     for msg in messages:
@@ -109,23 +108,23 @@ def write_snapshot(
         content = msg.get("content", "")
         icon = "🧑" if role == "user" else "🤖"
         lines.append(f"### {icon} {role.title()}")
-        lines.append(f"")
+        lines.append("")
         lines.append(content)
-        lines.append(f"")
+        lines.append("")
 
     # Extract last exchange for quick-glance summary at top
     last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
     last_asst = next((m["content"] for m in reversed(messages) if m.get("role") == "assistant"), "")
 
     summary = [
-        f"## Last Exchange",
-        f"",
+        "## Last Exchange",
+        "",
         f"**User:** {last_user[:300]}{'...' if len(last_user) > 300 else ''}",
-        f"",
+        "",
         f"**Assistant:** {last_asst[:300]}{'...' if len(last_asst) > 300 else ''}",
-        f"",
-        f"---",
-        f"",
+        "",
+        "---",
+        "",
     ]
 
     content_str = "\n".join(summary + lines)
@@ -235,8 +234,6 @@ async def maybe_distill_memory(
         return False
 
     try:
-        from app.config import settings
-        import httpx
 
         # Build a concise recent-exchange context (last 10 messages)
         recent = messages[-10:]

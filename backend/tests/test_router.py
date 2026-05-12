@@ -2,8 +2,7 @@
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from app.services.router import Router, NoModelAvailableError, CostLimitExceededError
-from app.models import Persona, Model, Provider
+from app.services.router import Router, NoModelAvailableError
 
 
 @pytest.mark.asyncio

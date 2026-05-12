@@ -4,7 +4,6 @@ import uuid as _uuid
 from sqlalchemy import Column, String, ForeignKey, Text, Integer, Numeric, JSON, Boolean, DateTime
 from sqlalchemy.types import TypeDecorator, CHAR
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
 from app.database import Base
 from app.models.base import BaseMixin
 

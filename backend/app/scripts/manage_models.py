@@ -16,12 +16,11 @@ import logging
 if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
-from typing import Optional
 from sqlalchemy import select, delete
 from app.database import AsyncSessionLocal
 from app.models.model import Model
 from app.models.provider import Provider
-from app.routes.model_sync import run_model_sync, discover_provider_models
+from app.routes.model_sync import run_model_sync
 
 logging.basicConfig(
     level=logging.INFO,
@@ -106,7 +105,7 @@ async def cleanup_and_resync():
             print("Cleanup cancelled.")
             return
         
-        logger.warning(f"=== DESTRUCTIVE MODEL CLEANUP STARTING ===")
+        logger.warning("=== DESTRUCTIVE MODEL CLEANUP STARTING ===")
         print("\n[1/3] Deleting all models...")
         
         # Delete all models
@@ -128,7 +127,7 @@ async def cleanup_and_resync():
             sync_result = await run_model_sync(session, deduplicate_existing=False)
             await session.commit()
             
-            print(f"\n" + "="*100)
+            print("\n" + "="*100)
             print("✓ CLEANUP AND RESYNC COMPLETE")
             print("="*100)
             print(f"Deleted:     {deleted_count} old models")
@@ -137,7 +136,7 @@ async def cleanup_and_resync():
             print(f"Paid APIs:   {sync_result['paid_models']} models")
             
             if sync_result['provider_details']:
-                print(f"\nPer-Provider Summary:")
+                print("\nPer-Provider Summary:")
                 for prov, details in sync_result['provider_details'].items():
                     if details.get('configured'):
                         status = "✓ ACTIVE" if details.get('configured') else "✗ INACTIVE"
@@ -169,17 +168,17 @@ async def run_sync_only():
         sync_result = await run_model_sync(session, deduplicate_existing=True)
         await session.commit()
         
-        print(f"\n" + "="*100)
+        print("\n" + "="*100)
         print("✓ MODEL SYNC COMPLETE")
         print("="*100)
         print(f"Added:       {len(sync_result['added'])} new models")
         print(f"Skipped:     {sync_result['skipped_existing']} already existing")
         print(f"Ollama:      {sync_result['ollama_models']} models")
         print(f"Paid APIs:   {sync_result['paid_models']} models")
-        print(f"Deactivated: (models no longer in provider catalogs)")
+        print("Deactivated: (models no longer in provider catalogs)")
         
         if sync_result['provider_details']:
-            print(f"\nPer-Provider Summary:")
+            print("\nPer-Provider Summary:")
             for prov, details in sync_result['provider_details'].items():
                 if details.get('configured'):
                     status = "✓ ACTIVE" if details.get('configured') else "✗ INACTIVE"

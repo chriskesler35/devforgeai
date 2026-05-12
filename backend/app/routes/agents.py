@@ -2,11 +2,9 @@
 
 import json
 import uuid
-import time
-import json
 import logging
 from datetime import datetime
-from typing import Optional, List, Dict, Any, AsyncGenerator
+from typing import Optional, List, Dict
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -14,15 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 
-from app.database import get_db, AsyncSessionLocal
+from app.database import get_db
 from app.models.agent import Agent, DEFAULT_AGENTS
 from app.models.agent_run import AgentRun
 from app.models import Persona
 from app.middleware.auth import verify_api_key
 from app.middleware.rbac import require_role
-from pydantic import BaseModel
-from typing import Dict, Optional, List
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -213,7 +208,6 @@ async def _resolve_agent_model(agent: Agent, db: AsyncSession) -> dict:
 def _agent_to_dict(agent: Agent) -> dict:
     """Convert agent ORM object to plain dict."""
     import uuid as _uuid
-    from datetime import datetime
     d = {}
     for f in ['id', 'name', 'agent_type', 'description', 'system_prompt',
               'model_id', 'persona_id', 'method_phase', 'tools', 'memory_enabled',
@@ -292,13 +286,6 @@ class AgentResponse(BaseModel):
 class AgentListResponse(BaseModel):
     data: List[AgentResponse]
     total: int
-
-
-class AgentRunRequest(BaseModel):
-    task: str
-    context: Optional[dict] = None
-    stream: Optional[bool] = False
-    model_id: Optional[str] = None  # override model for this run
 
 
 class AgentRunResponse(BaseModel):

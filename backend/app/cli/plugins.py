@@ -9,12 +9,10 @@ from pathlib import Path
 # Add parent dir to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.database import get_db_url
-from sqlalchemy import create_engine
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import sessionmaker
-from app.models import Base, Provider, Model
-from app.services.provider_credentials import set_provider_api_key, get_provider_api_key
+from app.models import Provider, Model
+from app.services.provider_credentials import set_provider_api_key
 from app.routes.model_sync import PROVIDER_DEFAULT_MODELS, sync_provider_models
 from app.services.model_verification import ModelVerificationService
 from app.services.provider_health import ProviderHealthService
@@ -63,7 +61,7 @@ def install(provider: str, api_key: Optional[str], no_verify: bool):
         click.echo(f"✓ Storing API key for {provider}")
         set_provider_api_key(provider, api_key)
     else:
-        click.echo(f"⚠ No API key provided. Local models may still work.")
+        click.echo("⚠ No API key provided. Local models may still work.")
     
     # Sync models
     click.echo(f"\n📥 Syncing models from {provider}...")
@@ -223,7 +221,7 @@ def configure(provider: str, api_key: Optional[str]):
         try:
             health = asyncio.run(_check_provider_health_async(provider))
             if health.credential_status == "valid":
-                click.echo(f"✓ Credential is valid")
+                click.echo("✓ Credential is valid")
             else:
                 click.echo(f"⚠ Credential may be invalid: {health.credential_error_message}")
         except Exception as e:
