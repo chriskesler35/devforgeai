@@ -12,13 +12,13 @@ logger = logging.getLogger(__name__)
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
-    
+
     # Database - use SQLite file for local dev, Postgres for production
     database_url: str = ""
-    
+
     # Redis - optional for local dev
     redis_url: Optional[str] = None
-    
+
     # API Keys (from environment, never stored in DB)
     anthropic_api_key: Optional[str] = None
     google_api_key: Optional[str] = None
@@ -35,14 +35,14 @@ class Settings(BaseSettings):
     google_oauth_client_id: Optional[str] = None
     google_oauth_client_secret: Optional[str] = None
     google_oauth_redirect_url: str = "http://localhost:3001/auth/google/callback"
-    
+
     # Telegram bot
     telegram_bot_token: Optional[str] = None
     telegram_chat_ids: Optional[str] = None  # comma-separated list of authorized chat IDs
 
     # ComfyUI for image generation
     comfyui_url: str = "http://localhost:8188"
-    
+
     # Application
     app_env: str = "development"
     modelmesh_api_key: str = "modelmesh_local_dev_key"
@@ -59,7 +59,7 @@ class Settings(BaseSettings):
 
     # OAuth token encryption (optional override; falls back to JWT secret)
     oauth_token_encryption_key: Optional[str] = None
-    
+
     # Memory
     memory_ttl_seconds: int = 86400  # 24 hours
     default_max_memory_messages: int = 10
@@ -72,12 +72,12 @@ class Settings(BaseSettings):
     ui_guided_mode: bool = True
     method_launcher_v1: bool = False
     skills_marketplace_alpha: bool = False
-    
+
     class Config:
         env_file = [".env", "../.env"]
         env_file_encoding = "utf-8"
         extra = "ignore"
-    
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # Set default database URL if not provided

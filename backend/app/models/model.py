@@ -10,7 +10,7 @@ from app.models.base import BaseMixin
 class Model(Base, BaseMixin):
     """AI model configuration."""
     __tablename__ = "models"
-    
+
     provider_id = Column(UUID(as_uuid=True), ForeignKey("providers.id", ondelete="CASCADE"), nullable=False)
     model_id = Column(String(200), nullable=False)  # External model ID
     display_name = Column(String(200))
@@ -26,14 +26,14 @@ class Model(Base, BaseMixin):
     validation_error = Column(String(500), nullable=True)
     is_pinned_default = Column(Boolean, default=False)
     fallback_priority = Column(Integer, nullable=True, default=999)
-    
+
     # Relationships
     provider = relationship("Provider", backref="models")
-    
+
     __table_args__ = (
         UniqueConstraint("provider_id", "model_id", name="uq_models_provider_model_id"),
         CheckConstraint("context_window > 0 OR context_window IS NULL", name="check_context_window_positive"),
     )
-    
+
     def __repr__(self):
         return f"<Model {self.model_id}>"

@@ -1,7 +1,7 @@
 """Add model verification and provider health tables.
 
 Revision ID: add_verification_tables
-Revises: 
+Revises:
 Create Date: 2026-05-10
 
 """
@@ -91,11 +91,11 @@ def downgrade():
     op.drop_index('idx_models_fallback_priority', table_name='models')
     op.drop_column('models', 'fallback_priority')
     op.drop_column('models', 'is_pinned_default')
-    
+
     op.drop_index('idx_provider_health_last_checked', table_name='provider_health')
     op.drop_index('idx_provider_health_status', table_name='provider_health')
     op.drop_table('provider_health')
-    
+
     op.drop_index('idx_model_verifications_verified_at', table_name='model_verifications')
     op.drop_index('idx_model_verifications_status', table_name='model_verifications')
     op.drop_table('model_verifications')

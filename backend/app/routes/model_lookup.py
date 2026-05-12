@@ -34,7 +34,7 @@ MODEL_PRICING = {
     "gpt-4-turbo": {"input": 10.00, "output": 30.00, "context": 128000, "capabilities": {"chat": True, "vision": True, "streaming": True}},
     "gpt-4": {"input": 30.00, "output": 60.00, "context": 8192, "capabilities": {"chat": True, "streaming": True}},
     "gpt-3.5-turbo": {"input": 0.50, "output": 1.50, "context": 16385, "capabilities": {"chat": True, "streaming": True}},
-    
+
     # Anthropic models
     "claude-sonnet-4-6": {"input": 3.00, "output": 15.00, "context": 200000, "capabilities": {"chat": True, "vision": True, "streaming": True}},
     "claude-sonnet-4": {"input": 3.00, "output": 15.00, "context": 200000, "capabilities": {"chat": True, "vision": True, "streaming": True}},
@@ -45,7 +45,7 @@ MODEL_PRICING = {
     "claude-3-opus": {"input": 15.00, "output": 75.00, "context": 200000, "capabilities": {"chat": True, "vision": True, "streaming": True}},
     "claude-3-sonnet": {"input": 3.00, "output": 15.00, "context": 200000, "capabilities": {"chat": True, "vision": True, "streaming": True}},
     "claude-3-haiku": {"input": 0.25, "output": 1.25, "context": 200000, "capabilities": {"chat": True, "vision": True, "streaming": True}},
-    
+
     # Google models
     "gemini-2.5-pro": {"input": 1.25, "output": 5.00, "context": 1000000, "capabilities": {"chat": True, "vision": True, "streaming": True}},
     "gemini-2.0-flash": {"input": 0.10, "output": 0.40, "context": 1000000, "capabilities": {"chat": True, "vision": True, "streaming": True}},
@@ -53,20 +53,20 @@ MODEL_PRICING = {
     "gemini-1.5-flash": {"input": 0.075, "output": 0.30, "context": 1000000, "capabilities": {"chat": True, "vision": True, "streaming": True}},
     "gemini-1.0-pro": {"input": 0.50, "output": 1.50, "context": 32760, "capabilities": {"chat": True, "streaming": True}},
     "gemini-3.1-pro-preview": {"input": 1.25, "output": 5.00, "context": 2000000, "capabilities": {"chat": True, "vision": True, "streaming": True}},
-    
+
     # OpenRouter models (prefixed)
     "openai/gpt-4o": {"input": 2.50, "output": 10.00, "context": 128000, "capabilities": {"chat": True, "vision": True, "streaming": True}},
     "openai/gpt-4-turbo": {"input": 10.00, "output": 30.00, "context": 128000, "capabilities": {"chat": True, "vision": True, "streaming": True}},
     "anthropic/claude-sonnet-4": {"input": 3.00, "output": 15.00, "context": 200000, "capabilities": {"chat": True, "vision": True, "streaming": True}},
     "anthropic/claude-opus-4": {"input": 15.00, "output": 75.00, "context": 200000, "capabilities": {"chat": True, "vision": True, "streaming": True}},
     "google/gemini-2.5-pro": {"input": 1.25, "output": 5.00, "context": 1000000, "capabilities": {"chat": True, "vision": True, "streaming": True}},
-    
+
     # Meta Llama models
     "llama3.1:8b": {"input": 0, "output": 0, "context": 128000, "capabilities": {"chat": True, "streaming": True}, "display_name": "Llama 3.1 8B"},
     "llama3.1:70b": {"input": 0, "output": 0, "context": 128000, "capabilities": {"chat": True, "streaming": True}, "display_name": "Llama 3.1 70B"},
     "llama3.2:3b": {"input": 0, "output": 0, "context": 128000, "capabilities": {"chat": True, "streaming": True}, "display_name": "Llama 3.2 3B"},
     "llama3.2:1b": {"input": 0, "output": 0, "context": 128000, "capabilities": {"chat": True, "streaming": True}, "display_name": "Llama 3.2 1B"},
-    
+
     # Other common models
     "glm-5:cloud": {"input": 0, "output": 0, "context": 128000, "capabilities": {"chat": True, "streaming": True}, "display_name": "GLM-5 Cloud"},
     "qwen2.5-coder:14b": {"input": 0, "output": 0, "context": 32768, "capabilities": {"chat": True, "streaming": True, "code": True}, "display_name": "Qwen 2.5 Coder 14B"},
@@ -75,7 +75,7 @@ MODEL_PRICING = {
     "mistral-large": {"input": 2.00, "output": 6.00, "context": 128000, "capabilities": {"chat": True, "streaming": True}},
     "deepseek-chat": {"input": 0.14, "output": 0.28, "context": 64000, "capabilities": {"chat": True, "streaming": True}},
     "deepseek-coder": {"input": 0.14, "output": 0.28, "context": 64000, "capabilities": {"chat": True, "streaming": True, "code": True}},
-    
+
     # Image models
     "gemini-imagen": {"input": 0, "output": 0, "context": None, "capabilities": {"image_generation": True}, "display_name": "Gemini Imagen"},
     "dall-e-3": {"input": 0.04, "output": 0, "context": None, "capabilities": {"image_generation": True}, "display_name": "DALL-E 3"},
@@ -136,7 +136,7 @@ async def lookup_model(request: ModelLookupRequest):
     """Look up model information from provider APIs or known data."""
     model_id = request.model_id.lower().strip()
     provider = request.provider.lower()
-    
+
     # Check our known pricing database first
     for key, pricing in MODEL_PRICING.items():
         if model_id == key.lower() or model_id.endswith(key.lower()) or key.lower() in model_id:
@@ -149,7 +149,7 @@ async def lookup_model(request: ModelLookupRequest):
                 capabilities=pricing.get("capabilities", {"chat": True, "streaming": True}),
                 source="database"
             )
-    
+
     # Try provider-specific lookups
     if provider == "openrouter":
         result = await lookup_openrouter_model(model_id)
@@ -159,7 +159,7 @@ async def lookup_model(request: ModelLookupRequest):
                 **result,
                 source="openrouter_api"
             )
-    
+
     elif provider == "ollama":
         result = await lookup_ollama_model(model_id)
         if result:
@@ -168,7 +168,7 @@ async def lookup_model(request: ModelLookupRequest):
                 **result,
                 source="ollama_api"
             )
-    
+
     # Return empty response indicating user input needed
     return ModelLookupResponse(
         model_id=request.model_id,
@@ -182,7 +182,7 @@ async def get_model_suggestions(provider: str):
     """Get suggested models for a provider."""
     provider = provider.lower()
     suggestions = []
-    
+
     for model_id, pricing in MODEL_PRICING.items():
         # Include model if it matches the provider
         if provider == "ollama" and (model_id.startswith("llama") or model_id.startswith("qwen") or model_id.startswith("glm")):
@@ -195,7 +195,7 @@ async def get_model_suggestions(provider: str):
                     "cost_per_1m_output": pricing.get("output"),
                     "capabilities": pricing.get("capabilities", {})
                 })
-        elif provider == "anthropic" and (model_id.startswith("claude") and not "/" in model_id):
+        elif provider == "anthropic" and (model_id.startswith("claude") and "/" not in model_id):
             suggestions.append({
                 "model_id": model_id,
                 "display_name": pricing.get("display_name", model_id),
@@ -222,5 +222,5 @@ async def get_model_suggestions(provider: str):
                 "cost_per_1m_output": pricing.get("output"),
                 "capabilities": pricing.get("capabilities", {})
             })
-    
+
     return {"provider": provider, "suggestions": suggestions[:10]}  # Max 10 suggestions

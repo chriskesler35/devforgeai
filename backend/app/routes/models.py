@@ -196,13 +196,13 @@ async def list_models(
     ).join(
         Provider, Model.provider_id == Provider.id, isouter=True
     )
-    
+
     if provider_id:
         query = query.where(Model.provider_id == uuid.UUID(provider_id))
 
     query = query.order_by(Provider.name, Model.display_name, Model.model_id)
     result = await db.execute(query)
-    
+
     models = []
     for row in result:
         model = row[0]
@@ -273,7 +273,7 @@ async def create_model(
             detail=validation.get("warning")
             or f"Model '{model.model_id}' is not valid for provider '{provider.name}'.",
         )
-    
+
     new_model = Model(
         id=uuid.uuid4(),
         provider_id=model.provider_id,
@@ -314,11 +314,11 @@ async def get_model(
     except ValueError:
         # Try by model_id string
         result = await db.execute(select(Model).where(Model.model_id == model_id))
-    
+
     model = result.scalar_one_or_none()
     if not model:
         raise HTTPException(status_code=404, detail="Model not found")
-    
+
     return model
 
 
@@ -334,11 +334,11 @@ async def update_model(
         result = await db.execute(select(Model).where(Model.id == model_uuid))
     except ValueError:
         result = await db.execute(select(Model).where(Model.model_id == model_id))
-    
+
     model = result.scalar_one_or_none()
     if not model:
         raise HTTPException(status_code=404, detail="Model not found")
-    
+
     if updates.model_id is not None:
         provider_result = await db.execute(select(Provider).where(Provider.id == model.provider_id))
         provider = provider_result.scalar_one_or_none()
@@ -370,7 +370,7 @@ async def update_model(
         if updates.is_active and (model.validation_status or "unverified") != "validated":
             raise HTTPException(status_code=400, detail="Only live-validated models can be activated.")
         model.is_active = updates.is_active
-    
+
     await db.commit()
     await db.refresh(model)
     return model
@@ -714,28 +714,28 @@ async def delete_model(
 ):
     """Delete a model and update any personas using it."""
     from app.models import Persona
-    
+
     try:
         model_uuid = uuid.UUID(model_id)
         result = await db.execute(select(Model).where(Model.id == model_uuid))
     except ValueError:
         result = await db.execute(select(Model).where(Model.model_id == model_id))
-    
+
     model = result.scalar_one_or_none()
     if not model:
         raise HTTPException(status_code=404, detail="Model not found")
-    
+
     # Find all personas using this model as primary or fallback
     personas_result = await db.execute(
         select(Persona).where(
-            (Persona.primary_model_id == model.id) | 
+            (Persona.primary_model_id == model.id) |
             (Persona.fallback_model_id == model.id)
         )
     )
     affected_personas = personas_result.scalars().all()
-    
+
     updated_personas = []
-    
+
     for persona in affected_personas:
         # If this is the primary model, swap to fallback
         if persona.primary_model_id == model.id:
@@ -747,7 +747,7 @@ async def delete_model(
                 # Find first available model
                 all_models_result = await db.execute(
                     select(Model).where(
-                        (Model.is_active == True) & 
+                        (Model.is_active == True) &
                         (Model.id != model.id)
                     ).limit(1)
                 )
@@ -759,13 +759,13 @@ async def delete_model(
                     # No other models available - mark persona as unusable
                     persona.primary_model_id = None
                     persona.fallback_model_id = None
-            
+
             updated_personas.append({
                 "id": str(persona.id),
                 "name": persona.name,
                 "action": "primary_model_replaced"
             })
-        
+
         # If this is the fallback model, just clear it
         elif persona.fallback_model_id == model.id:
             persona.fallback_model_id = None
@@ -774,11 +774,11 @@ async def delete_model(
                 "name": persona.name,
                 "action": "fallback_model_cleared"
             })
-    
+
     # Delete the model
     await db.delete(model)
     await db.commit()
-    
+
     return {
         "status": "deleted",
         "affected_personas": updated_personas
@@ -797,10 +797,10 @@ async def list_models_by_provider(
         select(Provider).where(Provider.name == provider_name.lower())
     )
     provider = result.scalar_one_or_none()
-    
+
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
-    
+
     result = await db.execute(
         select(Model)
         .where(Model.provider_id == provider.id)
@@ -808,7 +808,7 @@ async def list_models_by_provider(
         .offset(offset)
     )
     models = result.scalars().all()
-    
+
     return ModelList(data=models, total=len(models), limit=limit, offset=offset, has_more=False)
 
 

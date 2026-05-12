@@ -22,17 +22,17 @@ def event_loop():
 async def db_session():
     """Create database session for tests."""
     from app.models import Base
-    
+
     engine = create_async_engine(TEST_DATABASE_URL, echo=False)
-    
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    
+
     async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    
+
     async with async_session() as session:
         yield session
-    
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
 
@@ -43,14 +43,14 @@ async def client(db_session):
     from app.main import app
     from app.database import get_db
     from app.config import settings
-    
+
     async def override_get_db():
         yield db_session
-    
+
     app.dependency_overrides[get_db] = override_get_db
-    
+
     headers = {"Authorization": f"Bearer {settings.modelmesh_api_key}"}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=headers) as ac:
         yield ac
-    
+
     app.dependency_overrides.clear()

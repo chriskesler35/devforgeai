@@ -821,7 +821,7 @@ async def generate_with_comfyui(
                 json={"prompt": workflow},
                 headers={"Content-Type": "application/json"}
             )
-            
+
             if queue_response.status_code != 200:
                 error_msg = queue_response.text
                 logger.error(f"ComfyUI rejected workflow (HTTP {queue_response.status_code}): {error_msg[:500]}")
@@ -834,7 +834,7 @@ async def generate_with_comfyui(
                     status_code=500,
                     detail=f"ComfyUI error: {error_msg[:300]}"
                 )
-            
+
             result = queue_response.json()
             prompt_id = result.get("prompt_id")
 
@@ -859,11 +859,11 @@ async def generate_with_comfyui(
                 await asyncio.sleep(1)
                 if attempt > 0 and attempt % 30 == 0:
                     logger.info(f"ComfyUI still generating… {attempt}s elapsed")
-                
+
                 history_response = await client.get(
                     f"{comfyui_url}/history/{prompt_id}"
                 )
-                
+
                 if history_response.status_code == 200:
                     history = history_response.json()
                     if prompt_id in history:
@@ -915,7 +915,7 @@ async def generate_with_comfyui(
                 status_code=504,
                 detail=f"ComfyUI generation timed out after {max_poll // 60} minutes"
             )
-            
+
     except asyncio.CancelledError:
         try:
             await _stop_comfyui_progress_task(ws_stop_event, ws_task)
@@ -1665,9 +1665,9 @@ async def generate_image(
     db: AsyncSession = Depends(get_db)
 ):
     """Generate one or more images using the specified model."""
-    
+
     images = []
-    
+
     for i in range(request.num_variations):
         try:
             if request.model == "gemini-imagen":
@@ -1678,11 +1678,11 @@ async def generate_image(
                         detail="GEMINI_API_KEY not configured. Add it to .env"
                     )
                 result = await generate_with_gemini_imagen(
-                    request.prompt, 
-                    api_key, 
+                    request.prompt,
+                    api_key,
                     request.size
                 )
-                
+
             elif request.model == "comfyui-local":
                 configured_comfyui_url = await get_setting("comfyui_url", db)
                 comfyui_dir = await get_setting("comfyui_dir", db)
@@ -1721,7 +1721,7 @@ async def generate_image(
                     status_code=400,
                     detail=f"Model '{request.model}' does not support image generation. Use 'gemini-imagen' or 'comfyui-local'"
                 )
-            
+
             # Store image
             image_id = str(uuid.uuid4())
             IMAGE_STORAGE[image_id] = {
@@ -1737,10 +1737,10 @@ async def generate_image(
                 "lora": request.lora,
                 "lora_strength": request.lora_strength,
             }
-            
+
             # Parse size
             width, height = map(int, request.size.split('x'))
-            
+
             images.append(ImageResponse(
                 id=image_id,
                 url=f"/v1/images/{image_id}",
@@ -1749,7 +1749,7 @@ async def generate_image(
                 height=height,
                 format=request.format
             ))
-            
+
         except HTTPException:
             raise
         except Exception as e:
@@ -1758,7 +1758,7 @@ async def generate_image(
                 status_code=500,
                 detail=f"Image generation failed: {str(e)}"
             )
-    
+
     return ImageListResponse(data=images, total=len(images))
 
 
@@ -1794,13 +1794,13 @@ async def list_image_models(db: AsyncSession = Depends(get_db)):
 @router.get("/{image_id}")
 async def get_image(image_id: str):
     """Retrieve a generated image by ID."""
-    
+
     if image_id not in IMAGE_STORAGE:
         raise HTTPException(
             status_code=404,
             detail="Image not found"
         )
-    
+
     image_data = IMAGE_STORAGE[image_id]
     b64 = image_data.get("base64") or _load_image_base64(image_id, image_data.get("format", "png"))
     if not b64:
@@ -1835,7 +1835,7 @@ async def download_image(image_id: str):
         raise HTTPException(status_code=404, detail="Image file not found on disk")
     image_bytes = base64.b64decode(b64)
     media_type = f"image/{image_data['format']}"
-    
+
     return Response(
         content=image_bytes,
         media_type=media_type,
@@ -2129,14 +2129,14 @@ async def generate_variation(
     denoise = _resolve_denoise(request.denoise if request else None, 0.65)
     mask_grow = _resolve_mask_grow(request.mask_grow if request else None, 8)
     mask_feather = _resolve_mask_feather(request.mask_feather if request else None, 6.0)
-    
+
     # Apply fast_mask optimization if enabled (for CPU-constrained masked inpaint)
     if request and request.fast_mask and request.mask_base64:
         denoise = 0.4  # Reduced from 0.65; ~25% faster inference
         mask_grow = 0  # No mask expansion; saves CPU cycles
         mask_feather = 0.0  # No blur/feather; saves CPU cycles
         logger.info("Fast-mask mode enabled for variation: denoise=0.4, mask_grow=0, mask_feather=0.0")
-    
+
     mask_bytes = None
     mask_mime = (request.mask_mime if request else None) or "image/png"
     if request and request.mask_base64:
@@ -2211,7 +2211,7 @@ async def generate_variation(
                 status_code=400,
                 detail=f"Model '{model}' does not support image variations"
             )
-        
+
         # Store the variation — _store_image() writes binary to data/images/{id}.{ext}
         variation_id = str(uuid.uuid4())
         IMAGE_STORAGE[variation_id] = {
@@ -2245,7 +2245,7 @@ async def generate_variation(
             )],
             total=1
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2600,7 +2600,8 @@ async def edit_image(req: ImageEditRequest, db: AsyncSession = Depends(get_db)):
     # Store result
     image_id = str(uuid.uuid4())
     fmt = result.get("mime_type", "image/png").split("/")[-1]
-    if fmt == "jpeg": fmt = "jpg"
+    if fmt == "jpeg":
+        fmt = "jpg"
     width, height = map(int, req.size.split("x")) if "x" in req.size else (1024, 1024)
 
     _store_image(image_id, {

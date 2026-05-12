@@ -35,7 +35,7 @@ async def list_providers(active_only: bool = True, db: AsyncSession = Depends(ge
         }
         for provider_id, model_count, active_model_count in model_counts_result.all()
     }
-    
+
     return {
         "data": [
             {

@@ -17,7 +17,7 @@ async def health_check():
         "database": "unknown",
         "redis": "unknown"
     }
-    
+
     # Check database
     try:
         async with engine.connect() as conn:
@@ -26,7 +26,7 @@ async def health_check():
     except Exception:
         checks["database"] = "unhealthy"
         checks["status"] = "degraded"
-    
+
     # Check Redis — optional, only degrades status if a URL is configured but unreachable
     from app.config import settings
     try:

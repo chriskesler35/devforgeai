@@ -12,3 +12,23 @@ addopts = "-p no:cacheprovider"
 [tool.coverage.run]
 source = ["app"]
 omit = ["app/main.py"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "W", "F"]
+# E501: line length — long URLs/strings make this noise
+# E712: ==/== True/False — SQLAlchemy Column comparisons REQUIRE this syntax
+#       for proper SQL generation (`Column == True` becomes `WHERE col = true`,
+#       which differs from `Column` alone in some dialects).
+# E402: module-import-not-at-top — used for lazy imports to avoid circular deps.
+ignore = ["E501", "E712", "E402"]
+
+[tool.ruff.lint.per-file-ignores]
+# Re-export modules legitimately import for namespace purposes.
+"__init__.py" = ["F401"]
+# Tests often have fixture-style unused assignments.
+"tests/*" = ["F841"]
+# Alembic templates have trailing whitespace + long lines by convention.
+"alembic/versions/*" = ["W291", "W293", "E501"]

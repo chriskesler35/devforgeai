@@ -39,6 +39,6 @@ class RequestLog(Base, BaseMixin):
     estimated_cost = Column(Numeric(10, 6), default=0)
     success = Column(Boolean)
     error_message = Column(Text)  # Sanitized error (no sensitive data)
-    
+
     def __repr__(self):
         return f"<RequestLog {self.id}>"

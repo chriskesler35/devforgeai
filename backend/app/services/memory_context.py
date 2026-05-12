@@ -68,15 +68,15 @@ The AI updates this based on your feedback and choices.
 
 class MemoryContext:
     """Manage user memory files and inject context into prompts."""
-    
+
     def __init__(self, db: AsyncSession):
         self.db = db
-    
+
     async def get_or_create_user(self) -> UserProfile:
         """Get or create the default user profile."""
         result = await self.db.execute(select(UserProfile).limit(1))
         user = result.scalar_one_or_none()
-        
+
         if not user:
             user = UserProfile(
                 name="User",
@@ -92,9 +92,9 @@ class MemoryContext:
         )
         if not files_result.scalar_one_or_none():
             await self._create_default_files(user.id)
-        
+
         return user
-    
+
     async def _create_default_files(self, user_id: str) -> None:
         """Create default memory files for a new user."""
         for name, content in DEFAULT_MEMORY_FILES.items():
@@ -105,37 +105,37 @@ class MemoryContext:
                 description=f"Default {name} file"
             )
             self.db.add(memory_file)
-        
+
         await self.db.commit()
-    
+
     async def get_memory_files(self) -> dict[str, str]:
         """Get all memory files for the current user."""
         user = await self.get_or_create_user()
-        
+
         result = await self.db.execute(
             select(MemoryFile).where(MemoryFile.user_id == user.id)
         )
         files = result.scalars().all()
-        
+
         return {f.name: f.content for f in files}
-    
+
     async def build_context_prompt(self) -> str:
         """Build a context prompt from all memory files + active preferences."""
         files = await self.get_memory_files()
-        
+
         context_parts = []
-        
+
         # Add each memory file as a section
         if files:
             for name, content in files.items():
                 section_name = name.replace(".md", "")
                 context_parts.append(f"\n## {section_name}\n{content}")
-        
+
         # Add active learned preferences
         prefs_text = await self._build_preferences_context()
         if prefs_text:
             context_parts.append(prefs_text)
-        
+
         return "\n".join(context_parts) if context_parts else ""
 
     async def _build_preferences_context(self) -> str:
@@ -163,7 +163,7 @@ class MemoryContext:
         except Exception as e:
             logger.debug(f"Could not load preferences: {e}")
             return ""
-    
+
     async def inject_context(self, system_prompt: str, persona_name: str = None) -> str:
         """Inject memory context and style preferences into a system prompt."""
         context = await self.build_context_prompt()
@@ -177,17 +177,17 @@ class MemoryContext:
                 context = (context + "\n\n## Response Style\n" + style_text) if context else ("## Response Style\n" + style_text)
         except Exception as e:
             logger.debug(f"Could not load style profile: {e}")
-        
+
         if not context:
             return system_prompt
-        
+
         # Build the injected context
         injected = f"""<user_context>
 This context is provided to help you assist the user better. Use it to personalize your responses.
 
 {context}
 </user_context>"""
-        
+
         # Inject before the main instructions
         if "\n\n" in system_prompt:
             # If there's a paragraph break, inject after first paragraph
@@ -196,11 +196,11 @@ This context is provided to help you assist the user better. Use it to personali
         else:
             # Otherwise prepend
             return f"{injected}\n\n{system_prompt}"
-    
+
     async def update_memory_file(self, name: str, content: str) -> None:
         """Update a memory file."""
         user = await self.get_or_create_user()
-        
+
         result = await self.db.execute(
             select(MemoryFile).where(
                 MemoryFile.user_id == user.id,
@@ -208,7 +208,7 @@ This context is provided to help you assist the user better. Use it to personali
             )
         )
         memory_file = result.scalar_one_or_none()
-        
+
         if memory_file:
             memory_file.content = content
         else:
@@ -218,15 +218,15 @@ This context is provided to help you assist the user better. Use it to personali
                 content=content
             )
             self.db.add(memory_file)
-        
+
         await self.db.commit()
-    
+
     async def learn_preference(self, key: str, value: str, source: str = "chat", context: str = None) -> None:
         """Record a learned preference from chat interaction."""
         from app.models import PreferenceTracking
-        
+
         user = await self.get_or_create_user()
-        
+
         preference = PreferenceTracking(
             user_id=user.id,
             key=key,
@@ -237,5 +237,5 @@ This context is provided to help you assist the user better. Use it to personali
         )
         self.db.add(preference)
         await self.db.commit()
-        
+
         logger.info(f"Learned preference: {key}={value} (source: {source})")

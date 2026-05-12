@@ -368,7 +368,7 @@ async def telegram_webhook(
     """Handle incoming Telegram webhook."""
     if not TELEGRAM_BOT_TOKEN:
         raise HTTPException(status_code=503, detail="Telegram bot not configured")
-    
+
     try:
         _remember_internal_api_base(str(request.base_url))
         body = await request.json()
@@ -376,30 +376,30 @@ async def telegram_webhook(
     except Exception as e:
         logger.error(f"Failed to parse webhook body: {e}")
         raise HTTPException(status_code=400, detail="Invalid request body")
-    
+
     # Extract message
     message = body.get("message") or body.get("edited_message")
     if not message:
         return {"status": "ok", "message": "No message in update"}
-    
+
     chat_id = message.get("chat", {}).get("id")
     text = _extract_message_text(message)
     attachment = _extract_image_attachment(message)
-    
+
     if not chat_id or (not text and not attachment):
         return {"status": "ok", "message": "No supported chat content"}
-    
+
     # Check authorization
     if not is_authorized(chat_id):
         await send_telegram_message(chat_id, "⚠️ Unauthorized access")
         return {"status": "unauthorized"}
-    
+
     # Process command in background
     if attachment:
         background_tasks.add_task(process_telegram_media_message, chat_id, message)
     else:
         background_tasks.add_task(process_telegram_command, chat_id, text)
-    
+
     return {"status": "ok"}
 
 
@@ -408,7 +408,7 @@ async def send_message(msg: SendMessage):
     """Send a message to a Telegram chat."""
     if not TELEGRAM_BOT_TOKEN:
         raise HTTPException(status_code=503, detail="Telegram bot not configured")
-    
+
     return await send_telegram_message(msg.chat_id, msg.text, msg.parse_mode)
 
 
@@ -420,7 +420,7 @@ async def telegram_status():
             "configured": False,
             "message": "Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_IDS environment variables"
         }
-    
+
     # Get bot info
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -435,7 +435,7 @@ async def telegram_status():
                 }
     except Exception as e:
         logger.error(f"Failed to get bot info: {e}")
-    
+
     return {"configured": True, "authorized_chats": AUTHORIZED_CHAT_IDS}
 
 
@@ -443,7 +443,7 @@ async def send_telegram_message(chat_id: int, text: str, parse_mode: str = "Mark
     """Send a message via Telegram API."""
     if not TELEGRAM_API_URL:
         return {"error": "Telegram not configured"}
-    
+
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(
@@ -493,7 +493,7 @@ async def handle_status_query(chat_id: int, text: str):
 async def process_telegram_command(chat_id: int, text: str):
     """Process a Telegram command."""
     text = text.strip()
-    
+
     # Parse command
     if text.startswith("/"):
         parts = text.split(maxsplit=1)
@@ -507,35 +507,35 @@ async def process_telegram_command(chat_id: int, text: str):
         # If the user recently uploaded an image, treat follow-up text as an edit prompt.
         command = "/image" if chat_id in _telegram_pending_images else "/chat"
         args = text
-    
+
     # Route commands
     if command == "/start" or command == "/help":
         await send_telegram_message(chat_id, get_help_text())
-    
+
     elif command == "/status":
         await send_status_update(chat_id)
-    
+
     elif command == "/sessions":
         await send_sessions_list(chat_id)
-    
+
     elif command == "/models":
         await send_models_list(chat_id)
-    
+
     elif command == "/run":
         await handle_run_command(chat_id, args)
-    
+
     elif command == "/continue":
         await handle_continue_command(chat_id)
-    
+
     elif command == "/chat":
         await handle_chat_command(chat_id, args)
-    
+
     elif command == "/image" or command == "/imagine" or command == "/img":
         await handle_image_command(chat_id, args)
 
     elif command == "/cancel":
         await handle_cancel_command(chat_id, args)
-    
+
     else:
         await send_telegram_message(chat_id, f"Unknown command: {command}\n\n{get_help_text()}")
 
@@ -571,7 +571,7 @@ async def send_status_update(chat_id: int):
         response = await _internal_api_request("GET", "/v1/remote/health", timeout=10.0)
         if response.status_code == 200:
             health = response.json()
-            
+
             status_text = f"""
 🤖 *DevForgeAI Status*
 
@@ -600,16 +600,16 @@ async def send_sessions_list(chat_id: int):
         response = await _internal_api_request("GET", "/v1/remote/sessions", timeout=10.0)
         if response.status_code == 200:
             sessions = response.json().get("data", [])
-            
+
             if not sessions:
                 await send_telegram_message(chat_id, "No active sessions")
                 return
-            
+
             text = "📋 *Sessions*\n\n"
             for s in sessions[:10]:  # Max 10
                 status_emoji = {"running": "🔄", "completed": "✅", "failed": "❌", "pending": "⏳"}.get(s["status"], "❓")
                 text += f"{status_emoji} `{s['session_id'][:8]}` - {s['agent_type']}: {s['task'][:30]}...\n"
-            
+
             await send_telegram_message(chat_id, text)
         else:
             await send_telegram_message(chat_id, "⚠️ Failed to get sessions")
@@ -628,9 +628,9 @@ async def send_models_list(chat_id: int):
         )
         if response.status_code == 200:
             models = response.json().get("data", [])
-            
+
             text = f"🤖 *{len(models)} Models Available*\n\n"
-            
+
             # Group by provider
             providers = {}
             for m in models:
@@ -638,7 +638,7 @@ async def send_models_list(chat_id: int):
                 if p not in providers:
                     providers[p] = []
                 providers[p].append(m.get("display_name") or m.get("model_id"))
-            
+
             for provider, model_list in providers.items():
                 text += f"*{provider}:*\n"
                 for m in model_list[:5]:  # Max 5 per provider
@@ -646,7 +646,7 @@ async def send_models_list(chat_id: int):
                 if len(model_list) > 5:
                     text += f"  _...and {len(model_list) - 5} more_\n"
                 text += "\n"
-            
+
             await send_telegram_message(chat_id, text)
         else:
             await send_telegram_message(chat_id, "⚠️ Failed to get models")
@@ -659,14 +659,14 @@ async def handle_run_command(chat_id: int, args: str):
     if not args:
         await send_telegram_message(chat_id, "Usage: `/run <agent_type> <task>`\n\nAgent types: coder, researcher, designer, reviewer, planner, executor, writer")
         return
-    
+
     parts = args.split(maxsplit=1)
     if len(parts) < 2:
         await send_telegram_message(chat_id, "Usage: `/run <agent_type> <task>`")
         return
-    
+
     agent_type, task = parts
-    
+
     # Create session
     try:
         internal_base = await _resolve_internal_api_base_url()
@@ -835,9 +835,9 @@ async def handle_cancel_command(chat_id: int, args: str):
     if not args:
         await send_telegram_message(chat_id, "Usage: `/cancel <session_id>`")
         return
-    
+
     session_id = args.strip()
-    
+
     try:
         response = await _internal_api_request(
             "POST",
@@ -867,9 +867,7 @@ async def register_webhook(request: Request):
     public_url = body.get("url")
     if not public_url:
         # Try to get Tailscale IP
-        import socket
         try:
-            hostname = socket.gethostname()
             tailscale_ip = None
             result = __import__("subprocess").run(
                 ["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5

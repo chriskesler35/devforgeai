@@ -36,20 +36,20 @@ async def test_router_fails_over_on_primary_error():
     """Router should try fallback model when primary fails."""
     from app.services.router import Router
     from decimal import Decimal
-    
+
     # Setup mocks
     db = AsyncMock()
     memory = MagicMock()
     memory.get_context = AsyncMock(return_value=[{"role": "user", "content": "test"}])
     memory.store_messages = AsyncMock()
-    
+
     # Create test data
     persona = MagicMock()
     persona.id = "test-persona"
     persona.memory_enabled = False
     persona.routing_rules = {}
     persona.max_memory_messages = 10
-    
+
     primary_model = MagicMock()
     primary_model.id = "primary-id"
     primary_model.model_id = "claude-sonnet-4-6"
@@ -57,7 +57,7 @@ async def test_router_fails_over_on_primary_error():
     primary_model.cost_per_1m_output = Decimal("15.0")
     primary_model.capabilities = {}
     primary_model.provider_id = "provider-1"
-    
+
     fallback_model = MagicMock()
     fallback_model.id = "fallback-id"
     fallback_model.model_id = "llama-3"
@@ -65,12 +65,12 @@ async def test_router_fails_over_on_primary_error():
     fallback_model.cost_per_1m_output = Decimal("0.0")
     fallback_model.capabilities = {}
     fallback_model.provider_id = "provider-2"
-    
+
     provider = MagicMock()
     provider.name = "anthropic"
-    
+
     router = Router(db, memory)
-    
+
     # This is a structural test - actual failover requires mocked model_client
     # Real integration test would need to mock model_client.call_model
 
@@ -79,28 +79,28 @@ async def test_router_fails_over_on_primary_error():
 async def test_router_raises_when_all_models_fail():
     """Router should raise AllModelsFailedError when all models fail."""
     from app.services.router import AllModelsFailedError
-    
+
     db = AsyncMock()
     memory = MagicMock()
-    
+
     persona = MagicMock()
     persona.id = "test-persona"
     persona.memory_enabled = False
     persona.routing_rules = {}
     persona.max_memory_messages = 10
-    
+
     primary_model = MagicMock()
     primary_model.id = "primary-id"
     primary_model.model_id = "test-model"
     primary_model.capabilities = {}
     primary_model.provider_id = "provider-1"
-    
+
     fallback_model = MagicMock()
     fallback_model.id = "fallback-id"
     fallback_model.model_id = "fallback-model"
     fallback_model.capabilities = {}
     fallback_model.provider_id = "provider-2"
-    
+
     # Would need to mock model_client to test actual failover
     # This test validates error structure
     assert AllModelsFailedError.__name__ == "AllModelsFailedError"
@@ -114,7 +114,7 @@ async def test_router_raises_when_all_models_fail():
 async def test_cost_limit_blocks_expensive_requests():
     """Router should raise CostLimitExceededError when cost exceeds limit."""
     from app.services.router import CostLimitExceededError
-    
+
     # Test error structure
     error = CostLimitExceededError(estimated=0.05, limit=0.01)
     assert error.code == "cost_limit_exceeded"
@@ -130,13 +130,13 @@ async def test_cost_limit_blocks_expensive_requests():
 async def test_memory_degrades_gracefully_when_redis_unavailable():
     """Memory manager should degrade gracefully when Redis is down."""
     from app.services.memory import MemoryManager
-    
+
     # Create memory manager with mock Redis
     mock_redis = AsyncMock()
     mock_redis.ping.side_effect = Exception("Redis connection refused")
-    
+
     memory = MemoryManager(mock_redis)
-    
+
     # Health check should fail
     is_healthy = await memory.health_check()
     assert is_healthy is False
@@ -147,16 +147,16 @@ async def test_memory_degrades_gracefully_when_redis_unavailable():
 async def test_get_context_returns_original_when_redis_disabled():
     """Memory manager should return original messages when Redis is disabled."""
     from app.services.memory import MemoryManager
-    
+
     mock_redis = AsyncMock()
     mock_redis.ping.side_effect = Exception("Redis down")
-    
+
     memory = MemoryManager(mock_redis)
     await memory.health_check()  # This sets enabled=False
-    
+
     messages = [{"role": "user", "content": "test"}]
     result = await memory.get_context("conv-1", messages, 10)
-    
+
     assert result == messages
 
 
@@ -202,17 +202,17 @@ async def test_estimate_tokens_basic():
     """Model client should estimate tokens reasonably."""
     from app.services.model_client import model_client
     from decimal import Decimal
-    
+
     model = MagicMock()
     model.cost_per_1m_input = Decimal("1.0")
     model.cost_per_1m_output = Decimal("2.0")
-    
+
     messages = [
         {"role": "user", "content": "Hello, this is a test message."}
     ]
-    
+
     tokens = model_client.estimate_tokens(messages, model)
-    
+
     # Should be roughly proportional to message length
     # ~30 characters + overhead should be ~10-15 tokens
     assert tokens > 5
@@ -224,14 +224,14 @@ async def test_estimate_cost_calculation():
     """Model client should calculate cost correctly."""
     from app.services.model_client import model_client
     from decimal import Decimal
-    
+
     model = MagicMock()
     model.cost_per_1m_input = Decimal("3.0")   # $3 per million input
     model.cost_per_1m_output = Decimal("15.0")  # $15 per million output
-    
+
     # 100k input + 50k output = 0.3 + 0.75 = $1.05
     cost = model_client.estimate_cost(100_000, 50_000, model)
-    
+
     assert abs(cost - 1.05) < 0.01  # Allow small float error
 
 
@@ -243,11 +243,11 @@ async def test_estimate_cost_calculation():
 async def test_provider_api_key_lookup():
     """Model client should look up provider API keys from environment."""
     from app.services.model_client import model_client
-    
+
     # Should return None for unknown provider
     key = model_client.get_api_key("unknown_provider")
     assert key is None
-    
+
     # Should return value from environment for known providers
     # (Assuming ANTHROPIC_API_KEY is set in test env)
     # This test validates the lookup structure

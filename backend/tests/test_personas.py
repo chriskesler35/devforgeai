@@ -44,7 +44,7 @@ async def test_get_persona_by_name(client: AsyncClient):
             "description": "Named persona"
         }
     )
-    
+
     # Get by name
     response = await client.get("/v1/personas/named-persona")
     assert response.status_code == 200
@@ -55,7 +55,7 @@ async def test_get_persona_by_name(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_update_persona(client: AsyncClient):
     """Test updating a persona."""
-    
+
     # Create persona
     create_response = await client.post(
         "/v1/personas",
@@ -65,7 +65,7 @@ async def test_update_persona(client: AsyncClient):
         }
     )
     persona_id = create_response.json()["id"]
-    
+
     # Update
     response = await client.patch(
         f"/v1/personas/{persona_id}",
@@ -79,18 +79,18 @@ async def test_update_persona(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_delete_persona(client: AsyncClient):
     """Test deleting a persona."""
-    
+
     # Create persona
     create_response = await client.post(
         "/v1/personas",
         json={"name": "delete-test"}
     )
     persona_id = create_response.json()["id"]
-    
+
     # Delete
     response = await client.delete(f"/v1/personas/{persona_id}")
     assert response.status_code == 200
-    
+
     # Verify deleted
     get_response = await client.get(f"/v1/personas/{persona_id}")
     assert get_response.status_code == 404

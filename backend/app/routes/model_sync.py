@@ -734,7 +734,8 @@ async def fetch_ollama_models(base_url: str) -> list[dict]:
 
     # Fallback: urllib (stdlib, always available)
     try:
-        import urllib.request, json as _json
+        import urllib.request
+        import json as _json
         with urllib.request.urlopen(url, timeout=5) as resp:
             return _json.loads(resp.read()).get("models", [])
     except Exception as e:

@@ -113,11 +113,8 @@ async def create_share(body: CreateShareRequest, request: Request):
     }
     _save_shares(shares)
 
-    # Build the full URL — caller may also want just the token.
-    # Frontend will resolve this relative to its own host.
-    base_url = str(request.base_url).rstrip("/")
-    # Strip the backend port; share URLs point at the FRONTEND, not backend.
-    # We don't know the frontend URL from the backend, so just return the path.
+    # Frontend will resolve this relative to its own host — return path only.
+    # We don't know the frontend URL from the backend, so we don't synthesize it.
     share_url = f"/share/{token}"
 
     logger.info(f"Share created by {user.get('username')}: {body.resource_type}/{body.resource_id} → {token[:8]}…")

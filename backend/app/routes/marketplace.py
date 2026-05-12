@@ -91,7 +91,7 @@ class InstallProgressResponse(BaseModel):
 async def get_filter_options():
     """
     Get available filter options for the marketplace.
-    
+
     Returns:
     - use_cases: List of all unique use cases across skills
     - languages: List of all unique languages
@@ -100,18 +100,18 @@ async def get_filter_options():
     """
     if not _SKILLS_CATALOG:
         load_skills_catalog()
-    
+
     use_cases = set()
     languages = set()
     complexity_levels = set()
     trust_levels = set()
-    
+
     for skill in _SKILLS_CATALOG:
         use_cases.update(skill.get("use_cases", []))
         languages.update(skill.get("languages", []))
         complexity_levels.add(skill.get("complexity", ""))
         trust_levels.add(skill.get("trust_level", ""))
-    
+
     return FilterOptions(
         use_cases=sorted(list(use_cases)),
         languages=sorted(list(languages)),
@@ -130,23 +130,23 @@ async def search_skills(
 ):
     """
     Search and filter skills from the marketplace catalog.
-    
+
     Query parameters:
     - search_query: Text search (searches name and description)
     - use_cases: Comma-separated list (OR logic — match any)
     - languages: Comma-separated list (OR logic — match any)
     - complexity: Single value (beginner, intermediate, advanced)
     - trust_level: Single value (verified, community, experimental)
-    
+
     Returns:
     - total: Total number of matching skills
     - results: Array of matching skill details
     """
     if not _SKILLS_CATALOG:
         load_skills_catalog()
-    
+
     results = _SKILLS_CATALOG.copy()
-    
+
     # Text search (name or description)
     if search_query:
         query_lower = search_query.lower()
@@ -155,7 +155,7 @@ async def search_skills(
             if query_lower in s.get("name", "").lower()
             or query_lower in s.get("description", "").lower()
         ]
-    
+
     # Use cases filter (OR logic)
     if use_cases:
         use_cases_list = [u.strip() for u in use_cases.split(",")]
@@ -163,28 +163,28 @@ async def search_skills(
             s for s in results
             if any(uc in s.get("use_cases", []) for uc in use_cases_list)
         ]
-    
+
     # Languages filter (OR logic)
     if languages:
-        languages_list = [l.strip() for l in languages.split(",")]
+        languages_list = [lang.strip() for lang in languages.split(",")]
         results = [
             s for s in results
             if any(lang in s.get("languages", []) for lang in languages_list)
         ]
-    
+
     # Complexity filter (exact match)
     if complexity:
         results = [s for s in results if s.get("complexity") == complexity]
-    
+
     # Trust level filter (exact match)
     if trust_level:
         results = [s for s in results if s.get("trust_level") == trust_level]
-    
+
     # Convert to SkillResponse objects
     skill_responses = [
         SkillResponse(**skill) for skill in results
     ]
-    
+
     return SkillSearchResponse(
         total=len(skill_responses),
         results=skill_responses
@@ -195,23 +195,23 @@ async def search_skills(
 async def get_skill_detail(skill_id: str):
     """
     Get detailed information for a specific skill.
-    
+
     Args:
     - skill_id: The unique skill identifier (e.g., 'langchain', 'bmad-core')
-    
+
     Returns:
     - Full skill metadata including description, requirements, URLs
-    
+
     Raises:
     - 404 if skill not found
     """
     if not _SKILLS_CATALOG:
         load_skills_catalog()
-    
+
     for skill in _SKILLS_CATALOG:
         if skill.get("skill_id") == skill_id:
             return SkillResponse(**skill)
-    
+
     # Not found
     from fastapi import HTTPException
     raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found")

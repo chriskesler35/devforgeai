@@ -1,7 +1,7 @@
 """Add user profile and memory system tables.
 
 Revision ID: add_user_profile
-Revises: 
+Revises:
 Create Date: 2026-03-28
 
 """

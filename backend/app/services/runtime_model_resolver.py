@@ -857,16 +857,16 @@ async def resolve_with_verification(
 ) -> ResolveResult:
     """
     Resolve model with verification check.
-    
+
     Args:
         db: Database session
         model_ref: Model reference (model_id or provider/model_id)
         feature_required: Required capability (chat, vision, streaming, embeddings, functions)
         intent: Resolve intent (chat, agentic, pipeline, tools)
-    
+
     Returns:
         Ready, NeedsLiveProbe, or Unreachable result
-    
+
     Logic:
         1. Query verified models matching feature
         2. If none, query degraded models (with warning)
@@ -918,7 +918,7 @@ async def resolve_with_verification(
 
     # First try exact resolve
     exact = await resolve_model_for_runtime(db, model_ref, intent=intent)
-    
+
     if isinstance(exact, NeedsLiveProbe):
         await log_selection_decision(
             db,
@@ -960,10 +960,10 @@ async def resolve_with_verification(
                 reason_code="exact_model_capability_match",
             )
             return exact
-    
+
     # Try verified models for feature
     verified_models = await get_verified_models_for_feature(db, normalized_feature)
-    
+
     if verified_models:
         # Pick first (could add priority logic)
         model, provider = verified_models[0]
@@ -983,7 +983,7 @@ async def resolve_with_verification(
             resolved_from="verified_feature_match",
             notes=[f"Selected verified model for {normalized_feature}"]
         )
-    
+
     # No verified models; return error
     await log_selection_decision(
         db,
@@ -1017,11 +1017,11 @@ async def get_verified_models_for_feature(
 ) -> list[tuple[Model, Provider]]:
     """
     Query verified models supporting a feature.
-    
+
     Args:
         db: Database session
         feature: Capability name (chat, vision, streaming, embeddings, functions)
-    
+
     Returns:
         List of (Model, Provider) tuples, ordered by priority
     """
@@ -1036,15 +1036,15 @@ async def get_verified_models_for_feature(
         .where(ModelVerification.verification_status == "verified")
         .order_by(Model.fallback_priority.asc().nulls_last(), Model.created_at.desc())
     )
-    
+
     results = (await db.execute(stmt)).all()
-    
+
     matched = []
     for model, provider, verification in results:
         capabilities = verification.capabilities or {}
         if capabilities.get(normalized_feature, False):
             matched.append((model, provider))
-    
+
     return matched
 
 
@@ -1090,7 +1090,7 @@ async def log_selection_decision(
 ):
     """
     Log model selection decision for debugging.
-    
+
     Args:
         db: Database session
         feature: Feature required (chat, vision, etc.)
@@ -1139,10 +1139,10 @@ async def log_selection_decision(
 def get_fallback_chain(feature: str) -> list[str]:
     """
     Get prioritized fallback models for a feature.
-    
+
     Args:
         feature: Feature name (chat, vision, streaming, embeddings, functions)
-    
+
     Returns:
         Ordered list of model IDs to try
     """
@@ -1176,7 +1176,7 @@ def get_fallback_chain(feature: str) -> list[str]:
             "claude-sonnet-4-5",
         ]
     }
-    
+
     return chains.get(feature, [])
 
 

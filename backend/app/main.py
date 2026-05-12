@@ -197,7 +197,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         import logging
         logging.getLogger(__name__).warning(f"Conversation cleanup failed: {e}")
-    
+
     # Seed database with initial data
     from app.database import AsyncSessionLocal
     from app.seed import seed_database
@@ -287,7 +287,7 @@ async def lifespan(app: FastAPI):
             "Provider health monitor startup failed (non-fatal): %s",
             _health_exc,
         )
-    
+
     # Start Telegram polling (non-blocking background task)
     from app.routes.telegram_bot import start_polling as _start_telegram
     await _start_telegram()

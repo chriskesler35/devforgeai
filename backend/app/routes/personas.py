@@ -59,16 +59,16 @@ async def list_personas(
 ):
     """List all personas."""
     query = select(Persona)
-    
+
     # Get total count
     count_query = select(func.count()).select_from(Persona)
     total = await db.scalar(count_query)
-    
+
     # Get paginated results
     query = query.offset(offset).limit(limit)
     result = await db.execute(query)
     personas = result.scalars().all()
-    
+
     return PersonaList(
         data=[PersonaResponse.model_validate(p) for p in personas],
         total=total,
@@ -93,7 +93,7 @@ async def create_persona(
 
     await _ensure_model_usable(persona.primary_model_id, field_name="primary_model_id", db=db)
     await _ensure_model_usable(persona.fallback_model_id, field_name="fallback_model_id", db=db)
-    
+
     db_persona = Persona(
         **persona.model_dump(),
         updated_at=datetime.utcnow()
@@ -101,7 +101,7 @@ async def create_persona(
     db.add(db_persona)
     await db.commit()
     await db.refresh(db_persona)
-    
+
     return PersonaResponse.model_validate(db_persona)
 
 
@@ -128,7 +128,7 @@ async def get_persona(
 
     if not persona:
         raise HTTPException(status_code=404, detail="Persona not found")
-    
+
     return PersonaResponse.model_validate(persona)
 
 
@@ -141,7 +141,7 @@ async def update_persona(
     """Update a persona."""
     persona_uuid = _parse_uuid(persona_id)
     persona = await db.get(Persona, persona_uuid)
-    
+
     if not persona:
         raise HTTPException(status_code=404, detail="Persona not found")
 
@@ -150,15 +150,15 @@ async def update_persona(
         await _ensure_model_usable(payload.get("primary_model_id"), field_name="primary_model_id", db=db)
     if "fallback_model_id" in payload:
         await _ensure_model_usable(payload.get("fallback_model_id"), field_name="fallback_model_id", db=db)
-    
+
     # Update fields
     for field, value in payload.items():
         setattr(persona, field, value)
-    
+
     persona.updated_at = datetime.utcnow()
     await db.commit()
     await db.refresh(persona)
-    
+
     return PersonaResponse.model_validate(persona)
 
 
@@ -170,11 +170,11 @@ async def delete_persona(
     """Delete a persona."""
     persona_uuid = _parse_uuid(persona_id)
     persona = await db.get(Persona, persona_uuid)
-    
+
     if not persona:
         raise HTTPException(status_code=404, detail="Persona not found")
-    
+
     await db.delete(persona)
     await db.commit()
-    
+
     return {"status": "deleted"}

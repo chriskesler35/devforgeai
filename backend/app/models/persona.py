@@ -11,7 +11,7 @@ from datetime import datetime
 class Persona(Base, BaseMixin):
     """Persona configuration for routing and prompts."""
     __tablename__ = "personas"
-    
+
     name = Column(String(100), unique=True, nullable=False, index=True)
     description = Column(Text)
     system_prompt = Column(Text)
@@ -22,10 +22,10 @@ class Persona(Base, BaseMixin):
     max_memory_messages = Column(Integer, default=10)
     is_default = Column(Boolean, default=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
     # Relationships
     primary_model = relationship("Model", foreign_keys=[primary_model_id])
     fallback_model = relationship("Model", foreign_keys=[fallback_model_id])
-    
+
     def __repr__(self):
         return f"<Persona {self.name}>"

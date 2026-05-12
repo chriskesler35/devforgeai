@@ -47,8 +47,10 @@ class TaskResponse(BaseModel):
         d = {}
         for f in cls.model_fields:
             val = getattr(obj, f, None)
-            if isinstance(val, _uuid.UUID): val = str(val)
-            if isinstance(val, datetime): val = val.isoformat()
+            if isinstance(val, _uuid.UUID):
+                val = str(val)
+            if isinstance(val, datetime):
+                val = val.isoformat()
             d[f] = val
         return cls(**d)
 

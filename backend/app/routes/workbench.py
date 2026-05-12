@@ -1300,7 +1300,8 @@ async def stream_session(session_id: str, request: Request):
             log = session_dict.get('events_log') or []
             for evt in log:
                 yield f"data: {json.dumps(normalize_sse_event(evt, source='workbench'))}\n\n"
-                import asyncio as _asyncio; await _asyncio.sleep(0.02)
+                import asyncio as _asyncio
+                await _asyncio.sleep(0.02)
 
             # Detect if the LAST turn in the log is incomplete.
             last_turn_incomplete = False

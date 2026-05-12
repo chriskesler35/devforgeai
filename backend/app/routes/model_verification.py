@@ -289,16 +289,16 @@ async def get_model_verification(
     """Get verification status for a model."""
     stmt = select(Model).where(Model.id == model_id)
     model = (await db.execute(stmt)).scalars().first()
-    
+
     if not model:
         raise HTTPException(status_code=404, detail="Model not found")
-    
+
     stmt = select(Provider).where(Provider.id == model.provider_id)
     provider = (await db.execute(stmt)).scalars().first()
-    
+
     stmt = select(ModelVerification).where(ModelVerification.model_id == model_id)
     verification = (await db.execute(stmt)).scalars().first()
-    
+
     if not verification:
         return ModelVerificationDTO(
             model_id=model.id,
@@ -308,7 +308,7 @@ async def get_model_verification(
             capabilities={},
             test_results={}
         )
-    
+
     return ModelVerificationDTO(
         model_id=model.id,
         model_name=model.display_name or model.model_id,
@@ -415,16 +415,16 @@ async def verify_model(
     """Manually trigger verification for a model."""
     stmt = select(Model).where(Model.id == model_id)
     model = (await db.execute(stmt)).scalars().first()
-    
+
     if not model:
         raise HTTPException(status_code=404, detail="Model not found")
-    
+
     stmt = select(Provider).where(Provider.id == model.provider_id)
     provider = (await db.execute(stmt)).scalars().first()
-    
+
     service = ModelVerificationService(db)
     result = await service.verify_model(model, provider, test_suite_version="manual")
-    
+
     return ModelVerificationDTO(
         model_id=model.id,
         model_name=model.display_name or model.model_id,
@@ -445,13 +445,13 @@ async def verify_all_models(
     """Regression test: re-verify all models (run before deploy)."""
     stmt = select(Model, Provider).join(Provider)
     results_list = (await db.execute(stmt)).all()
-    
+
     service = ModelVerificationService(db)
     results = await service.verify_models_batch(
         [(model, provider) for model, provider in results_list],
         concurrency=5
     )
-    
+
     summary = {
         "total": len(results),
         "verified": len([r for r in results.values() if r.verification_status == "verified"]),
@@ -464,7 +464,7 @@ async def verify_all_models(
             for key, result in results.items()
         }
     }
-    
+
     return summary
 
 
@@ -582,26 +582,26 @@ async def get_model_health_dashboard(
     # Count models by status
     stmt = select(func.count(Model.id)).select_from(Model)
     total = (await db.execute(stmt)).scalar() or 0
-    
+
     stmt = select(func.count(ModelVerification.id)).where(
         ModelVerification.verification_status == "verified"
     )
     verified = (await db.execute(stmt)).scalar() or 0
-    
+
     stmt = select(func.count(ModelVerification.id)).where(
         ModelVerification.verification_status == "failed"
     )
     failed = (await db.execute(stmt)).scalar() or 0
-    
+
     stmt = select(func.count(ModelVerification.id)).where(
         ModelVerification.verification_status == "degraded"
     )
     degraded = (await db.execute(stmt)).scalar() or 0
-    
+
     # By provider
     stmt = select(Provider, func.count(Model.id)).outerjoin(Model).group_by(Provider.id)
     provider_results = (await db.execute(stmt)).all()
-    
+
     by_provider = {}
     for provider, model_count in provider_results:
         by_provider[provider.name] = {
@@ -610,19 +610,19 @@ async def get_model_health_dashboard(
             "failed": 0,
             "degraded": 0
         }
-    
+
     # Get verification counts per provider
     stmt = select(
         Provider,
         ModelVerification.verification_status,
         func.count(ModelVerification.id)
     ).join(Model).join(ModelVerification).group_by(Provider.id, ModelVerification.verification_status)
-    
+
     status_results = (await db.execute(stmt)).all()
     for provider, status, count in status_results:
         if provider.name in by_provider:
             by_provider[provider.name][status] = count
-    
+
     return ModelHealthDashboardDTO(
         total_models=total,
         verified=verified,
@@ -974,13 +974,13 @@ async def get_provider_health(
     """Get health status for a provider."""
     stmt = select(Provider).where(Provider.id == provider_id)
     provider = (await db.execute(stmt)).scalars().first()
-    
+
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
-    
+
     stmt = select(ProviderHealth).where(ProviderHealth.provider_id == provider_id)
     health = (await db.execute(stmt)).scalars().first()
-    
+
     if not health:
         return ProviderHealthDTO(
             provider_id=provider.id,
@@ -989,7 +989,7 @@ async def get_provider_health(
             credential_status="unchecked",
             connectivity_status="unchecked"
         )
-    
+
     return ProviderHealthDTO(
         provider_id=provider.id,
         provider_name=provider.name,
@@ -1012,13 +1012,13 @@ async def check_provider_health(
     """Manually trigger health check for a provider."""
     stmt = select(Provider).where(Provider.id == provider_id)
     provider = (await db.execute(stmt)).scalars().first()
-    
+
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
-    
+
     service = ProviderHealthService(db)
     health = await service.check_provider_health(provider)
-    
+
     return ProviderHealthDTO(
         provider_id=provider.id,
         provider_name=provider.name,
@@ -1038,9 +1038,9 @@ async def get_all_provider_health(
     """Get health status for all providers."""
     stmt = select(Provider).where(Provider.is_active == True)
     providers = (await db.execute(stmt)).scalars().all()
-    
+
     service = ProviderHealthService(db)
-    
+
     results = []
     for provider in providers:
         health = await service.check_provider_health(provider)
@@ -1052,7 +1052,7 @@ async def get_all_provider_health(
             connectivity_status=health.connectivity_status or "unchecked",
             last_checked_at=health.last_checked_at
         ))
-    
+
     return results
 
 
@@ -1064,20 +1064,20 @@ async def update_provider_credential(
 ) -> ProviderHealthDTO:
     """Update provider API key and check health."""
     from app.services.provider_credentials import set_provider_api_key
-    
+
     stmt = select(Provider).where(Provider.id == provider_id)
     provider = (await db.execute(stmt)).scalars().first()
-    
+
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
-    
+
     # Update credential
     set_provider_api_key(provider.name, api_key)
-    
+
     # Check health
     service = ProviderHealthService(db)
     health = await service.check_provider_health(provider)
-    
+
     return ProviderHealthDTO(
         provider_id=provider.id,
         provider_name=provider.name,

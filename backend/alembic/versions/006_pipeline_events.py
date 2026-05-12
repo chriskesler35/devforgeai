@@ -20,7 +20,7 @@ import sqlalchemy as sa
 
 
 revision: str = '006_pipeline_events'
-down_revision: Union[str, None] = '001_add_verification_tables'
+down_revision: Union[str, None] = 'add_verification_tables'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

@@ -79,9 +79,10 @@ def _read_env_key_from_files(env_var: str) -> Optional[str]:
 
 
 def get_provider_api_key(provider_name: str) -> Optional[str]:
-    """Return the active live credential for a provider, if any."""
-    normalized = (provider_name or "").lower().strip()
+    """Return the active live credential for a provider, if any.
 
+    Normalization (lower + strip) is handled inside ``get_provider_env_vars``.
+    """
     for env_var in get_provider_env_vars(provider_name):
         value = os.environ.get(env_var)
         if value:

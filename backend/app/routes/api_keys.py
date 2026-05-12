@@ -401,7 +401,6 @@ async def set_api_key(provider: str, body: SetKeyRequest):
     if provider == "codex-proxy" and not re.match(r"^https?://", value, re.IGNORECASE):
         raise HTTPException(status_code=400, detail="Codex proxy URL must start with http:// or https://")
 
-    env_path = _find_env_file()
     _write_env_key_all(env_var, value)
 
     # Hot-reload into os.environ immediately
@@ -606,7 +605,6 @@ async def clear_api_key(provider: str, body: Optional[ClearKeyRequest] = None):
 
     if provider in CONFIG_ONLY_KEYS:
         env_var = MANAGED_KEYS[provider]
-        env_path = _find_env_file()
         _write_env_key_all(env_var, "")
         os.environ.pop(env_var, None)
         logger.info(f"Runtime config key cleared for {provider}")
@@ -707,7 +705,6 @@ async def clear_api_key(provider: str, body: Optional[ClearKeyRequest] = None):
 
     # Finally clear the key from env + .env file
     env_var = MANAGED_KEYS[provider]
-    env_path = _find_env_file()
     _write_env_key_all(env_var, "")
     os.environ.pop(env_var, None)
     if provider == "openai-oauth":

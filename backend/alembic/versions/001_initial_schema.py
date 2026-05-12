@@ -1,7 +1,7 @@
 """Initial schema
 
 Revision ID: 001
-Revises: 
+Revises:
 Create Date: 2026-03-27
 
 """
@@ -18,7 +18,7 @@ depends_on = None
 def upgrade() -> None:
     # Enable UUID extension
     op.execute('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"')
-    
+
     # Providers table
     op.create_table(
         'providers',
@@ -32,7 +32,7 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime, nullable=False),
     )
     op.create_index('ix_providers_name', 'providers', ['name'])
-    
+
     # Models table
     op.create_table(
         'models',
@@ -48,7 +48,7 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime, nullable=False),
         sa.UniqueConstraint('provider_id', 'model_id'),
     )
-    
+
     # Personas table
     op.create_table(
         'personas',
@@ -67,7 +67,7 @@ def upgrade() -> None:
     )
     op.create_index('ix_personas_name', 'personas', ['name'])
     op.create_index('ix_personas_default', 'personas', ['is_default'], postgresql_where=sa.text('is_default = true'))
-    
+
     # Conversations table
     op.create_table(
         'conversations',
@@ -78,7 +78,7 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime, nullable=False),
     )
     op.create_index('ix_conversations_persona', 'conversations', ['persona_id'])
-    
+
     # Messages table
     op.create_table(
         'messages',
@@ -94,7 +94,7 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime, nullable=False),
     )
     op.create_index('idx_messages_conversation', 'messages', ['conversation_id', sa.text('created_at DESC')])
-    
+
     # Request logs table
     op.create_table(
         'request_logs',
@@ -112,11 +112,11 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime, nullable=False),
     )
     op.create_index('idx_request_logs_created_at', 'request_logs', [sa.text('created_at DESC')])
-    
+
     # Seed providers
     op.execute("""
         INSERT INTO providers (id, name, display_name, api_base_url, auth_type, is_active, created_at)
-        VALUES 
+        VALUES
             (uuid_generate_v4(), 'ollama', 'Ollama (Local/Cloud)', 'http://localhost:11434', 'none', true, NOW()),
             (uuid_generate_v4(), 'anthropic', 'Anthropic', NULL, 'api_key', true, NOW()),
             (uuid_generate_v4(), 'google', 'Google AI', NULL, 'api_key', true, NOW())

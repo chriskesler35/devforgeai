@@ -152,9 +152,12 @@ async def update_user(user_id: str, body: UserUpdate):
     users = _load(_USERS_FILE)
     if user_id not in users:
         raise HTTPException(status_code=404, detail="User not found")
-    if body.display_name is not None: users[user_id]["display_name"] = body.display_name
-    if body.role is not None: users[user_id]["role"] = body.role
-    if body.is_active is not None: users[user_id]["is_active"] = body.is_active
+    if body.display_name is not None:
+        users[user_id]["display_name"] = body.display_name
+    if body.role is not None:
+        users[user_id]["role"] = body.role
+    if body.is_active is not None:
+        users[user_id]["is_active"] = body.is_active
     if body.github_token is not None:
         users[user_id]["github_token"] = body.github_token.strip() or None
     _save(_USERS_FILE, users)

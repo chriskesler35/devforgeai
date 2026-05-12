@@ -28,7 +28,7 @@ async def get_user_profile(db: AsyncSession = Depends(get_db)):
     """Get or create the default user profile."""
     result = await db.execute(select(UserProfile).limit(1))
     profile = result.scalar_one_or_none()
-    
+
     if not profile:
         # Create default profile
         profile = UserProfile(
@@ -39,7 +39,7 @@ async def get_user_profile(db: AsyncSession = Depends(get_db)):
         db.add(profile)
         await db.commit()
         await db.refresh(profile)
-    
+
     return profile
 
 
@@ -51,17 +51,17 @@ async def update_user_profile(
     """Update user profile."""
     result = await db.execute(select(UserProfile).limit(1))
     profile = result.scalar_one_or_none()
-    
+
     if not profile:
         raise HTTPException(status_code=404, detail="User profile not found")
-    
+
     if updates.name is not None:
         profile.name = updates.name
     if updates.email is not None:
         profile.email = updates.email
     if updates.preferences is not None:
         profile.preferences = updates.preferences
-    
+
     await db.commit()
     await db.refresh(profile)
     return profile
@@ -106,10 +106,10 @@ async def create_memory_file(
     """Create a new memory file."""
     result = await db.execute(select(UserProfile).limit(1))
     profile = result.scalar_one_or_none()
-    
+
     if not profile:
         raise HTTPException(status_code=404, detail="User profile not found")
-    
+
     memory_file = MemoryFile(
         id=uuid.uuid4(),
         user_id=profile.id,
@@ -133,10 +133,10 @@ async def get_memory_file(
         select(MemoryFile).where(MemoryFile.id == uuid.UUID(file_id))
     )
     memory_file = result.scalar_one_or_none()
-    
+
     if not memory_file:
         raise HTTPException(status_code=404, detail="Memory file not found")
-    
+
     return memory_file
 
 
@@ -151,17 +151,17 @@ async def update_memory_file(
         select(MemoryFile).where(MemoryFile.id == uuid.UUID(file_id))
     )
     memory_file = result.scalar_one_or_none()
-    
+
     if not memory_file:
         raise HTTPException(status_code=404, detail="Memory file not found")
-    
+
     if updates.name is not None:
         memory_file.name = updates.name
     if updates.content is not None:
         memory_file.content = updates.content
     if updates.description is not None:
         memory_file.description = updates.description
-    
+
     await db.commit()
     await db.refresh(memory_file)
     return memory_file
@@ -177,10 +177,10 @@ async def delete_memory_file(
         select(MemoryFile).where(MemoryFile.id == uuid.UUID(file_id))
     )
     memory_file = result.scalar_one_or_none()
-    
+
     if not memory_file:
         raise HTTPException(status_code=404, detail="Memory file not found")
-    
+
     await db.delete(memory_file)
     await db.commit()
     return {"status": "deleted"}
@@ -206,10 +206,10 @@ async def list_modifications(
     """List system modifications (history of changes made through chat)."""
     result = await db.execute(select(UserProfile).limit(1))
     profile = result.scalar_one_or_none()
-    
+
     if not profile:
         raise HTTPException(status_code=404, detail="User profile not found")
-    
+
     result = await db.execute(
         select(SystemModification)
         .where(SystemModification.user_id == profile.id)
@@ -218,5 +218,5 @@ async def list_modifications(
         .offset(offset)
     )
     modifications = result.scalars().all()
-    
+
     return ModificationList(data=modifications, total=len(modifications))

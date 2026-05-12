@@ -59,7 +59,7 @@ jobs:
           pip install ruff
 
       - name: Lint backend (ruff)
-        run: cd backend && ruff check . --select E,W,F --ignore E501
+        run: cd backend && ruff check .
 
       - name: Test backend (pytest)
         env:

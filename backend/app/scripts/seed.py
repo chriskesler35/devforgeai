@@ -51,11 +51,11 @@ async def seed():
             session.add_all([ollama, anthropic, google, openrouter])
             await session.commit()
             print("Created 4 providers")
-        
+
         # Get provider IDs
         providers_result = await session.execute(select(Provider))
         providers = {p.name: p.id for p in providers_result.scalars().all()}
-        
+
         # Check if models exist
         result = await session.execute(select(Model).limit(1))
         if result.scalar_one_or_none():
@@ -196,16 +196,16 @@ async def seed():
                     caps.setdefault("tools", True)
                     caps.setdefault("function_calling", True)
                     model.capabilities = caps
-            
+
             session.add_all(models)
             await session.commit()
             print(f"Created {len(models)} models")
-        
+
         # Get model IDs
         models_result = await session.execute(select(Model))
         models_list = models_result.scalars().all()
         models_dict = {m.model_id: m.id for m in models_list}
-        
+
         # Check if personas exist
         result = await session.execute(select(Persona).limit(1))
         if result.scalar_one_or_none():

@@ -857,7 +857,7 @@ async def chat_completions(
 
     persona, primary_model, fallback_model = await resolver.resolve(persona_ref)
     recovery_notice: str | None = None
-    
+
     # Apply model override if specified (user picked a specific model from dropdown)
     if override_ref and persona:
         override_result = await resolve_with_verification(
@@ -888,7 +888,7 @@ async def chat_completions(
                     f"Model '{primary_model.model_id}' has not been explicitly validated yet. "
                     "Using it with live runtime probing for this response."
                 )
-    
+
     if not persona:
         raise HTTPException(
             status_code=404,
@@ -900,7 +900,7 @@ async def chat_completions(
                 }
             }
         )
-    
+
     # If no model assigned, try to get a default model
     if not primary_model:
         # Get first active model as fallback
@@ -909,7 +909,7 @@ async def chat_completions(
             select(Model).where(Model.is_active == True).limit(1)
         )
         primary_model = result.scalar_one_or_none()
-        
+
         if not primary_model:
             raise HTTPException(
                 status_code=503,
@@ -1049,7 +1049,7 @@ async def chat_completions(
                     }
                 }
                 raise HTTPException(status_code=503, detail=detail)
-    
+
     # 2. Handle conversation ID
     conversation_id = conv_id
     if request.conversation_id is None:
@@ -1079,7 +1079,7 @@ async def chat_completions(
 
     # 4. Route request
     router_service = Router(db, memory)
-    
+
     if request.stream:
         return await _stream_response(
             router_service, persona, primary_model, fallback_model,
@@ -1435,7 +1435,7 @@ async def _stream_response(
                 }
             })
             yield f"data: {error_data}\n\n"
-    
+
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",

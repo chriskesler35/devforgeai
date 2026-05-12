@@ -32,7 +32,7 @@ class TestResult:
     duration_ms: Optional[int] = None
     error: Optional[str] = None
     details: dict = field(default_factory=dict)
-    
+
     def to_dict(self) -> dict:
         return asdict(self)
 
@@ -52,11 +52,11 @@ class ModelVerificationResult:
 
 class ModelVerificationService:
     """Verify model capabilities through systematic testing."""
-    
+
     def __init__(self, db: AsyncSession):
         self.db = db
         self.client = ModelClient()
-    
+
     async def verify_model(
         self,
         model: Model,
@@ -65,20 +65,20 @@ class ModelVerificationService:
     ) -> ModelVerificationResult:
         """
         Run full verification suite on a model.
-        
+
         Args:
             model: Model ORM instance
             provider: Provider ORM instance
             test_suite_version: Version identifier for test suite
-            
+
         Returns:
             ModelVerificationResult with all test results and capabilities
         """
         logger.info(f"Verifying model {model.model_id} from {provider.name}")
-        
+
         test_results = {}
         capabilities = {}
-        
+
         # Run all tests
         tests = [
             ("chat_basic", self.test_chat_basic),
@@ -91,7 +91,7 @@ class ModelVerificationService:
             ("timeout", self.test_timeout),
             ("connectivity", self.test_connectivity),
         ]
-        
+
         for test_name, test_func in tests:
             try:
                 result = await test_func(model, provider)
@@ -104,17 +104,17 @@ class ModelVerificationService:
                     "error": str(e),
                     "duration_ms": None
                 }
-        
+
         # Infer capabilities from results
         capabilities = self._infer_capabilities(test_results)
-        
+
         # Determine overall status
         failures = [r for r in test_results.values() if r.get("status") == "fail"]
         verification_status = "verified" if not failures else "failed"
-        
+
         notes = self._generate_notes(test_results, capabilities)
         recommendations = self._generate_recommendations(capabilities)
-        
+
         result = ModelVerificationResult(
             model_id=model.model_id,
             provider_name=provider.name,
@@ -125,12 +125,12 @@ class ModelVerificationService:
             fallback_recommendations=recommendations,
             verified_at=datetime.now(timezone.utc)
         )
-        
+
         # Store in DB
         await self._store_verification(model, result, test_suite_version)
-        
+
         return result
-    
+
     async def test_chat_basic(self, model: Model, provider: Provider) -> TestResult:
         """Test basic text chat."""
         start = time.time()
@@ -138,7 +138,7 @@ class ModelVerificationService:
             api_key = get_provider_api_key(provider.name)
             if not api_key:
                 return TestResult(status="skip", details={"reason": "No API key"})
-            
+
             # Simple chat call
             response = await self.client.chat(
                 provider=provider.name,
@@ -147,7 +147,7 @@ class ModelVerificationService:
                 api_key=api_key,
                 timeout=10
             )
-            
+
             duration_ms = int((time.time() - start) * 1000)
             if response and response.choices and response.choices[0].message.content:
                 return TestResult(status="pass", duration_ms=duration_ms)
@@ -156,7 +156,7 @@ class ModelVerificationService:
         except Exception as e:
             duration_ms = int((time.time() - start) * 1000)
             return TestResult(status="fail", duration_ms=duration_ms, error=str(e))
-    
+
     async def test_chat_streaming(self, model: Model, provider: Provider) -> TestResult:
         """Test streaming chat."""
         start = time.time()
@@ -164,7 +164,7 @@ class ModelVerificationService:
             api_key = get_provider_api_key(provider.name)
             if not api_key:
                 return TestResult(status="skip", details={"reason": "No API key"})
-            
+
             # Streaming chat call
             chunks_received = 0
             async for chunk in self.client.chat_stream(
@@ -176,7 +176,7 @@ class ModelVerificationService:
             ):
                 if chunk and chunk.choices and chunk.choices[0].delta.content:
                     chunks_received += 1
-            
+
             duration_ms = int((time.time() - start) * 1000)
             if chunks_received > 0:
                 return TestResult(status="pass", duration_ms=duration_ms, details={"chunks": chunks_received})
@@ -185,7 +185,7 @@ class ModelVerificationService:
         except Exception as e:
             duration_ms = int((time.time() - start) * 1000)
             return TestResult(status="fail", duration_ms=duration_ms, error=str(e))
-    
+
     async def test_chat_non_streaming(self, model: Model, provider: Provider) -> TestResult:
         """Test non-streaming chat."""
         start = time.time()
@@ -193,7 +193,7 @@ class ModelVerificationService:
             api_key = get_provider_api_key(provider.name)
             if not api_key:
                 return TestResult(status="skip", details={"reason": "No API key"})
-            
+
             # Non-streaming chat call
             response = await self.client.chat(
                 provider=provider.name,
@@ -203,7 +203,7 @@ class ModelVerificationService:
                 timeout=10,
                 stream=False
             )
-            
+
             duration_ms = int((time.time() - start) * 1000)
             if response and response.choices and response.choices[0].message.content:
                 return TestResult(status="pass", duration_ms=duration_ms)
@@ -212,22 +212,22 @@ class ModelVerificationService:
         except Exception as e:
             duration_ms = int((time.time() - start) * 1000)
             return TestResult(status="fail", duration_ms=duration_ms, error=str(e))
-    
+
     async def test_vision(self, model: Model, provider: Provider) -> TestResult:
         """Test vision capability (if supported)."""
         # Check if model supports vision
         if not model.capabilities or not model.capabilities.get("vision"):
             return TestResult(status="skip", details={"reason": "Model does not support vision"})
-        
+
         start = time.time()
         try:
             api_key = get_provider_api_key(provider.name)
             if not api_key:
                 return TestResult(status="skip", details={"reason": "No API key"})
-            
+
             # Vision call with a simple test image (base64)
             test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFhAJ/wlseKgAAAABJRU5ErkJggg=="
-            
+
             response = await self.client.chat(
                 provider=provider.name,
                 model=model.model_id,
@@ -239,7 +239,7 @@ class ModelVerificationService:
                 api_key=api_key,
                 timeout=15
             )
-            
+
             duration_ms = int((time.time() - start) * 1000)
             if response and response.choices and response.choices[0].message.content:
                 return TestResult(status="pass", duration_ms=duration_ms)
@@ -248,18 +248,18 @@ class ModelVerificationService:
         except Exception as e:
             duration_ms = int((time.time() - start) * 1000)
             return TestResult(status="fail", duration_ms=duration_ms, error=str(e))
-    
+
     async def test_embeddings(self, model: Model, provider: Provider) -> TestResult:
         """Test embeddings capability (if supported)."""
         if not model.capabilities or not model.capabilities.get("embeddings"):
             return TestResult(status="skip", details={"reason": "Model does not support embeddings"})
-        
+
         start = time.time()
         try:
             api_key = get_provider_api_key(provider.name)
             if not api_key:
                 return TestResult(status="skip", details={"reason": "No API key"})
-            
+
             # Embeddings call
             response = await self.client.embeddings(
                 provider=provider.name,
@@ -268,7 +268,7 @@ class ModelVerificationService:
                 api_key=api_key,
                 timeout=10
             )
-            
+
             duration_ms = int((time.time() - start) * 1000)
             if response and response.data:
                 return TestResult(status="pass", duration_ms=duration_ms, details={"dimensions": len(response.data[0].embedding)})
@@ -277,18 +277,18 @@ class ModelVerificationService:
         except Exception as e:
             duration_ms = int((time.time() - start) * 1000)
             return TestResult(status="fail", duration_ms=duration_ms, error=str(e))
-    
+
     async def test_function_calling(self, model: Model, provider: Provider) -> TestResult:
         """Test function calling (if supported)."""
         if not model.capabilities or not model.capabilities.get("function_calling"):
             return TestResult(status="skip", details={"reason": "Model does not support function calling"})
-        
+
         start = time.time()
         try:
             api_key = get_provider_api_key(provider.name)
             if not api_key:
                 return TestResult(status="skip", details={"reason": "No API key"})
-            
+
             # Function calling test
             functions = [
                 {
@@ -303,7 +303,7 @@ class ModelVerificationService:
                     }
                 }
             ]
-            
+
             response = await self.client.chat(
                 provider=provider.name,
                 model=model.model_id,
@@ -312,7 +312,7 @@ class ModelVerificationService:
                 api_key=api_key,
                 timeout=15
             )
-            
+
             duration_ms = int((time.time() - start) * 1000)
             if response and response.choices:
                 if response.choices[0].message.function_call or response.choices[0].message.tool_calls:
@@ -325,7 +325,7 @@ class ModelVerificationService:
         except Exception as e:
             duration_ms = int((time.time() - start) * 1000)
             return TestResult(status="fail", duration_ms=duration_ms, error=str(e))
-    
+
     async def test_error_handling(self, model: Model, provider: Provider) -> TestResult:
         """Test error handling (invalid input)."""
         start = time.time()
@@ -333,10 +333,11 @@ class ModelVerificationService:
             api_key = get_provider_api_key(provider.name)
             if not api_key:
                 return TestResult(status="skip", details={"reason": "No API key"})
-            
-            # Send invalid request
+
+            # Send invalid request — we intentionally discard the response
+            # because we're verifying that the call raises the expected error.
             try:
-                response = await self.client.chat(
+                _ = await self.client.chat(
                     provider=provider.name,
                     model="invalid-model-that-does-not-exist",
                     messages=[{"role": "user", "content": "Hi"}],
@@ -356,7 +357,7 @@ class ModelVerificationService:
         except Exception as e:
             duration_ms = int((time.time() - start) * 1000)
             return TestResult(status="fail", duration_ms=duration_ms, error=str(e))
-    
+
     async def test_timeout(self, model: Model, provider: Provider) -> TestResult:
         """Test timeout handling."""
         start = time.time()
@@ -364,12 +365,13 @@ class ModelVerificationService:
             api_key = get_provider_api_key(provider.name)
             if not api_key:
                 return TestResult(status="skip", details={"reason": "No API key"})
-            
-            # Long prompt with short timeout
+
+            # Long prompt with short timeout — we discard the response because
+            # the success criterion is "completes without timeout error".
             long_prompt = "Explain quantum computing in 100 words: " + ("x" * 5000)
-            
+
             try:
-                response = await self.client.chat(
+                _ = await self.client.chat(
                     provider=provider.name,
                     model=model.model_id,
                     messages=[{"role": "user", "content": long_prompt}],
@@ -386,14 +388,14 @@ class ModelVerificationService:
         except Exception as e:
             duration_ms = int((time.time() - start) * 1000)
             return TestResult(status="fail", duration_ms=duration_ms, error=str(e))
-    
+
     async def test_connectivity(self, model: Model, provider: Provider) -> TestResult:
         """Test provider connectivity."""
         start = time.time()
         try:
             if not provider.api_base_url:
                 return TestResult(status="skip", details={"reason": "No API base URL"})
-            
+
             # Simple HTTP HEAD/GET to provider endpoint
             async with httpx.AsyncClient() as client:
                 response = await client.head(provider.api_base_url, timeout=5)
@@ -405,7 +407,7 @@ class ModelVerificationService:
         except Exception as e:
             duration_ms = int((time.time() - start) * 1000)
             return TestResult(status="fail", duration_ms=duration_ms, error=str(e))
-    
+
     async def _store_verification(
         self,
         model: Model,
@@ -415,9 +417,9 @@ class ModelVerificationService:
         """Store verification result in DB."""
         stmt = select(ModelVerification).where(ModelVerification.model_id == model.id)
         verification = (await self.db.execute(stmt)).scalars().first()
-        
+
         test_results_dict = {k: v for k, v in result.test_results.items()}
-        
+
         if verification:
             # Update existing
             await self.db.execute(
@@ -448,9 +450,9 @@ class ModelVerificationService:
                 verified_by=test_suite_version
             )
             self.db.add(verification)
-        
+
         await self.db.commit()
-    
+
     def _infer_capabilities(self, test_results: dict[str, dict]) -> dict[str, bool]:
         """Infer model capabilities from test results."""
         return {
@@ -460,14 +462,14 @@ class ModelVerificationService:
             "embeddings": test_results.get("embeddings", {}).get("status") == "pass",
             "function_calling": test_results.get("function_calling", {}).get("status") == "pass",
         }
-    
+
     def _generate_notes(self, test_results: dict[str, dict], capabilities: dict[str, bool]) -> Optional[str]:
         """Generate human-readable notes."""
         failures = [k for k, v in test_results.items() if v.get("status") == "fail"]
         if failures:
             return f"Failed tests: {', '.join(failures)}"
         return None
-    
+
     def _generate_recommendations(self, capabilities: dict[str, bool]) -> Optional[str]:
         """Generate fallback recommendations."""
         if not capabilities.get("vision"):
@@ -475,7 +477,7 @@ class ModelVerificationService:
         if not capabilities.get("streaming"):
             return "For streaming, consider models with streaming support"
         return None
-    
+
     async def verify_models_batch(
         self,
         models: list[tuple[Model, Provider]],
@@ -484,7 +486,7 @@ class ModelVerificationService:
         """Verify multiple models in parallel."""
         results = {}
         semaphore = asyncio.Semaphore(concurrency)
-        
+
         async def verify_with_semaphore(model, provider):
             async with semaphore:
                 try:
@@ -492,6 +494,6 @@ class ModelVerificationService:
                     results[f"{provider.name}/{model.model_id}"] = result
                 except Exception as e:
                     logger.error(f"Error verifying {provider.name}/{model.model_id}: {e}")
-        
+
         await asyncio.gather(*[verify_with_semaphore(m, p) for m, p in models])
         return results

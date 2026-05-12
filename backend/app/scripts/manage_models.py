@@ -37,7 +37,7 @@ async def show_status():
             .join(Provider, Model.provider_id == Provider.id)
             .order_by(Provider.name, Model.model_id)
         )
-        
+
         models_by_provider = {}
         for model, provider in result:
             if provider.name not in models_by_provider:
@@ -46,7 +46,7 @@ async def show_status():
                     "active": [],
                     "inactive": [],
                 }
-            
+
             entry = {
                 "id": str(model.id),
                 "model_id": model.model_id,
@@ -58,20 +58,20 @@ async def show_status():
                 models_by_provider[provider.name]["active"].append(entry)
             else:
                 models_by_provider[provider.name]["inactive"].append(entry)
-        
+
         print("\n" + "="*100)
         print("MODEL INVENTORY BY PROVIDER")
         print("="*100)
-        
+
         for provider_name in sorted(models_by_provider.keys()):
             data = models_by_provider[provider_name]
             active = data["active"]
             inactive = data["inactive"]
             total = len(active) + len(inactive)
-            
+
             print(f"\n📦 {provider_name.upper()} - {len(active)} active, {len(inactive)} inactive (total: {total})")
             print("-" * 100)
-            
+
             if active:
                 print("  ACTIVE MODELS:")
                 for m in active[:10]:  # Show first 10
@@ -79,10 +79,10 @@ async def show_status():
                     print(f"    {status_badge} {m['model_id']:<40} [{m['validation_status']}]")
                 if len(active) > 10:
                     print(f"    ... and {len(active) - 10} more")
-            
+
             if inactive:
                 print(f"  INACTIVE MODELS: {len(inactive)} (marked unavailable)")
-        
+
         print("\n" + "="*100)
 
 
@@ -92,27 +92,27 @@ async def cleanup_and_resync():
         # Get counts before
         result = await session.execute(select(Model))
         models_before = len(list(result.scalars().all()))
-        
+
         print("\n" + "⚠️ " * 40)
         print("DESTRUCTIVE OPERATION: Deleting all models from database")
         print("⚠️ " * 40)
         print(f"\nModels in DB: {models_before}")
         print("This will delete all {0} models and perform a fresh sync.".format(models_before))
         print("\nReferences in personas, agents, and logs will be set to NULL.")
-        
+
         response = input("\n⛔ Are you SURE you want to proceed? (type 'yes' to confirm): ")
         if response.strip().lower() != "yes":
             print("Cleanup cancelled.")
             return
-        
+
         logger.warning("=== DESTRUCTIVE MODEL CLEANUP STARTING ===")
         print("\n[1/3] Deleting all models...")
-        
+
         # Delete all models
         result = await session.execute(delete(Model))
         deleted_count = result.rowcount
         print(f"  ✓ Deleted {deleted_count} models")
-        
+
         # Reset providers
         print("[2/3] Resetting provider configuration...")
         result_providers = await session.execute(select(Provider))
@@ -121,12 +121,12 @@ async def cleanup_and_resync():
             provider.is_active = True
         await session.flush()
         print(f"  ✓ Reset {len(list(result_providers.scalars().all()))} providers")
-        
+
         print("[3/3] Running fresh sync from provider catalogs...")
         try:
             sync_result = await run_model_sync(session, deduplicate_existing=False)
             await session.commit()
-            
+
             print("\n" + "="*100)
             print("✓ CLEANUP AND RESYNC COMPLETE")
             print("="*100)
@@ -134,7 +134,7 @@ async def cleanup_and_resync():
             print(f"Added:       {len(sync_result['added'])} fresh models")
             print(f"Ollama:      {sync_result['ollama_models']} models")
             print(f"Paid APIs:   {sync_result['paid_models']} models")
-            
+
             if sync_result['provider_details']:
                 print("\nPer-Provider Summary:")
                 for prov, details in sync_result['provider_details'].items():
@@ -143,14 +143,14 @@ async def cleanup_and_resync():
                         print(f"  • {prov:20} {status:12} | Discovered: {details['discovered']:3} | Added: {details['added']:3} | Deprecated: {details['deprecated_skipped']:3}")
                     else:
                         print(f"  • {prov:20} ✗ NOT CONFIGURED (no API key)")
-            
+
             print(f"\nErrors: {len(sync_result['errors'])}")
             if sync_result['errors']:
                 for err in sync_result['errors']:
                     print(f"  ! {err}")
-            
+
             print("\n" + "="*100)
-            
+
         except Exception as e:
             logger.error(f"Fresh sync failed: {e}")
             await session.rollback()
@@ -164,10 +164,10 @@ async def run_sync_only():
     async with AsyncSessionLocal() as session:
         print("\n[*] Running standard model sync (upsert mode)...")
         print("    This will ADD new models and UPDATE existing ones, but NOT delete.")
-        
+
         sync_result = await run_model_sync(session, deduplicate_existing=True)
         await session.commit()
-        
+
         print("\n" + "="*100)
         print("✓ MODEL SYNC COMPLETE")
         print("="*100)
@@ -176,7 +176,7 @@ async def run_sync_only():
         print(f"Ollama:      {sync_result['ollama_models']} models")
         print(f"Paid APIs:   {sync_result['paid_models']} models")
         print("Deactivated: (models no longer in provider catalogs)")
-        
+
         if sync_result['provider_details']:
             print("\nPer-Provider Summary:")
             for prov, details in sync_result['provider_details'].items():
@@ -185,12 +185,12 @@ async def run_sync_only():
                     print(f"  • {prov:20} {status:12} | Discovered: {details['discovered']:3} | Added: {details['added']:3} | Deactivated: {details['deactivated']:3}")
                 else:
                     print(f"  • {prov:20} ✗ NOT CONFIGURED (no API key)")
-        
+
         print(f"\nErrors: {len(sync_result['errors'])}")
         if sync_result['errors']:
             for err in sync_result['errors']:
                 print(f"  ! {err}")
-        
+
         print("\n" + "="*100)
 
 
@@ -199,9 +199,9 @@ async def main():
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)
-    
+
     command = sys.argv[1].lower()
-    
+
     try:
         if command == "status":
             await show_status()

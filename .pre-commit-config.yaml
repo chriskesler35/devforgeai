@@ -3,6 +3,6 @@ repos:
     rev: v0.15.12
     hooks:
       - id: ruff
-        name: ruff (backend lint; matches CI E/W/F rules)
+        name: ruff (backend lint; reads backend/pyproject.toml)
         files: ^backend/.*\.py$
-        args: [check, --select=E,W,F, --ignore=E501]
+        args: [check, --config=backend/pyproject.toml]
