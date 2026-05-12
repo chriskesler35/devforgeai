@@ -112,6 +112,28 @@ export function validateModelOverride(
 }
 
 /**
+ * Decorate an option label so the user can tell at a glance which dropdown
+ * entries aren't runtime-usable. Returns the model's display label plus a
+ * short suffix when gated. Use in `<option>{decorateOptionLabel(m)}</option>`.
+ *
+ * Pairs with `<option disabled={!isModelRuntimeUsable(m).usable}>` to make
+ * the gate enforceable, not just informational.
+ */
+export function decorateOptionLabel(model: ModelRuntimeView): string {
+  const label = model.display_name || model.model_id
+  const r = isModelRuntimeUsable(model)
+  if (r.usable) return label
+  switch (r.reason) {
+    case 'catalog-only':
+      return `${label} (catalog-only — not in live API)`
+    case 'deactivated':
+      return `${label} (deactivated)`
+    default:
+      return label
+  }
+}
+
+/**
  * Human-readable explanation for each failure reason. Use when surfacing
  * a toast or status badge.
  */

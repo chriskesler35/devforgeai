@@ -1,6 +1,7 @@
 'use client'
 
 import { API_BASE, AUTH_HEADERS } from '@/lib/config'
+import { decorateOptionLabel, isModelRuntimeUsable } from '@/lib/modelRuntimeReadiness'
 
 import { ModelFitnessCheck } from '@/components/ModelFitnessCheck'
 import { useState, useEffect, useMemo } from 'react'
@@ -53,6 +54,8 @@ interface Model {
   model_id: string
   display_name?: string
   provider_name?: string
+  is_active?: boolean
+  _from_static_catalog?: boolean
 }
 
 export default function PersonaDetailPage() {
@@ -277,11 +280,15 @@ export default function PersonaDetailPage() {
                 <option value="">Select a model</option>
                 {Object.entries(modelsByProvider).map(([provider, providerModels]) => (
                   <optgroup key={provider} label={provider.charAt(0).toUpperCase() + provider.slice(1)}>
-                    {providerModels.map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {model.display_name || model.model_id}
-                      </option>
-                    ))}
+                    {providerModels.map((model) => {
+                      const view = { ...model, is_active: model.is_active !== false }
+                      const usable = isModelRuntimeUsable(view).usable
+                      return (
+                        <option key={model.id} value={model.id} disabled={!usable}>
+                          {decorateOptionLabel(view)}
+                        </option>
+                      )
+                    })}
                   </optgroup>
                 ))}
               </select>
@@ -303,11 +310,15 @@ export default function PersonaDetailPage() {
                 <option value="">No fallback</option>
                 {Object.entries(modelsByProvider).map(([provider, providerModels]) => (
                   <optgroup key={provider} label={provider.charAt(0).toUpperCase() + provider.slice(1)}>
-                    {providerModels.map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {model.display_name || model.model_id}
-                      </option>
-                    ))}
+                    {providerModels.map((model) => {
+                      const view = { ...model, is_active: model.is_active !== false }
+                      const usable = isModelRuntimeUsable(view).usable
+                      return (
+                        <option key={model.id} value={model.id} disabled={!usable}>
+                          {decorateOptionLabel(view)}
+                        </option>
+                      )
+                    })}
                   </optgroup>
                 ))}
               </select>

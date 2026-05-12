@@ -1,6 +1,7 @@
 'use client'
 
 import { API_BASE, AUTH_HEADERS } from '@/lib/config'
+import { decorateOptionLabel, isModelRuntimeUsable } from '@/lib/modelRuntimeReadiness'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
@@ -23,7 +24,7 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
 const ALL_TOOLS = Object.keys(TOOL_DESCRIPTIONS)
 
 interface Persona { id: string; name: string; description?: string; is_default?: boolean }
-interface ModelOption { id: string; model_id: string; display_name?: string; provider_name?: string }
+interface ModelOption { id: string; model_id: string; display_name?: string; provider_name?: string; is_active?: boolean; _from_static_catalog?: boolean }
 
 interface AgentData {
   id: string; name: string; agent_type: string; description?: string
@@ -795,11 +796,15 @@ export default function AgentDetailPage() {
                   }, {} as Record<string, ModelOption[]>)
                 ).map(([provider, providerModels]) => (
                   <optgroup key={provider} label={provider.charAt(0).toUpperCase() + provider.slice(1)}>
-                    {providerModels.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.display_name || m.model_id}
-                      </option>
-                    ))}
+                    {providerModels.map((m) => {
+                      const view = { ...m, is_active: m.is_active !== false }
+                      const usable = isModelRuntimeUsable(view).usable
+                      return (
+                        <option key={m.id} value={m.id} disabled={!usable}>
+                          {decorateOptionLabel(view)}
+                        </option>
+                      )
+                    })}
                   </optgroup>
                 ))}
               </select>

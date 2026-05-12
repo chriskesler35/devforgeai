@@ -2,7 +2,7 @@
 
 import { API_BASE, API_KEY, AUTH_HEADERS, getApiBase, probeAndCacheApiBase } from '@/lib/config'
 import { filterModelsByCatalogFeature } from '@/lib/modelCatalog'
-import { validateModelOverride, explainReason } from '@/lib/modelRuntimeReadiness'
+import { validateModelOverride, explainReason, decorateOptionLabel, isModelRuntimeUsable } from '@/lib/modelRuntimeReadiness'
 import VoiceMode, { VoiceModeToggle } from '@/components/VoiceMode'
 import MediaConverterModal from '@/components/MediaConverterModal'
 
@@ -303,9 +303,19 @@ function Sidebar({
                 }, {})
               ).map(([group, ms]) => (
                 <optgroup key={group} label={group}>
-                  {(ms as Model[]).map(m => (
-                    <option key={m.id} value={`${m.provider_name || 'unknown'}/${m.model_id}`}>{m.display_name || m.model_id}</option>
-                  ))}
+                  {(ms as Model[]).map(m => {
+                    const usable = isModelRuntimeUsable(m).usable
+                    return (
+                      <option
+                        key={m.id}
+                        value={`${m.provider_name || 'unknown'}/${m.model_id}`}
+                        disabled={!usable}
+                        title={usable ? undefined : 'Not currently runtime-usable'}
+                      >
+                        {decorateOptionLabel(m)}
+                      </option>
+                    )
+                  })}
                 </optgroup>
               ))}
             </select>

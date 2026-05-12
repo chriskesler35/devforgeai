@@ -9,6 +9,7 @@ import assert from 'node:assert/strict'
 import {
   isModelRuntimeUsable,
   validateModelOverride,
+  decorateOptionLabel,
   type ModelRuntimeView,
 } from './modelRuntimeReadiness'
 
@@ -99,4 +100,23 @@ test('validateModelOverride: UUID selection format also resolves correctly', () 
   // Slash command `/model <uuid>` would pass the UUID directly.
   const r = validateModelOverride('uuid-live', [LIVE])
   assert.equal(r.valid, true)
+})
+
+// ─── decorateOptionLabel ─────────────────────────────────────────────────────
+
+test('decorateOptionLabel: live model returns unadorned label', () => {
+  assert.equal(decorateOptionLabel(LIVE), 'claude-3-5-sonnet')
+})
+
+test('decorateOptionLabel: live model with display_name uses display_name', () => {
+  const m: ModelRuntimeView = { ...LIVE, display_name: 'Claude 3.5 Sonnet' }
+  assert.equal(decorateOptionLabel(m), 'Claude 3.5 Sonnet')
+})
+
+test('decorateOptionLabel: catalog-only model gets explanatory suffix', () => {
+  assert.match(decorateOptionLabel(STATIC_ONLY), /catalog-only/i)
+})
+
+test('decorateOptionLabel: deactivated model gets deactivated suffix', () => {
+  assert.match(decorateOptionLabel(INACTIVE), /deactivated/i)
 })
