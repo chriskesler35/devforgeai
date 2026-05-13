@@ -41,6 +41,14 @@ class RunApprovalAction(BaseModel):
     edit_payload: Optional[dict[str, Any]] = None
 
 
+class RunEditRetry(BaseModel):
+    new_prompt: str
+
+
+class RunSwapModel(BaseModel):
+    model_id: str
+
+
 # ---------------------------------------------------------------------------
 # Output schemas
 # ---------------------------------------------------------------------------

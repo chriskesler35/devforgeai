@@ -14,6 +14,7 @@ from app.schemas.run import (
     RunMessageIn, RunMessageOut,
     RunAttachMethod, RunFork, RunApprovalAction,
     RunPhaseOut, RunEventSummary, RunEventFull,
+    RunEditRetry, RunSwapModel,
 )
 from app.services import runs as run_svc
 from app.services import run_events
@@ -226,6 +227,28 @@ async def approve(run_id: str, body: RunApprovalAction, db: AsyncSession = Depen
     await db.commit()
     await db.refresh(run)
     return run
+
+
+# ---------------------------------------------------------------------------
+# Power tools
+# ---------------------------------------------------------------------------
+
+@router.post("/{run_id}/events/{event_id}/edit-retry", response_model=RunEventSummary, dependencies=[Depends(verify_api_key)])
+async def edit_retry(run_id: str, event_id: str, body: RunEditRetry, db: AsyncSession = Depends(get_db)):
+    run = await run_svc.get_run(db, run_id)
+    event = await run_svc.edit_retry(db, run, event_id, body.new_prompt)
+    await db.commit()
+    await db.refresh(event)
+    return event
+
+
+@router.post("/{run_id}/phases/{phase_id}/swap-model", response_model=RunPhaseOut, dependencies=[Depends(verify_api_key)])
+async def swap_model(run_id: str, phase_id: str, body: RunSwapModel, db: AsyncSession = Depends(get_db)):
+    run = await run_svc.get_run(db, run_id)
+    phase = await run_svc.swap_model(db, run, phase_id, body.model_id)
+    await db.commit()
+    await db.refresh(phase)
+    return phase
 
 
 # ---------------------------------------------------------------------------

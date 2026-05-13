@@ -236,6 +236,8 @@ function SandboxPanel({ projectId }: { projectId: string }) {
 
 
 interface FileNode { name: string; path: string; type: 'file' | 'dir'; size: number; children?: FileNode[] }
+// TODO(Chunk 12): Replace legacy Pipelines/Sessions list with Runs list
+// See docs/superpowers/specs/2026-05-12-the-run-design.md §9.3
 interface WorkbenchSessionLite {
   id: string
   project_id: string | null

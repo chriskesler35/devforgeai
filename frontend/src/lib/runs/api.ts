@@ -135,3 +135,25 @@ export async function forkRun(runId: string, eventId: string): Promise<Run> {
     body: JSON.stringify({ event_id: eventId }),
   })
 }
+
+export async function editRetry(
+  runId: string,
+  eventId: string,
+  newPrompt: string,
+): Promise<RunEventSummary> {
+  return request<RunEventSummary>(`${BASE()}/${runId}/events/${eventId}/edit-retry`, {
+    method: 'POST',
+    body: JSON.stringify({ new_prompt: newPrompt }),
+  })
+}
+
+export async function swapModel(
+  runId: string,
+  phaseId: string,
+  modelId: string,
+): Promise<unknown> {
+  return request(`${BASE()}/${runId}/phases/${phaseId}/swap-model`, {
+    method: 'POST',
+    body: JSON.stringify({ model_id: modelId }),
+  })
+}

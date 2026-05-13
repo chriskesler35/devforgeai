@@ -342,3 +342,63 @@ async def handle_slash_command(
         return {"handled": True, "action": "method_attached", "method_id": run.method_id}
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Power tools
+# ---------------------------------------------------------------------------
+
+def _require_power_tools(run: Run) -> None:
+    if not run.power_tools_enabled:
+        raise HTTPException(status_code=403, detail="Power tools disabled for this Run")
+
+
+async def edit_retry(
+    db: AsyncSession,
+    run: Run,
+    event_id: str,
+    new_prompt: str,
+) -> RunEvent:
+    _require_power_tools(run)
+
+    event = await db.get(RunEvent, event_id)
+    if not event or event.run_id != run.id:
+        raise HTTPException(status_code=404, detail="Event not found in this Run")
+
+    from app.services.run_events import emit
+    intervention = await emit(
+        db, run.id, "user_intervention",
+        summary=f"Edit & retry on event {event_id[:8]}",
+        payload={"original_event_id": event_id, "new_prompt": new_prompt},
+        phase_id=event.phase_id,
+    )
+    return intervention
+
+
+async def swap_model(
+    db: AsyncSession,
+    run: Run,
+    phase_id: str,
+    model_id: str,
+) -> RunPhase:
+    _require_power_tools(run)
+
+    q = select(RunPhase).where(
+        and_(RunPhase.run_id == run.id, RunPhase.id == phase_id)
+    )
+    result = await db.execute(q)
+    phase = result.scalars().first()
+    if not phase:
+        raise HTTPException(status_code=404, detail="Phase not found in this Run")
+
+    phase.model_id = model_id
+    await db.flush()
+
+    from app.services.run_events import emit
+    await emit(
+        db, run.id, "user_intervention",
+        summary=f"Model swapped to {model_id} on phase '{phase.name}'",
+        phase_id=phase_id,
+        payload={"action": "swap_model", "model_id": model_id},
+    )
+    return phase
