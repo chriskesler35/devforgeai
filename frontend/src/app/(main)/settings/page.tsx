@@ -21,6 +21,9 @@ import { ApiKeysTab, normalizeProviderSlug, type ProviderSlug } from '@/componen
 import { ConversationsTab } from '@/components/settings/ConversationsTab'
 // ─── Identity Tab ─────────────────────────────────────────────────────────────
 import { IdentityTab } from '@/components/settings/IdentityTab'
+import { BudgetTab } from '@/components/settings/BudgetTab'
+import { ProfileTab } from '@/components/settings/ProfileTab'
+import { MemoryTab } from '@/components/settings/MemoryTab'
 // ─── Server Tab ───────────────────────────────────────────────────────────────
 import { ServerTab } from '@/components/settings/ServerTab'
 
@@ -400,152 +403,28 @@ function SettingsPageContent() {
 
       {/* Profile Tab */}
       {activeTab === 'profile' && (
-        <div className="bg-white shadow sm:rounded-lg">
-          <div className="px-4 py-5 sm:p-6">
-            <div className="flex items-center justify-between mb-1">
-              <h3 className="text-lg font-medium text-gray-900">User Profile</h3>
-              {profileSaved && <span className="text-sm text-green-600 font-medium animate-pulse">Saved!</span>}
-            </div>
-            <p className="mt-1 text-sm text-gray-500 mb-4">
-              Saved here and synced to your AI's USER.md so it knows who you are.
-            </p>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Name</label>
-                <input
-                  type="text"
-                  value={profile?.name || ''}
-                  onChange={(e) => setProfile({ ...profile!, name: e.target.value })}
-                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Email</label>
-                <input
-                  type="email"
-                  value={profile?.email || ''}
-                  onChange={(e) => setProfile({ ...profile!, email: e.target.value })}
-                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-                />
-              </div>
-              <div className="pt-1">
-                <p className="text-xs text-gray-400 mb-3">
-                  💡 For richer context (timezone, preferences, projects), use <strong>Settings → Identity → Your Profile</strong> to edit USER.md directly.
-                </p>
-                <button
-                  type="button"
-                  onClick={saveProfile}
-                  disabled={profileSaving}
-                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300"
-                >
-                  {profileSaving ? 'Saving…' : 'Save Profile'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <ProfileTab
+          profile={profile}
+          setProfile={setProfile}
+          profileSaving={profileSaving}
+          profileSaved={profileSaved}
+          onSave={saveProfile}
+        />
       )}
 
       {/* Memory Files Tab */}
       {activeTab === 'memory' && (
-        <div className="space-y-6">
-          <div className="bg-white shadow sm:rounded-lg">
-            <div className="px-4 py-5 sm:p-6">
-              <h3 className="text-lg font-medium text-gray-900">Memory Files</h3>
-              <p className="mt-1 text-sm text-gray-500">
-                Memory files are injected into AI system prompts to provide context and personalization.
-              </p>
-
-              {/* Create new file */}
-              <div className="mt-4 flex gap-2">
-                <input
-                  type="text"
-                  placeholder="New file name (e.g., USER.md, CONTEXT.md)"
-                  value={newFileName}
-                  onChange={(e) => setNewFileName(e.target.value)}
-                  className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-                />
-                <button
-                  onClick={() => newFileName && createMemoryFile(newFileName)}
-                  disabled={!newFileName}
-                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300"
-                >
-                  Create
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Memory files list */}
-          {memoryFiles.map((file) => (
-            <div key={file.id} className="bg-white shadow sm:rounded-lg">
-              <div className="px-4 py-5 sm:p-6">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <h4 className="text-sm font-medium text-gray-900">{file.name}</h4>
-                    {file.description && (
-                      <p className="text-sm text-gray-500">{file.description}</p>
-                    )}
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => setEditingFile(file)}
-                      className="text-sm text-indigo-600 hover:text-indigo-500"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      onClick={() => deleteMemoryFile(file.id)}
-                      className="text-sm text-red-600 hover:text-red-500"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-
-                {editingFile?.id === file.id ? (
-                  <div className="mt-4">
-                    <textarea
-                      value={file.content}
-                      onChange={(e) => {
-                        const updated = memoryFiles.map(f => 
-                          f.id === file.id ? { ...f, content: e.target.value } : f
-                        )
-                        setMemoryFiles(updated)
-                      }}
-                      rows={10}
-                      className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 font-mono text-sm"
-                    />
-                    <div className="mt-2 flex gap-2">
-                      <button
-                        onClick={() => updateMemoryFile(file)}
-                        className="inline-flex items-center px-3 py-1.5 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700"
-                      >
-                        Save
-                      </button>
-                      <button
-                        onClick={() => setEditingFile(null)}
-                        className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <pre className="mt-2 text-sm text-gray-600 whitespace-pre-wrap line-clamp-3">
-                    {file.content}
-                  </pre>
-                )}
-              </div>
-            </div>
-          ))}
-
-          {memoryFiles.length === 0 && (
-            <div className="text-center py-8">
-              <p className="text-sm text-gray-500">No memory files yet. Create one to personalize your AI interactions.</p>
-            </div>
-          )}
-        </div>
+        <MemoryTab
+          memoryFiles={memoryFiles}
+          setMemoryFiles={setMemoryFiles}
+          editingFile={editingFile}
+          setEditingFile={setEditingFile}
+          newFileName={newFileName}
+          setNewFileName={setNewFileName}
+          onCreate={createMemoryFile}
+          onUpdate={updateMemoryFile}
+          onDelete={deleteMemoryFile}
+        />
       )}
 
       {/* Preferences Tab */}
@@ -603,63 +482,14 @@ function SettingsPageContent() {
 
       {/* Budget Tab */}
       {activeTab === 'budget' && (
-        <div>
-          <div className="mb-6">
-            <h2 className="text-lg font-semibold text-gray-900">Budget Threshold</h2>
-            <p className="text-sm text-gray-500 mt-1">Set a monthly budget limit. The Stats page will warn you if projected costs exceed this amount.</p>
-          </div>
-          <div className="bg-white shadow sm:rounded-lg">
-            <div className="px-4 py-5 sm:p-6">
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Monthly Budget Limit ($)</label>
-                  <div className="mt-1 relative rounded-md shadow-sm">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                      <span className="text-gray-500 sm:text-sm">$</span>
-                    </div>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={budgetLimit}
-                      onChange={(e) => setBudgetLimit(e.target.value)}
-                      placeholder="e.g. 50.00"
-                      className="block w-full pl-7 pr-12 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-                    />
-                  </div>
-                  <p className="mt-1 text-xs text-gray-400">
-                    Leave empty or set to 0 to disable budget warnings.
-                  </p>
-                </div>
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={async () => {
-                      setBudgetSaving(true)
-                      try {
-                        await fetch(`${API_BASE}/v1/stats/budget`, {
-                          method: 'PATCH',
-                          headers: { 'Authorization': 'Bearer modelmesh_local_dev_key', 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ budget_limit: parseFloat(budgetLimit) || 0 }),
-                        })
-                        setBudgetSaved(true)
-                        setTimeout(() => setBudgetSaved(false), 2500)
-                      } catch (e) {
-                        console.error('Failed to save budget:', e)
-                      } finally {
-                        setBudgetSaving(false)
-                      }
-                    }}
-                    disabled={budgetSaving}
-                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300"
-                  >
-                    {budgetSaving ? 'Saving…' : 'Save Budget'}
-                  </button>
-                  {budgetSaved && <span className="text-sm text-green-600 font-medium animate-pulse">Saved!</span>}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <BudgetTab
+          budgetLimit={budgetLimit}
+          setBudgetLimit={setBudgetLimit}
+          budgetSaving={budgetSaving}
+          setBudgetSaving={setBudgetSaving}
+          budgetSaved={budgetSaved}
+          setBudgetSaved={setBudgetSaved}
+        />
       )}
 
       {/* Server Tab */}
