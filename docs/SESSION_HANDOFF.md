@@ -28,9 +28,9 @@ User accepted roadmap: **F → D1 → D2 → M2 → implement.**
 |------|-------------|--------|
 | F | Fix bleeding bugs (NameErrors, validation-gate divergence) | ✅ Complete |
 | D1 | Audit doc: unified `resolve_model_for_runtime` resolver spec (no code) | ✅ Complete — see `docs/D1_UNIFIED_RUNTIME_RESOLVER_AUDIT.md` |
-| D2 | Phase plan via `/gsd-plan-phase` for resolver implementation | 🔄 In progress — Task 1-6 implemented (resolver + integrations + regression suite) |
+| D2 | Phase plan via `/gsd-plan-phase` for resolver implementation | ✅ Complete — all 6 tasks shipped (resolver + chat/workbench/pipeline integrations + validation feedback + regression suite) |
 | M2 | Provider-state card mock (extend `frontend/src/components/now/NowMocks.tsx`) | ✅ Complete (static mock implemented) |
-| Implement | Build unified resolver per D2 plan | Not started |
+| Implement | Build unified resolver per D2 plan | ✅ Complete — `backend/app/services/runtime_model_resolver.py` (1233 LOC) is wired into chat, workbench, pipelines. Verification (2026-05-13): `pytest tests/test_runtime_model_resolver.py tests/test_workbench_runtime_resolution.py tests/test_pipeline_runtime_failover.py tests/test_codex_oauth_connectivity.py` → **17 passed**. |
 | UI | The Run (Doc 1 + Doc 2) — polymorphic work entity + sidebar IA | ✅ **Complete** — Chunks 1-13 shipped. 228 backend tests, 29 frontend contract tests. Phase B cleanup deferred 30 days. |
 
 ---
