@@ -1,9 +1,9 @@
 # The Run — Implementation Plan
 
 > **Spec:** [docs/superpowers/specs/2026-05-12-the-run-design.md](../specs/2026-05-12-the-run-design.md)
+> **Companion spec:** [docs/superpowers/specs/2026-05-12-sidebar-ia-design.md](../specs/2026-05-12-sidebar-ia-design.md) — Doc 2 (sidebar IA + URL migration). **Doc 2 has landed; Chunk 12 of this plan is now driven by Doc 2 §6.1, and a new Chunk 14 (post-deprecation cleanup) tracks Doc 2 §6.3.**
 > **For agentic workers:** REQUIRED — Use `superpowers:subagent-driven-development` (if subagents available) or `superpowers:executing-plans` to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking. Do **not** check a box until the code is written, tests pass, and a commit is made for that step.
 > **Status:** Drafted 2026-05-12. Awaiting kickoff.
-> **Companion:** Doc 2 (sidebar IA + URL migration) is **not yet written**. This plan is structured so the URL/sidebar pieces are last; if Doc 2 lands first they replace Chunk 12. If Doc 2 slips, Chunk 12 ships a minimal "in-place redirect" fallback that preserves today's URLs.
 
 **Goal:** Land the spec at `docs/superpowers/specs/2026-05-12-the-run-design.md` — make the Run a first-class polymorphic entity (chat ⇄ method-driven ⇄ mixed), with a live `/now` grid, an adaptive 3-pane `/runs/:id` viewer, full event transparency (T2 default, T3 on drill), I2 default interventions + I3 power tools behind a toggle, and the Scratch-project invariant.
 
