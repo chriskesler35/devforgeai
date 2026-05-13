@@ -7,7 +7,7 @@
 
 **Goal:** Land the spec at `docs/superpowers/specs/2026-05-12-the-run-design.md` — make the Run a first-class polymorphic entity (chat ⇄ method-driven ⇄ mixed), with a live `/now` grid, an adaptive 3-pane `/runs/:id` viewer, full event transparency (T2 default, T3 on drill), I2 default interventions + I3 power tools behind a toggle, and the Scratch-project invariant.
 
-**Strategy:** Additive. The new tables (`runs`, `run_phases`, `run_messages`, `run_events`) coexist with today's `workbench_sessions` / `workbench_pipelines` / `conversations` / `messages`. A thin adapter layer translates legacy events into `run_events` so the new UI works against real data from day one. The legacy URLs (`/chat/:id`, `/workbench/:id`, `/agents/:id/run`) keep working through Chunk 11; Chunk 12 introduces redirects (Doc 2 dictates the final shape).
+**Strategy:** Additive. The new tables (`runs`, `run_phases`, `run_messages`, `run_events`) coexist with today's `workbench_sessions` / `workbench_pipelines` / `conversations` / `messages`. A thin adapter layer translates legacy events into `run_events` so the new UI works against real data from day one. The legacy URLs (`/chat/:id`, `/workbench/:id`, `/agents/:id/run`, `/bmad`, `/gsd`, `/conversations/:id`) keep working through Chunk 11; Chunk 12 ships the Doc 2 §6.1 redirects + sidebar IA change in a single PR; Chunk 14 deletes the redirect shims 30 days later (Doc 2 §6.3).
 
 **Out of scope (deferred to spec §9 / Doc 2):**
 - Final sidebar IA.
@@ -205,6 +205,7 @@ frontend/
   - `POST /v1/runs/{id}/fork` — body `{event_id}` → new `RunOut`. **403** if `power_tools_enabled` is False.
   - `POST /v1/runs/{id}/agents/{agent_id}/pause` and `/kill` — per-agent intervention.
   - `GET /v1/runs/{id}/stream` — SSE (no `verify_api_key` because EventSource can't send headers; reuse the cookie-auth pattern at `pipelines.py:3332` `/{pipeline_id}/stream`).
+  - `GET /v1/runs/by-legacy?type=<chat|pipeline|session>&id=<legacy_id>` — companion-Run lookup (Doc 2 §4.1). Full behavior + tests live in Chunk 12.1.
 - [ ] **Step 3 — `POST /v1/runs/new`-flavor convenience.** Skip — spec uses `POST /v1/runs`. The frontend route `/runs/new` page redirects.
 - [ ] **Step 4 — wire router in `main.py`.** `app.include_router(runs_router)` alongside `pipelines_router`.
 - [ ] **Step 5 — manual smoke.** `curl POST /v1/runs` → expect 201 with Scratch project, state `awaiting_input`. `curl GET /v1/runs?active=true` → list contains it.
@@ -446,18 +447,126 @@ frontend/
 
 ---
 
-## Chunk 12: Legacy URL handling (placeholder for Doc 2)
+## Chunk 12: Sidebar IA + URL migration (Doc 2 §6.1)
 
-> **Read this first:** This chunk is intentionally minimal. The spec defers final URL migration to Doc 2 (§9.2). If Doc 2 lands before this chunk, **replace these steps with Doc 2's plan and skip the fallback.** If Doc 2 has not landed, ship the fallback below so the new viewer works without breaking deep links.
+> Goal (Doc 2 §6.1): legacy URLs all forward, sidebar reflects the new IA (Doc 2 §3.1), no legacy route files deleted yet. Single PR. Reversible via revert (Doc 2 §6.4).
+>
+> Companion spec: [`docs/superpowers/specs/2026-05-12-sidebar-ia-design.md`](../specs/2026-05-12-sidebar-ia-design.md). Section numbers below reference Doc 2.
 
-### Task 12.1: Soft redirects (fallback only)
+### Task 12.1: Backend — `GET /v1/runs/by-legacy`
 
-**Files:** modify `frontend/src/app/chat/page.tsx`, `frontend/src/app/(main)/workbench/[id]/page.tsx`, `frontend/src/app/(main)/agents/[id]/...` (locate via search).
+**Files:** modify `backend/app/services/runs.py`, `backend/app/routes/runs.py`; create `backend/tests/test_runs_by_legacy.py`.
 
-- [ ] **Step 1 — Detect companion Run.** Each legacy page calls a new helper `GET /v1/runs/by-legacy?type=chat|workbench|agent&id=<legacyId>` returning the companion `run_id` created by the adapter (Chunk 2.3 Task 2.3 Step 2/4).
-- [ ] **Step 2 — Add a "Open in new Run viewer" banner.** Sticky banner with a link to `/runs/:id`. Do NOT auto-redirect — Doc 2 owns the redirect timing decision.
-- [ ] **Step 3 — Backend helper.** `GET /v1/runs/by-legacy` queries `runs.metadata` for `legacy_pipeline_id` / `legacy_session_id` / `legacy_chat_conversation_id`.
-- [ ] **Step 4 — commit.** `feat(runs): soft cross-link from legacy surfaces to new viewer (Doc 2 placeholder)`.
+- [ ] **Step 1 — Service.** Implement `get_or_create_companion_run(legacy_type, legacy_id) -> Run` in `runs.py`. `legacy_type ∈ {'chat', 'pipeline', 'session'}`. Looks up `runs.extra_data['legacy_<type>_id'] == legacy_id`; if found, returns it. If not found AND the legacy row exists (query `conversations`, `workbench_pipelines`, or `workbench_sessions` by id), creates the companion Run NOW and replays the legacy row's persisted events into `run_events` using the adapter from Chunk 2.3. **Idempotent** — re-entry returns the same `run_id`. Use a row lock on the legacy id to prevent two concurrent calls from creating two companions.
+- [ ] **Step 2 — Endpoint.** `GET /v1/runs/by-legacy?type=<chat|pipeline|session>&id=<legacy_id>` → `{run_id, created: bool}`. **404** only when the legacy id itself does not exist in its source table; never 404 for "no companion yet" (we just create one). Response header `Cache-Control: private, max-age=3600` per Doc 2 §4.1.
+- [ ] **Step 3 — Tests.** `test_runs_by_legacy.py`:
+  - Pre-existing companion → returns same id, `created=false`.
+  - Never-replayed legacy id → creates companion, replays events, returns `created=true`.
+  - Concurrent calls (two `asyncio.gather` invocations) → only one companion created.
+  - Unknown legacy id → 404.
+- [ ] **Step 4 — commit.** `feat(runs): /v1/runs/by-legacy with on-demand companion replay`.
+
+### Task 12.2: `RedirectedFromBanner` component
+
+**Files:** Create `frontend/src/components/RedirectedFromBanner.tsx`; modify `frontend/src/app/(main)/layout.tsx`.
+
+- [ ] **Step 1 — Component.** Reads `?from=<legacyPath>` once on mount. Renders a sticky top banner per Doc 2 §4.2 copy. Dismiss button writes `redirected-banner-dismissed:<legacyPath>` to `localStorage`. On subsequent mounts, if `legacyPath`'s flag is set, render nothing.
+- [ ] **Step 2 — Mount once.** Add `<RedirectedFromBanner />` to the `(main)` layout, above the page outlet. Outside `(main)` (auth, share) it's not needed.
+- [ ] **Step 3 — commit.** `feat(ui): RedirectedFromBanner for legacy-route redirects`.
+
+### Task 12.3: Redirect shims — static targets
+
+**Files:** Modify these page files in place — each becomes a tiny client component that runs `router.replace(target + '?from=<legacyPath>')` on mount:
+
+- `frontend/src/app/(main)/runs/page.tsx` → `/now`
+- `frontend/src/app/chat/page.tsx` → `/runs/new?project=scratch`
+- `frontend/src/app/(main)/workbench/page.tsx` (if exists; else skip) → `/now?filter=method`
+- `frontend/src/app/(main)/workbench/pipelines/page.tsx` (if exists) → `/now?filter=method`
+- `frontend/src/app/(main)/workbench/builder/page.tsx` → `/methods`
+- `frontend/src/app/(main)/bmad/page.tsx` → `/methods?launch=bmad`
+- `frontend/src/app/(main)/gsd/page.tsx` → `/methods?launch=gsd`
+- `frontend/src/app/(main)/conversations/page.tsx` → `/now?type=chat`
+- `frontend/src/app/(main)/agents/sessions/page.tsx` → `/now?type=session`
+
+- [ ] **Step 1 — Shared shim helper.** Create `frontend/src/lib/legacyRedirect.ts` exporting `useLegacyRedirect(target: string, legacyPath: string)`. Uses `router.replace` (NOT `push`) per Doc 2 §5.1 back-button rule.
+- [ ] **Step 2 — Replace each page body** with the 5-line shim that calls the helper. Render "Redirecting…" while in flight. Verify each file's existence first (`file_search`); skip the ones that don't exist with a noted comment in this checklist.
+- [ ] **Step 3 — Manual smoke per URL.** Visit each legacy URL; confirm: (a) `router.replace` lands at target; (b) `?from=` query is present; (c) banner appears once, dismisses cleanly, stays dismissed on reload.
+- [ ] **Step 4 — commit.** `feat(ia): redirect static legacy URLs to the new IA`.
+
+### Task 12.4: Redirect shims — dynamic targets (companion lookup)
+
+**Files:** Modify these dynamic pages — each runs the `by-legacy` lookup, then `router.replace`s to the result:
+
+- `frontend/src/app/chat/[id]/page.tsx` (verify path) → `/runs/:companionRunId`
+- `frontend/src/app/(main)/workbench/[id]/page.tsx` → `/runs/:companionRunId`
+- `frontend/src/app/(main)/conversations/[id]/page.tsx` → `/runs/:companionRunId`
+
+- [ ] **Step 1 — Lookup helper.** Add `lookupCompanionRun(type, id)` to `frontend/src/lib/runs/api.ts` (Chunk 5) that hits `/v1/runs/by-legacy`.
+- [ ] **Step 2 — Page shim.** Each page: on mount call lookup → `router.replace(`/runs/${runId}?from=<legacyPath>`)`. While in flight render "Opening Run…". On 404 from `by-legacy`, render the "This link is no longer valid" page with a button to `/now` (Doc 2 §4.1 guarantee 2).
+- [ ] **Step 3 — Error path.** Backend down → render Doc 2 §5.1 "Try again when online" message + link to `/now`.
+- [ ] **Step 4 — Manual smoke.** Test with a real chat id, a real pipeline id, a real session id, a deleted id (expect not-found page), and an unknown id format (expect not-found page).
+- [ ] **Step 5 — commit.** `feat(ia): redirect dynamic legacy URLs via companion-Run lookup`.
+
+### Task 12.5: Sidebar update (`Navigation.tsx`)
+
+**Files:** modify `frontend/src/app/Navigation.tsx`; remove standalone mount of `frontend/src/components/ActiveRunsIndicator.tsx` from `Navigation.tsx`.
+
+- [ ] **Step 1 — Item set.** Update `NAV_ITEMS` and `GROUPS` to match Doc 2 §3.1 exactly:
+  - WORK: `Now (/now)`, `Projects (/projects)`. Drop `Dashboard /`, `Chat`, `Runs`.
+  - BUILD: `Create`, `Agents`, `Personas`, `Methods`, `Gallery`, `Marketplace`. Drop top-level `Skills/Installed` (it stays nested under Marketplace via existing `NESTED_UNDER`).
+  - MANAGE: `Models`, `Collaborate`, `Stats`, `Settings`, `Help`.
+- [ ] **Step 2 — Chat action button.** Insert a Chat action button below WORK group, above BUILD. Calls `createRun({project_id: 'scratch'})` then `router.push('/runs/'+id)`. Collapsed mode: 💬 glyph only. Per Doc 2 §3.2.
+- [ ] **Step 3 — `Now` badge.** Render the active-runs count inside the `Now` nav cell (right-aligned pill; collapsed = dot on the icon). Reuse the data source from `ActiveRunsIndicator.tsx` (move the fetcher into a hook `useActiveRunsCount` if it isn't one already). Per Doc 2 §3.3.
+- [ ] **Step 4 — Remove standalone `ActiveRunsIndicator` mount.** Its job moves into the `Now` cell. Keep the file in case it's used elsewhere; only remove the mount call from `Navigation.tsx`.
+- [ ] **Step 5 — `ACTIVE_ALIASES` update.** Replace existing entry with: `'/now': ['/runs', '/workbench', '/chat', '/conversations', '/bmad', '/gsd', '/agents/sessions']`. Remove the `/runs` entry. Ensures highlight stays correct during the redirect transient.
+- [ ] **Step 6 — Dashboard `/` route.** The home page still exists; only its sidebar entry is removed. Logo (top-left) keeps linking to `/`. No additional change.
+- [ ] **Step 7 — Manual smoke.** All 14 visible items render; Chat button creates a Scratch Run; `Now` shows the badge; collapsed mode shows icons + Now dot.
+- [ ] **Step 8 — commit.** `feat(ia): consolidate sidebar around Now + Run (Doc 2 §3.1)`.
+
+### Task 12.6: `/agents/:id` and `/methods` page updates
+
+**Files:** modify `frontend/src/app/(main)/agents/[id]/page.tsx`, `frontend/src/app/(main)/methods/page.tsx`.
+
+- [ ] **Step 1 — Agent detail "Start Run" button.** Replace any inline runner UI on `/agents/:id` with a single "Start Run" button. Calls `POST /v1/runs` with `project_id` (user-pick — modal listing projects, Scratch on top) and stashes the agent id in `runs.extra_data.agent_id`. Navigates to `/runs/:id`. Per Doc 2 §6.1 step 5.
+- [ ] **Step 2 — `/agents/:id/run` redirect.** If this route exists, replace with a static shim → `/runs/new?agent=:id`. `/runs/new` is updated to read `?agent=` and stash it into the created Run. Otherwise note "no such route" in this checklist.
+- [ ] **Step 3 — `/methods` launch query.** On mount, parse `?launch=<methodId>`; if present, open the existing method launcher modal pre-filled to that method. Per Doc 2 §6.1 step 6.
+- [ ] **Step 4 — commit.** `feat(ia): /agents/:id Start Run button; /methods ?launch= deeplink`.
+
+### Task 12.7: `/now` filter chips (extension of Chunk 6)
+
+**Files:** modify `frontend/src/components/now/NowGrid.tsx`.
+
+- [ ] **Step 1 — Query-driven filters.** NowGrid reads `?filter=<method|all>` and `?type=<chat|method|session|all>` from the URL. Apply on top of the existing Active/Awaiting/Recent/All status filter. Per Doc 2 §7 ("Chunk 6 gains the filter chips").
+- [ ] **Step 2 — Filter chips in UI.** Render the type filter as chips alongside the status filter. Clicking a chip updates the URL (`router.replace`) so deep links work.
+- [ ] **Step 3 — Verify redirect targets land cleanly.** `/now?filter=method` from `/workbench` redirect. `/now?type=chat` from `/conversations`. `/now?type=session` from `/agents/sessions`.
+- [ ] **Step 4 — commit.** `feat(now): URL-driven filter chips for type and method`.
+
+### Task 12.8: Extension audit
+
+**Files:** modify `extension/src/**` (grep first).
+
+- [ ] **Step 1 — Grep.** `grep -rE "/chat/|/workbench/|/bmad|/gsd|/conversations/|/agents/[^/]+/run" extension/src`. List every hit in this checklist.
+- [ ] **Step 2 — Replace.** Each hard-coded legacy URL constructor → `/runs/...` equivalent. Where the extension only has a legacy id, call the new backend `/v1/runs/by-legacy` endpoint to resolve the companion `run_id` before constructing the URL.
+- [ ] **Step 3 — Bump version.** Bump `extension/package.json` `version` patch. Note the change in extension `README.md`.
+- [ ] **Step 4 — commit.** `feat(extension): use new Run URLs; bump version`.
+
+### Task 12.9: Phase A acceptance check (Doc 2 §6.2)
+
+- [ ] **Step 1 — URL matrix walkthrough.** Manually visit every entry in Doc 2 §4 table marked "Redirect." Tick each off. Note any that 404 unexpectedly.
+- [ ] **Step 2 — Sidebar visual check.** 14 visible items + Chat button; collapsed mode dot badge on Now.
+- [ ] **Step 3 — Banner sanity.** Banner appears exactly once per `legacyPath` per browser; dismissal sticks across reloads.
+- [ ] **Step 4 — `by-legacy` test suite.** Green (`pytest backend/tests/test_runs_by_legacy.py`).
+- [ ] **Step 5 — Append acceptance log.** Add a short "Phase A verification" subsection to this plan with date + outcomes.
+- [ ] **Step 6 — commit.** `docs(runs): Phase A acceptance log`.
+
+### Task 12.10: Docs + handoff for Phase A
+
+**Files:** modify `docs/SESSION_HANDOFF.md`, `README.md`, top docstring of `frontend/src/app/Navigation.tsx`.
+
+- [ ] **Step 1 — SESSION_HANDOFF.md.** Mark Doc 2 Phase A shipped; note Chunk 14 (Phase B cleanup) is scheduled for 30 days out.
+- [ ] **Step 2 — README.md.** Update any mentions of `/chat`, `/workbench`, `/bmad`, `/gsd` to point at `/now` or `/runs/:id` as appropriate.
+- [ ] **Step 3 — Navigation.tsx docstring.** Add a top-of-file comment summarizing the IA per Doc 2 §3 with a back-link to the spec.
+- [ ] **Step 4 — commit.** `docs(ia): handoff for Doc 2 Phase A`.
 
 ---
 
@@ -477,6 +586,65 @@ frontend/
 - [ ] **Step 1 — Verify clean state.** `git status` clean. All tests green.
 - [ ] **Step 2 — Push.** Push the feature branch (or per repo convention, the working branch) to origin. Per user pref: changes get pushed to GitHub after completing + validating.
 - [ ] **Step 3 — Open PR / mark ready** — per repo conventions.
+
+---
+
+## Chunk 14: Phase B — legacy route cleanup (Doc 2 §6.3)
+
+> **Schedule:** 30 days after Chunk 12 ships. Do not start earlier. Doc 2 §6.4 makes Phase B much harder to roll back; the 30-day soak is the safety mechanism.
+
+### Task 14.1: Pre-flight
+
+- [ ] **Step 1 — Confirm soak.** ≥30 days since Chunk 12 was merged.
+- [ ] **Step 2 — Skim any error logs** for `by-legacy` 404s and shim failures. If signal is noisy, defer cleanup another release and document why in this checklist.
+- [ ] **Step 3 — Audit dismissal telemetry** if instrumented (otherwise skip per Doc 2 §6.3 step 1).
+
+### Task 14.2: Move static redirects into `next.config.js`
+
+**Files:** modify `frontend/next.config.js`.
+
+- [ ] **Step 1 — Add `redirects()` block.** One entry per Doc 2 §4 row marked "Redirect" with a static target. Use `permanent: true` (308) for these now that the soak is complete. Examples:
+  - `/runs` → `/now`
+  - `/chat` → `/runs/new?project=scratch`
+  - `/workbench` → `/now?filter=method`
+  - `/workbench/builder` → `/methods`
+  - `/bmad` → `/methods?launch=bmad`
+  - `/gsd` → `/methods?launch=gsd`
+  - `/conversations` → `/now?type=chat`
+  - `/agents/sessions` → `/now?type=session`
+- [ ] **Step 2 — Keep `?from=` propagation.** Use `has` matcher to append `?from=<source>` if practical; if Next.js redirects can't append a fixed query, accept the loss (banner is best-effort post-soak).
+- [ ] **Step 3 — commit.** `chore(ia): move static legacy redirects into next.config.js`.
+
+### Task 14.3: Dynamic redirect route handler
+
+**Files:** Create `frontend/src/app/api/legacy-redirect/[type]/[id]/route.ts`.
+
+- [ ] **Step 1 — Handler.** GET handler: receives `type ∈ {chat, pipeline, session}` and `id`. Calls backend `/v1/runs/by-legacy`. Responds with 307 to `/runs/<runId>?from=<legacyPath>`. On 404, 307 to `/now?missing=<type>:<id>`.
+- [ ] **Step 2 — Wire `next.config.js` rewrites.** Map `/chat/:id`, `/workbench/:id`, `/conversations/:id` to this handler via `rewrites()`. Note: a `rewrite` is fine here because the handler itself returns the redirect.
+- [ ] **Step 3 — commit.** `feat(ia): dynamic legacy-redirect API handler`.
+
+### Task 14.4: Delete legacy page files
+
+**Files:** delete or trim — verify each exists before deleting:
+
+- `frontend/src/app/chat/` (entire subtree)
+- `frontend/src/app/(main)/workbench/` (entire subtree)
+- `frontend/src/app/(main)/conversations/` (entire subtree)
+- `frontend/src/app/(main)/bmad/page.tsx`
+- `frontend/src/app/(main)/gsd/page.tsx`
+- `frontend/src/app/(main)/agents/sessions/` — **only if** Phase A's `?type=session` filter on `/now` is confirmed working in Task 12.7; otherwise leave another release. Document the decision here.
+
+- [ ] **Step 1 — Verify each path.** Use `file_search`. Tick the ones that exist.
+- [ ] **Step 2 — Delete in one commit.** Git history retains them.
+- [ ] **Step 3 — Run frontend build.** `npm run build` from `frontend/` must succeed (catches any remaining imports of deleted files).
+- [ ] **Step 4 — Fix any breakage.** Search for imports of deleted modules; replace or remove.
+- [ ] **Step 5 — commit.** `chore(ia): delete legacy route shims (Phase B)`.
+
+### Task 14.5: Final sweep + push
+
+- [ ] **Step 1 — Manual smoke.** Spot-check 5 legacy URLs (incl. one dynamic). All redirect via the new mechanism.
+- [ ] **Step 2 — Update SESSION_HANDOFF.md.** Mark Doc 2 Phase B shipped.
+- [ ] **Step 3 — commit + push.** `docs(ia): Doc 2 Phase B complete`.
 
 ---
 
