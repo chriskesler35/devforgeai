@@ -29,6 +29,8 @@ from app.models.model_verification import ModelVerification
 from app.models.provider_health import ProviderHealth
 from app.models.model_selection_log import ModelSelectionLog
 from app.models.session_model_pin import SessionModelPin
+from app.models.project import Project
+from app.models.run import Run, RunPhase, RunMessage, RunEvent
 
 __all__ = [
     "Base", "BaseMixin", "Provider", "Model", "ModelVerification", "ProviderHealth", "ModelSelectionLog", "SessionModelPin", "Persona",
@@ -42,4 +44,5 @@ __all__ = [
     "Notification",
     "OAuthCredential",
     "InstalledSkill",
+    "Project", "Run", "RunPhase", "RunMessage", "RunEvent",
 ]

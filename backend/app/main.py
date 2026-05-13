@@ -120,6 +120,7 @@ from app.routes.chat_attachments import router as chat_attachments_router
 from app.routes.tools import router as tools_router
 from app.routes.routing import router as routing_router
 from app.routes.model_verification import router as model_verification_router
+from app.routes.runs import router as runs_router
 
 
 @asynccontextmanager
@@ -203,6 +204,15 @@ async def lifespan(app: FastAPI):
     from app.seed import seed_database
     async with AsyncSessionLocal() as session:
         await seed_database(session)
+
+    # Sync file-backed projects into the projects DB table
+    try:
+        from app.services.projects_sync import sync_projects_from_json
+        async with AsyncSessionLocal() as session:
+            await sync_projects_from_json(session)
+    except Exception as _ps_exc:
+        import logging as _log
+        _log.getLogger(__name__).warning("Project sync from JSON failed (non-fatal): %s", _ps_exc)
 
     # Migrate OAuth tokens from JSON store → encrypted DB, then prime in-memory cache
     try:
@@ -390,6 +400,7 @@ app.include_router(tools_router)
 app.include_router(routing_router)
 app.include_router(metrics_router)
 app.include_router(documents_router)
+app.include_router(runs_router)
 
 
 @app.get("/")

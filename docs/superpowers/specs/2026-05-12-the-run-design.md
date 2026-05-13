@@ -1,7 +1,7 @@
 # Design — The Run (Doc 1 of 2)
 
 > **Date:** 2026-05-12
-> **Status:** Design approved through Section 3 (concept, data model, UI architecture). Sections 4-5 (error handling, testing) drafted in this doc but not walked through interactively due to session time. **User must review this doc before writing-plans is invoked.**
+> **Status:** Approved (full doc) — 2026-05-13. Minor errata fixed: `project_id` type clarified as `String(64)` (not UUID) to allow `id='scratch'`; initial Run state for empty Runs is `awaiting_input` (not `running`).
 > **Implementation plan:** [docs/superpowers/plans/2026-05-12-the-run-implementation.md](../plans/2026-05-12-the-run-implementation.md)
 > **Companion:** Doc 2 — [Sidebar IA + URL Migration](./2026-05-12-sidebar-ia-design.md).
 > **Slot:** E (from the audit menu — "5-item sidebar brainstorm," reframed to "the Run as the unit of work").
@@ -83,7 +83,7 @@ Forks (from the "Edit & retry" or "Fork from here" power-tool actions) create a 
 runs
   id                        uuid          PK
   title                     text          (auto from first message; user-editable)
-  project_id                uuid          FK → projects.id  NOT NULL
+  project_id                text          FK → projects.id  NOT NULL  (String(64) — not UUID, to allow id='scratch')
   method_id                 text          nullable          ('bmad' | 'gsd' | 'superpowers' | <custom-id> | NULL)
   state                     text          NOT NULL          enum (see §4.2)
   current_phase_id          uuid          nullable          FK → run_phases.id
@@ -144,7 +144,7 @@ projects (existing table — Scratch row guaranteed)
                           │       └─────────────────┘      │
                           │                                │
                           │       ┌─────────────────┐      │
-   (new)──▶ running ──────┼──────▶│   awaiting_     │──────┤
+   (new)──▶ awaiting_input ──▶ running ──┼──▶│   awaiting_     │──────┤
                           │       │   input         │      │
                           │       └─────────────────┘      │
                           │                                │
