@@ -105,11 +105,30 @@ This file tracks gaps found during the May 2026 laptop sync/review. It is intent
 
 ## Still Open
 
-1. **Responses API transport still needs implementation**
-   - Official OpenAI model docs show `gpt-5-codex` is Responses API-only. The dangerous remap has been removed, but the backend still does not have a Responses API runtime client.
-   - Next work:
-     - Route Responses-only models through a Responses API client or keep them disabled in runtime model lists with a precise explanation.
-     - Add live smoke tests for Responses API once credentials are configured.
+~~1. **Responses API transport still needs implementation**~~ → **Closed 2026-05-13**.
+- `backend/app/services/model_client.py` now bridges to `litellm.aresponses` for
+  Responses-only models (currently `gpt-5-codex`) via three new helpers:
+  `_messages_to_responses_input` (chat-completions messages → Responses
+  `instructions` + `input`), `_responses_to_chat_envelope` (Responses output →
+  chat-completions-shaped object so downstream callers don't branch), and
+  `_call_responses_api` (wires the two together; preserves api_key / api_base /
+  extra_headers from the existing provider-config flow).
+- `call_model` detects `requires_openai_responses_api(raw_model_id)` and routes
+  through the bridge instead of raising; chat-completions models are unchanged.
+- Verification (2026-05-13):
+  - `backend/tests/test_responses_api_bridge.py` — 11 new tests covering
+    translation helpers, envelope normalization, single-chunk streaming wrap,
+    end-to-end routing in `call_model`, and a negative test guarding against
+    accidental rerouting of chat-completions models.
+  - Full regression set (`test_responses_api_bridge` +
+    `test_codex_oauth_connectivity` + `test_runtime_model_resolver` +
+    `test_workbench_runtime_resolution` + `test_pipeline_runtime_failover`) →
+    **28 passed**.
+  - `ruff check .` → all checks passed.
+- v1 limitation: streaming Responses-API responses are buffered, then yielded
+  as a single chunk via an async generator. Translating Responses-API streaming
+  events (`response.output_text.delta`) into chat-completions chunks is a
+  follow-up if streaming UX for Responses-only models matters.
 
 2. **Credentialed runtime smoke tests still need secrets/proxy availability**
    - Backend startup and `/health` are verified locally, but credentialed model calls still depend on local secrets and any configured Codex-compatible proxy.

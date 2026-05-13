@@ -3,7 +3,7 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi import APIRouter, Depends, Request, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -259,8 +259,11 @@ async def swap_model(run_id: str, phase_id: str, body: RunSwapModel, db: AsyncSe
 @router.get("/{run_id}/stream")
 async def stream_run(run_id: str, request: Request):
     from app.database import AsyncSessionLocal
+    # Validate the run exists before opening an SSE stream — `get_run`
+    # raises 404 when missing, which surfaces to the client instead of
+    # producing a hanging empty stream.
     async with AsyncSessionLocal() as db:
-        run = await run_svc.get_run(db, run_id)
+        await run_svc.get_run(db, run_id)
 
     async def generate():
         async for chunk in run_events.stream(run_id):

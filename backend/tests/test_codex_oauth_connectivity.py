@@ -71,8 +71,18 @@ async def test_codex_provider_uses_real_openai_api_key_without_proxy(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_responses_only_codex_model_does_not_remap_to_gpt5(monkeypatch):
+async def test_responses_only_codex_model_routes_to_responses_api(monkeypatch):
+    """gpt-5-codex must never go through chat-completions; it must route to
+    litellm.aresponses via the Responses API bridge in model_client.py.
+
+    Preserves the invariant the old test guarded (no silent remap to gpt-5)
+    while also asserting the bridge actually fires now that DevForgeAI
+    supports Responses-only models (closes GAP_CLOSURE_LOG item 1).
+    """
     from importlib import import_module
+    from types import SimpleNamespace
+
+    import litellm
 
     from app.models import Model, Provider
 
@@ -81,7 +91,19 @@ async def test_responses_only_codex_model_does_not_remap_to_gpt5(monkeypatch):
     async def fake_acompletion(**_kwargs):
         raise AssertionError("Responses-only model must not enter chat-completions transport")
 
+    aresponses_calls: list[dict] = []
+
+    async def fake_aresponses(**kwargs):
+        aresponses_calls.append(kwargs)
+        return SimpleNamespace(
+            id="resp_test_1",
+            model=kwargs.get("model"),
+            output_text="ok-from-responses-api",
+            usage=SimpleNamespace(input_tokens=10, output_tokens=4),
+        )
+
     monkeypatch.setattr(model_client, "acompletion", fake_acompletion)
+    monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
     monkeypatch.setattr(model_client.ModelClient, "get_api_key", lambda _self, _provider: "sk-test")
 
     provider = Provider(
@@ -99,8 +121,24 @@ async def test_responses_only_codex_model_does_not_remap_to_gpt5(monkeypatch):
         is_active=True,
     )
 
-    with pytest.raises(ValueError, match="Responses API"):
-        await model_client.ModelClient().call_model(model, provider, [{"role": "user", "content": "hi"}], stream=False)
+    response = await model_client.ModelClient().call_model(
+        model, provider, [{"role": "user", "content": "hi"}], stream=False,
+    )
+
+    # The bridge fired exactly once.
+    assert len(aresponses_calls) == 1, "expected aresponses to be called once"
+    call = aresponses_calls[0]
+    # The litellm model identifier carries the canonical gpt-5-codex (no
+    # remap to plain gpt-5 — that's the invariant the old test guarded).
+    assert "gpt-5-codex" in call["model"], f"unexpected litellm model id: {call['model']!r}"
+    # Chat-completions messages were translated into Responses input shape.
+    assert call.get("input") == "hi"
+    # Returned envelope is chat-completions-shaped so existing callers
+    # (chat route, workbench, pipelines) keep working without branches.
+    assert response.choices[0].message.content == "ok-from-responses-api"
+    assert response.usage.prompt_tokens == 10
+    assert response.usage.completion_tokens == 4
+    assert response.usage.total_tokens == 14
 
 
 @pytest.mark.asyncio

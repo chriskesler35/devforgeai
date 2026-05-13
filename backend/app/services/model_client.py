@@ -3,7 +3,8 @@
 import os
 import logging
 import uuid
-from typing import Optional, AsyncGenerator
+from types import SimpleNamespace
+from typing import Any, Optional, AsyncGenerator
 import litellm
 from litellm import acompletion
 from app.models import Model, Provider
@@ -103,6 +104,130 @@ def _fallback_chat_completions_model(model_id: str) -> Optional[str]:
     normalized = (model_id or "").strip().lower()
     return _CHAT_COMPLETIONS_FALLBACKS.get(normalized)
 
+
+# ─── Responses API bridge ──────────────────────────────────────────────────────
+# Some OpenAI/Codex models (e.g. gpt-5-codex) are Responses-API-only — they
+# cannot be reached via /chat/completions. Rather than dead-end those models,
+# the bridge below translates chat-completions-style inputs to the Responses
+# API shape, calls litellm.aresponses, and normalizes the result back to a
+# chat-completions-compatible envelope so downstream callers don't have to
+# special-case anything. Closes GAP_CLOSURE_LOG.md item 1.
+
+def _messages_to_responses_input(messages: list[dict]) -> tuple[Optional[str], str]:
+    """Adapt chat-completions messages to (instructions, input).
+
+    The Responses API takes a single `instructions` (system-prompt-ish) and a
+    flat `input` (the user content). For multi-turn chats we stitch the
+    remaining messages with role markers so the model sees the conversation
+    structure. This is lossy compared to the typed structured input the
+    Responses API supports — fidelity can be improved in a follow-up if any
+    caller actually needs tool-call replay across the bridge.
+    """
+    instructions: Optional[str] = None
+    body: list[tuple[str, str]] = []
+    for m in messages:
+        role = (m.get("role") or "user").lower()
+        content = m.get("content", "")
+        text = content if isinstance(content, str) else str(content)
+        if role == "system" and instructions is None:
+            instructions = text
+            continue
+        body.append((role, text))
+
+    if not body:
+        # System-only call — pass empty input; Responses API still works.
+        return instructions, ""
+    if len(body) == 1 and body[0][0] == "user":
+        return instructions, body[0][1]
+    return instructions, "\n\n".join(f"[{role}] {text}" for role, text in body)
+
+
+def _responses_to_chat_envelope(response: Any, *, fallback_model_id: str) -> SimpleNamespace:
+    """Wrap a Responses API result in a chat-completions-shaped object.
+
+    Downstream call sites read ``response.choices[0].message.content`` and
+    ``response.usage.{prompt,completion,total}_tokens``. We fabricate exactly
+    those attributes; anything else stays accessible on the original via the
+    ``_raw`` field for callers that want it.
+    """
+    text = getattr(response, "output_text", "") or ""
+    usage = getattr(response, "usage", None)
+    input_tokens = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
+    output_tokens = int(getattr(usage, "output_tokens", 0) or 0) if usage else 0
+    model_id = getattr(response, "model", fallback_model_id) or fallback_model_id
+    response_id = getattr(response, "id", None) or str(uuid.uuid4())
+
+    message = SimpleNamespace(role="assistant", content=text)
+    choice = SimpleNamespace(index=0, message=message, finish_reason="stop")
+    usage_envelope = SimpleNamespace(
+        prompt_tokens=input_tokens,
+        completion_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
+    )
+    return SimpleNamespace(
+        id=response_id,
+        object="chat.completion",
+        model=model_id,
+        choices=[choice],
+        usage=usage_envelope,
+        _raw=response,
+    )
+
+
+async def _call_responses_api(
+    *,
+    litellm_model: str,
+    messages: list[dict],
+    api_key: Optional[str],
+    api_base: Optional[str],
+    extra_headers: Optional[dict] = None,
+    stream: bool = False,
+    temperature: Optional[float] = None,
+    tools: Optional[list] = None,
+    tool_choice: Optional[Any] = None,
+):
+    """Call ``litellm.aresponses`` and return a chat-completions-shaped result.
+
+    Streaming note: v1 of the bridge does NOT stream incrementally. When the
+    caller asks for stream=True we fetch the full response, then yield it as
+    a single chunk so the existing ``_stream_response`` consumer works. The
+    Responses API has a different streaming-event vocabulary (`response.output_text.delta`)
+    that would need its own translation layer to surface as chat-completions
+    chunks — out of scope for closing the gap-log item, in scope for a
+    follow-up if streaming UX for Responses-only models matters.
+    """
+    instructions, input_value = _messages_to_responses_input(messages)
+
+    kwargs: dict[str, Any] = {
+        "model": litellm_model,
+        "input": input_value,
+        # Always non-streaming on the wire — see docstring.
+        "stream": False,
+    }
+    if instructions:
+        kwargs["instructions"] = instructions
+    if api_key:
+        kwargs["api_key"] = api_key
+    if api_base:
+        kwargs["api_base"] = api_base
+    if extra_headers:
+        kwargs["extra_headers"] = extra_headers
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    if tools:
+        kwargs["tools"] = tools
+    if tool_choice is not None:
+        kwargs["tool_choice"] = tool_choice
+
+    raw = await litellm.aresponses(**kwargs)
+    envelope = _responses_to_chat_envelope(raw, fallback_model_id=litellm_model)
+
+    if stream:
+        async def _single_chunk():
+            yield envelope
+        return _single_chunk()
+    return envelope
+
 # Drop params unsupported by specific providers (e.g. GPT-5 only accepts
 # temperature=1, Anthropic ignores some OpenAI-specific fields, etc).
 # Without this, calls fail with UnsupportedParamsError for any provider
@@ -131,11 +256,14 @@ class ModelClient:
         runtime_model_id = getattr(model, "_runtime_model_id", None)
         raw_model_id = runtime_model_id or configured_model_id
         raw_model_id_lower = raw_model_id.lower()
-        if provider_name in ("openai", "openai-codex") and requires_openai_responses_api(raw_model_id):
-            raise ValueError(
-                f"Model '{raw_model_id}' requires the OpenAI Responses API. "
-                "DevForgeAI does not yet route this model through Responses; choose a chat-completions-compatible model."
-            )
+        # Responses-only models (e.g. gpt-5-codex) can't go through
+        # /chat/completions. We flag them here, let the existing provider
+        # config flow set up api_key / api_base / extra_headers, then route
+        # the actual call through the Responses API bridge below.
+        needs_responses_api = (
+            provider_name in ("openai", "openai-codex")
+            and requires_openai_responses_api(raw_model_id)
+        )
         # GitHub Copilot exposes real versioned model IDs directly; never remap them.
         effective_model_id = raw_model_id if provider_name == "github-copilot" else _normalize_codex_model_id(raw_model_id)
         model_id_lower = effective_model_id.lower()
@@ -293,7 +421,33 @@ class ModelClient:
             logger.info(f"Codex model alias normalized: {raw_model_id} -> {effective_model_id}")
         logger.info(f"Calling model: {litellm_model} | stream={stream} | api_key={_key_hint} | provider={provider_name}")
 
-        # Use acompletion for async support
+        # Use acompletion for chat-completions; bridge to aresponses for
+        # Responses-only models that the provider exposes only via the
+        # Responses API surface (currently gpt-5-codex). The bridge below
+        # reuses the api_key / api_base / extra_headers / temperature we
+        # just resolved so OAuth-proxy and Copilot paths still work.
+        if needs_responses_api:
+            logger.info(
+                "Routing model '%s' via Responses API bridge (provider=%s).",
+                effective_model_id, provider_name,
+            )
+            response = await _call_responses_api(
+                litellm_model=litellm_model,
+                messages=messages,
+                api_key=kwargs.get("api_key"),
+                api_base=kwargs.get("api_base"),
+                extra_headers=kwargs.get("extra_headers"),
+                stream=stream,
+                temperature=kwargs.get("temperature"),
+                tools=kwargs.get("tools"),
+                tool_choice=kwargs.get("tool_choice"),
+            )
+            # _call_responses_api already returns either the envelope (when
+            # stream=False) or a single-chunk async generator (when
+            # stream=True). Return directly — _stream_response is not needed
+            # because we control the generator shape.
+            return response
+
         try:
             response = await acompletion(**kwargs)
         except Exception as exc:
