@@ -1,7 +1,7 @@
 # Design — Sidebar IA + URL Migration (Doc 2 of 2)
 
 > **Date:** 2026-05-12
-> **Status:** Design draft. Sections 1-5 are binding decisions; Section 6 is the migration plan that the implementation will execute.
+> **Status:** **Implemented** (2026-05-13). Sections 1-5 are binding decisions; Section 6 was executed as Chunk 12 of the Run implementation plan. Phase B cleanup (§6.3) deferred 30 days.
 > **Companion:** [Doc 1 — The Run](./2026-05-12-the-run-design.md). Doc 1 establishes the Run as a polymorphic first-class entity (chat ⇄ method-driven ⇄ mixed). Doc 2 decides where in the IA the Run viewer lives, what survives in the sidebar, and how today's URLs migrate without breaking deep links.
 > **Implementation plan reference:** [docs/superpowers/plans/2026-05-12-the-run-implementation.md](../plans/2026-05-12-the-run-implementation.md) — Chunk 12 in that plan is the placeholder this doc replaces.
 

@@ -1,8 +1,9 @@
 # Design — The Run (Doc 1 of 2)
 
 > **Date:** 2026-05-12
-> **Status:** Approved (full doc) — 2026-05-13. Minor errata fixed: `project_id` type clarified as `String(64)` (not UUID) to allow `id='scratch'`; initial Run state for empty Runs is `awaiting_input` (not `running`).
+> **Status:** Approved (full doc) — 2026-05-13. **Implementation: Chunks 1-13 complete (2026-05-13).** Phase B cleanup deferred 30 days.
 > **Implementation plan:** [docs/superpowers/plans/2026-05-12-the-run-implementation.md](../plans/2026-05-12-the-run-implementation.md)
+> **Progress tracker:** [docs/superpowers/plans/2026-05-13-the-run-progress.md](../plans/2026-05-13-the-run-progress.md)
 > **Companion:** Doc 2 — [Sidebar IA + URL Migration](./2026-05-12-sidebar-ia-design.md).
 > **Slot:** E (from the audit menu — "5-item sidebar brainstorm," reframed to "the Run as the unit of work").
 

@@ -35,6 +35,7 @@ async def create_run(body: RunCreate, db: AsyncSession = Depends(get_db)):
         project_id=body.project_id,
         method_id=body.method_id,
         title=body.title,
+        agent_id=body.agent_id,
     )
     await db.commit()
     await db.refresh(run)
@@ -276,5 +277,12 @@ async def stream_run(run_id: str, request: Request):
 async def lookup_by_legacy(
     type: str = Query(..., pattern="^(chat|pipeline|session)$"),
     id: str = Query(...),
+    db: AsyncSession = Depends(get_db),
 ):
-    return {"detail": "Not yet implemented — see Chunk 12"}
+    run, created = await run_svc.get_or_create_companion_run(db, type, id)
+    await db.commit()
+    from starlette.responses import JSONResponse
+    return JSONResponse(
+        content={"run_id": run.id, "created": created},
+        headers={"Cache-Control": "private, max-age=3600"},
+    )

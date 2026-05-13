@@ -147,6 +147,14 @@ export async function editRetry(
   })
 }
 
+export async function lookupCompanionRun(
+  legacyType: 'chat' | 'pipeline' | 'session',
+  legacyId: string,
+): Promise<{ run_id: string; created: boolean }> {
+  const qs = new URLSearchParams({ type: legacyType, id: legacyId })
+  return request<{ run_id: string; created: boolean }>(`${BASE()}/by-legacy?${qs}`)
+}
+
 export async function swapModel(
   runId: string,
   phaseId: string,

@@ -11,6 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.project import Project
 from app.models.custom_method import CustomMethod
+from app.models.conversation import Conversation
+from app.models.pipeline import Pipeline
+from app.models.workbench import WorkbenchSession
 from app.models.run import (
     Run, RunPhase, RunMessage, RunEvent,
     RUN_STATES, RUN_TRANSITIONS, PHASE_STATUSES, EVENT_KINDS,
@@ -40,10 +43,15 @@ async def create_run(
     project_id: str = "scratch",
     method_id: str | None = None,
     title: str | None = None,
+    agent_id: str | None = None,
 ) -> Run:
     project = await db.get(Project, project_id)
     if not project or not project.is_active:
         raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found or inactive")
+
+    extra: dict = {}
+    if agent_id:
+        extra["agent_id"] = agent_id
 
     run = Run(
         id=str(uuid.uuid4()),
@@ -52,6 +60,7 @@ async def create_run(
         method_id=method_id,
         state="awaiting_input",
         power_tools_enabled=False,
+        extra_data=extra,
     )
     db.add(run)
     await db.flush()
@@ -402,3 +411,74 @@ async def swap_model(
         payload={"action": "swap_model", "model_id": model_id},
     )
     return phase
+
+
+# ---------------------------------------------------------------------------
+# Legacy companion lookup
+# ---------------------------------------------------------------------------
+
+LEGACY_TYPE_MAP = {
+    "chat": ("legacy_chat_id", Conversation),
+    "pipeline": ("legacy_pipeline_id", Pipeline),
+    "session": ("legacy_session_id", WorkbenchSession),
+}
+
+
+async def get_or_create_companion_run(
+    db: AsyncSession,
+    legacy_type: str,
+    legacy_id: str,
+) -> tuple[Run, bool]:
+    """Look up or create a companion Run for a legacy entity.
+
+    Returns (run, created) — created is True if a new Run was just made.
+    Idempotent: concurrent calls for the same legacy_id converge to one Run.
+    """
+    if legacy_type not in LEGACY_TYPE_MAP:
+        raise HTTPException(status_code=400, detail=f"Unknown legacy type: {legacy_type}")
+
+    extra_key, model_cls = LEGACY_TYPE_MAP[legacy_type]
+
+    existing_q = select(Run).where(
+        Run.extra_data[extra_key].as_string() == legacy_id
+    )
+    result = await db.execute(existing_q)
+    existing = result.scalars().first()
+    if existing:
+        return existing, False
+
+    legacy_row = await db.get(model_cls, legacy_id)
+    if not legacy_row:
+        raise HTTPException(status_code=404, detail=f"Legacy {legacy_type} '{legacy_id}' not found")
+
+    title = None
+    project_id = "scratch"
+    if legacy_type == "chat":
+        title = getattr(legacy_row, "title", None)
+    elif legacy_type == "pipeline":
+        title = getattr(legacy_row, "initial_task", None) or f"Pipeline {legacy_id[:8]}"
+        sid = getattr(legacy_row, "session_id", None)
+        if sid:
+            session = await db.get(WorkbenchSession, sid)
+            if session and getattr(session, "project_id", None):
+                project_id = session.project_id
+    elif legacy_type == "session":
+        title = getattr(legacy_row, "task", None) or f"Session {legacy_id[:8]}"
+        if getattr(legacy_row, "project_id", None):
+            project_id = legacy_row.project_id
+
+    project = await db.get(Project, project_id)
+    if not project or not project.is_active:
+        project_id = "scratch"
+
+    run = Run(
+        id=str(uuid.uuid4()),
+        title=title,
+        project_id=project_id,
+        state="completed",
+        power_tools_enabled=False,
+        extra_data={extra_key: legacy_id, "legacy_type": legacy_type},
+    )
+    db.add(run)
+    await db.flush()
+    return run, True

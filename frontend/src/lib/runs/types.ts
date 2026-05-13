@@ -85,6 +85,7 @@ export interface RunCreateInput {
   project_id?: string
   method_id?: string
   title?: string
+  agent_id?: string
 }
 
 export interface RunUpdateInput {

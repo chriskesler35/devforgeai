@@ -4,47 +4,41 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
-import { NowLauncher } from '@/components/now/NowLive'
-import { ActiveRunsIndicator } from '@/components/ActiveRunsIndicator'
+import { createRun } from '@/lib/runs/api'
+import { useRuns } from '@/hooks/useRuns'
 
 const NAV_ITEMS = [
-  { href: '/',                label: 'Dashboard',  icon: '◈' },
-  { href: '/chat',            label: 'Chat',        icon: '💬' },
-  { href: '/runs',            label: 'Runs',        icon: '🧭' },
+  { href: '/now',             label: 'Now',         icon: '🧭' },
   { href: '/projects',        label: 'Projects',    icon: '🗂️' },
   { href: '/create',          label: 'Create',      icon: '✨' },
   { href: '/agents',          label: 'Agents',      icon: '🤖' },
   { href: '/personas',        label: 'Personas',    icon: '🎭' },
-  { href: '/gallery',         label: 'Gallery',     icon: '🖼️' },
   { href: '/methods',         label: 'Methods',     icon: '🧠' },
+  { href: '/gallery',         label: 'Gallery',     icon: '🖼️' },
   { href: '/marketplace',     label: 'Marketplace', icon: '🛍️' },
-  { href: '/skills/installed', label: 'Installed Skills', icon: '🧰' },
-  { href: '/collaborate',     label: 'Collaborate', icon: '👥' },
   { href: '/models',          label: 'Models',      icon: '⚡' },
+  { href: '/collaborate',     label: 'Collaborate', icon: '👥' },
   { href: '/stats',           label: 'Stats',       icon: '📊' },
   { href: '/settings',        label: 'Settings',    icon: '⚙️' },
   { href: '/help',            label: 'Help',         icon: '❓' },
 ]
 
 const GROUPS = [
-  { label: 'MAIN',   items: ['/', '/chat', '/runs', '/projects'] },
-  { label: 'CREATE', items: ['/create', '/agents', '/personas', '/gallery', '/methods', '/marketplace', '/skills/installed'] },
-  { label: 'MANAGE', items: ['/collaborate', '/models', '/stats', '/settings', '/help'] },
+  { label: 'WORK',   items: ['/now', '/projects'] },
+  { label: 'BUILD',  items: ['/create', '/agents', '/personas', '/methods', '/gallery', '/marketplace'] },
+  { label: 'MANAGE', items: ['/models', '/collaborate', '/stats', '/settings', '/help'] },
 ]
 
-// Routes that should render indented under their parent
 const NESTED_UNDER: Record<string, string> = {
   '/agents': '/create',
   '/personas': '/create',
-  '/gallery': '/create',
   '/methods': '/create',
+  '/gallery': '/create',
   '/marketplace': '/create',
-  '/skills/installed': '/marketplace',
 }
 
-// Alias legacy routes to the new IA so nav highlighting stays intuitive.
 const ACTIVE_ALIASES: Record<string, string[]> = {
-  '/runs': ['/workbench', '/agents/sessions', '/workbench/pipelines'],
+  '/now': ['/runs', '/workbench', '/chat', '/conversations', '/bmad', '/gsd', '/agents/sessions'],
 }
 
 function ThemeToggle({ collapsed }: { collapsed: boolean }) {
@@ -135,10 +129,12 @@ export default function Navigation() {
   const pathname = usePathname()
   const router = useRouter()
 
-  // All hooks must be declared before any conditional returns
   const [mounted, setMounted] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
   const [backendUp, setBackendUp] = useState<boolean | null>(null)
+  const [chatBusy, setChatBusy] = useState(false)
+  const { runs: activeRuns } = useRuns({ active: true })
+  const activeCount = activeRuns.filter((r) => r.state !== 'awaiting_input').length
 
   useEffect(() => {
     setMounted(true)
@@ -174,10 +170,22 @@ export default function Navigation() {
   }
 
   const isActive = (href: string) => {
-    if (href === '/') return pathname === '/'
     if (pathname === href || pathname.startsWith(href + '/')) return true
     const aliases = ACTIVE_ALIASES[href] || []
     return aliases.some((prefix) => pathname === prefix || pathname.startsWith(prefix + '/'))
+  }
+
+  const handleNewChat = async () => {
+    if (chatBusy) return
+    setChatBusy(true)
+    try {
+      const run = await createRun({ project_id: 'scratch' })
+      router.push(`/runs/${run.id}`)
+    } catch {
+      router.push('/now')
+    } finally {
+      setChatBusy(false)
+    }
   }
 
   // Early return AFTER all hooks
@@ -215,22 +223,8 @@ export default function Navigation() {
         </button>
       </div>
 
-      {/* In Flight shortcut */}
-      <div className="px-2 pt-3">
-        <NowLauncher collapsed={collapsed} />
-      </div>
-
-      {/* Global active-runs indicator — surfaces in-flight pipelines/sessions
-          from every page so you never lose track of a kicked-off run. */}
-      <div className="px-2 pt-2">
-        <ActiveRunsIndicator collapsed={collapsed} />
-      </div>
-
-      {/* Nav items */}
       <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-4">
-        {GROUPS.map(group => {
-          // Use group.items order (NOT NAV_ITEMS order) so nesting renders
-          // immediately after the parent — e.g. /workbench right after /projects.
+        {GROUPS.map((group, gi) => {
           const byHref = new Map(NAV_ITEMS.map(item => [item.href, item]))
           const groupItems = group.items.map(href => byHref.get(href)).filter((x): x is typeof NAV_ITEMS[number] => !!x)
           return (
@@ -245,6 +239,7 @@ export default function Navigation() {
                   const active = isActive(item.href)
                   const parentHref = NESTED_UNDER[item.href]
                   const isNested = !!parentHref && !collapsed
+                  const isNow = item.href === '/now'
                   return (
                     <Link key={item.href} href={item.href}
                       title={collapsed ? item.label : undefined}
@@ -256,8 +251,11 @@ export default function Navigation() {
                           : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-gray-200'
                         }
                       `}>
-                      <span className={`${isNested ? 'text-sm' : 'text-base'} flex-shrink-0 ${active ? '' : 'opacity-80'}`}>
+                      <span className={`${isNested ? 'text-sm' : 'text-base'} flex-shrink-0 ${active ? '' : 'opacity-80'} relative`}>
                         {isNested ? '↳' : item.icon}
+                        {isNow && collapsed && activeCount > 0 && (
+                          <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        )}
                       </span>
                       {!collapsed && (
                         <span className={`${isNested ? 'text-xs' : 'text-sm'} truncate ${active ? 'font-semibold' : 'font-medium'} flex items-center gap-1.5`}>
@@ -265,13 +263,43 @@ export default function Navigation() {
                           {item.label}
                         </span>
                       )}
-                      {!collapsed && active && (
+                      {isNow && !collapsed && activeCount > 0 && (
+                        <span className="ml-auto text-[10px] font-bold leading-none px-1.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300">
+                          {activeCount}
+                        </span>
+                      )}
+                      {!isNow && !collapsed && active && (
                         <span className="ml-auto w-1.5 h-1.5 rounded-full bg-orange-500 flex-shrink-0" />
                       )}
                     </Link>
                   )
                 })}
               </div>
+
+              {/* Chat action button — between WORK and BUILD groups */}
+              {gi === 0 && (
+                <div className="mt-2 px-1">
+                  <button
+                    onClick={handleNewChat}
+                    disabled={chatBusy}
+                    title={collapsed ? 'New chat' : undefined}
+                    className={`
+                      flex items-center gap-2 w-full rounded-lg transition-colors
+                      bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400
+                      hover:bg-orange-100 dark:hover:bg-orange-900/30
+                      disabled:opacity-50
+                      ${collapsed ? 'justify-center px-0 py-2.5' : 'px-3 py-2'}
+                    `}
+                  >
+                    <span className="text-base flex-shrink-0">💬</span>
+                    {!collapsed && (
+                      <span className="text-sm font-medium">
+                        {chatBusy ? 'Creating...' : 'New chat'}
+                      </span>
+                    )}
+                  </button>
+                </div>
+              )}
             </div>
           )
         })}

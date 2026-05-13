@@ -1,6 +1,6 @@
 # DevForgeAI — Session Handoff (Live)
 
-**Last updated:** 2026-05-11
+**Last updated:** 2026-05-13
 **Active branch:** main
 **Backend:** `:19001` (launcher startup and status verified)
 **Frontend:** `:3001`
@@ -26,12 +26,12 @@ User accepted roadmap: **F → D1 → D2 → M2 → implement.**
 
 | Step | Description | Status |
 |------|-------------|--------|
-| F | Fix bleeding bugs (NameErrors, validation-gate divergence) | **In progress** — restart verified clean; pending live pipeline re-test |
+| F | Fix bleeding bugs (NameErrors, validation-gate divergence) | ✅ Complete |
 | D1 | Audit doc: unified `resolve_model_for_runtime` resolver spec (no code) | ✅ Complete — see `docs/D1_UNIFIED_RUNTIME_RESOLVER_AUDIT.md` |
 | D2 | Phase plan via `/gsd-plan-phase` for resolver implementation | 🔄 In progress — Task 1-6 implemented (resolver + integrations + regression suite) |
 | M2 | Provider-state card mock (extend `frontend/src/components/now/NowMocks.tsx`) | ✅ Complete (static mock implemented) |
 | Implement | Build unified resolver per D2 plan | Not started |
-| UI | 5-item sidebar + unified Run viewer | Blocked on above |
+| UI | The Run (Doc 1 + Doc 2) — polymorphic work entity + sidebar IA | ✅ **Complete** — Chunks 1-13 shipped. 228 backend tests, 29 frontend contract tests. Phase B cleanup deferred 30 days. |
 
 ---
 
@@ -98,7 +98,7 @@ This mirrors the chat.py path so agentic resolution behaves like chat resolution
 ### Frontend
 - `frontend/src/components/now/NowMocks.tsx` — `NowPill` + `NowPanel` static mocks (FAKE_RUNS, RECENT_RUNS, phase strip, timeline, stalled detector)
 - `frontend/src/app/(main)/mocks/now/page.tsx` — preview at http://localhost:3001/mocks/now
-- `frontend/src/app/Navigation.tsx` — 16 routes, target = 5 (Now / Chat / Projects / Configure / System); sidebar count poll at L161
+- `frontend/src/app/Navigation.tsx` — WORK (Now + Projects + Chat action) / BUILD (Create, Agents, Personas, Methods, Gallery, Marketplace) / MANAGE (Models, Collaborate, Stats, Settings, Help). Now badge shows active-runs count. Chat button creates scratch Run.
 - `frontend/src/app/chat/page.tsx` — model dropdown sends UUID
 - Duplicate session-fetch sites (consolidation targets):
   - `agents/sessions/page.tsx:73`
@@ -154,12 +154,11 @@ Output:
 
 ### To pick up
 
-1. **User reviews `docs/superpowers/specs/2026-05-12-the-run-design.md`** — approve, request changes, or override decisions. Only proceed once approved.
-2. **Spec review loop** — if/when user approves, dispatch `spec-document-reviewer` subagent for an independent review pass. (Not done this session due to time.)
-3. **Slot E Doc 2 — Sidebar IA + migration.** Brainstorm covering: the 5-item sidebar's final shape given Doc 1's Run-as-unit-of-work model, URL migration for `/chat/:id` → `/runs/:id` etc., transitional aliases, deprecation timeline. Depends on Doc 1 sign-off.
-4. **D2 implementation continuation** (the original roadmap). UI consolidation still blocked behind this.
-5. **gpt-5-codex Responses API transport** — gap log open item 1. Still pending.
-6. **Live runtime smoke tests** — `/v1/api-keys/runtime-status` + Codex routing — pending credentials/proxy availability.
+1. **Chunk 14 (Phase B cleanup)** — deferred 30 days from 2026-05-13. Earliest start: 2026-06-12. Delete legacy page files, move redirects to `next.config.js` rewrites.
+2. **Live smoke test** — start backend + frontend, visit every legacy URL listed in Doc 2 §4, verify redirects and banner behavior.
+3. **D2 implementation continuation** — the original resolver roadmap. No longer blocked by UI work.
+4. **gpt-5-codex Responses API transport** — gap log open item 1. Still pending.
+5. **Live runtime smoke tests** — `/v1/api-keys/runtime-status` + Codex routing — pending credentials/proxy availability.
 
 ## M2 Execution Delta (2026-05-09)
 

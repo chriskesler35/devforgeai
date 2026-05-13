@@ -4,6 +4,7 @@ import { API_BASE, AUTH_HEADERS } from '@/lib/config'
 import { getApiBase, getAuthHeaders } from '@/lib/config'
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useSearchParams } from 'next/navigation'
 
 
 interface Method {
@@ -39,6 +40,8 @@ const COLOR_MAP: Record<string, { border: string; bg: string; badge: string; btn
 }
 
 export default function MethodsPage() {
+  const searchParams = useSearchParams()
+  const launchParam = searchParams.get('launch')
   const [methods, setMethods] = useState<Method[]>([])
   const [customMethods, setCustomMethods] = useState<CustomMethod[]>([])
   const [activeId, setActiveId] = useState('standard')
@@ -74,6 +77,16 @@ export default function MethodsPage() {
   }, [])
 
   useEffect(() => { fetchMethods(); fetchCustomMethods() }, [fetchMethods, fetchCustomMethods])
+
+  const launchHandled = useRef(false)
+  useEffect(() => {
+    if (!launchParam || loading || launchHandled.current) return
+    const target = methods.find(m => m.id === launchParam)
+    if (target && !stack.includes(target.id)) {
+      launchHandled.current = true
+      activate(target.id)
+    }
+  }, [launchParam, loading, methods, stack])
 
   useEffect(() => {
     if (stack.length === 0) {

@@ -2,6 +2,7 @@
 
 import { API_BASE, AUTH_HEADERS } from '@/lib/config'
 import { decorateOptionLabel, isModelRuntimeUsable } from '@/lib/modelRuntimeReadiness'
+import { createRun } from '@/lib/runs/api'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
@@ -349,6 +350,18 @@ export default function AgentDetailPage() {
           )}
         </div>
         <div className="flex gap-2">
+          {agent && !editing && (
+            <button
+              onClick={async () => {
+                try {
+                  const run = await createRun({ project_id: 'scratch', agent_id: agentId, title: `${agent.name} run` })
+                  router.push(`/runs/${run.id}`)
+                } catch { /* fall through to legacy */ }
+              }}
+              className="px-4 py-2 text-sm font-medium rounded-lg bg-orange-500 hover:bg-orange-600 text-white flex items-center gap-1.5">
+              Start Run
+            </button>
+          )}
           {agent && !editing && (
             <button onClick={() => setShowRunModal(true)}
               className="px-4 py-2 text-sm font-medium rounded-lg bg-green-600 hover:bg-green-700 text-white flex items-center gap-1.5">

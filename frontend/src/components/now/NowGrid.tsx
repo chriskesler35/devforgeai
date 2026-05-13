@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useMemo, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useRuns } from '@/hooks/useRuns'
 import { useToast } from '@/app/ToastProvider'
@@ -9,12 +10,20 @@ import { TERMINAL_STATES, ACTIVE_STATES } from '@/lib/runs/types'
 import type { Run, RunState } from '@/lib/runs/types'
 
 type Filter = 'active' | 'awaiting' | 'recent' | 'all'
+type TypeFilter = 'all' | 'chat' | 'session' | 'method'
 
 const FILTER_CHIPS: { key: Filter; label: string }[] = [
   { key: 'active', label: 'Active' },
   { key: 'awaiting', label: 'Awaiting' },
   { key: 'recent', label: 'Recent' },
   { key: 'all', label: 'All' },
+]
+
+const TYPE_CHIPS: { key: TypeFilter; label: string }[] = [
+  { key: 'all', label: 'All types' },
+  { key: 'chat', label: 'Chat' },
+  { key: 'session', label: 'Agent' },
+  { key: 'method', label: 'Method' },
 ]
 
 const STATUS_STYLES: Record<string, string> = {
@@ -90,9 +99,15 @@ function groupByProject(runs: Run[]): Map<string, Run[]> {
 }
 
 export default function NowGrid() {
+  const searchParams = useSearchParams()
+  const urlFilter = searchParams.get('filter') as TypeFilter | null
+  const urlType = searchParams.get('type') as TypeFilter | null
+  const initialType: TypeFilter = urlFilter === 'method' ? 'method' : urlType === 'chat' ? 'chat' : urlType === 'session' ? 'session' : 'all'
+
   const { runs, loading, error, refresh } = useRuns()
   const { addToast } = useToast()
   const [filter, setFilter] = useState<Filter>('active')
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>(initialType)
   const [search, setSearch] = useState('')
   const [projectFilter, setProjectFilter] = useState<string | null>(null)
   const [busyActions, setBusyActions] = useState<Set<string>>(new Set())
@@ -114,6 +129,14 @@ export default function NowGrid() {
       list = list.filter((r) => TERMINAL_STATES.has(r.state) && r.state !== 'archived')
     }
 
+    if (typeFilter === 'method') {
+      list = list.filter((r) => !!r.method_id)
+    } else if (typeFilter === 'chat') {
+      list = list.filter((r) => !r.method_id && !r.extra_data?.agent_id)
+    } else if (typeFilter === 'session') {
+      list = list.filter((r) => !!r.extra_data?.agent_id)
+    }
+
     if (projectFilter) {
       list = list.filter((r) => r.project_id === projectFilter)
     }
@@ -129,7 +152,7 @@ export default function NowGrid() {
     }
 
     return list
-  }, [nonArchived, filter, projectFilter, search])
+  }, [nonArchived, filter, typeFilter, projectFilter, search])
 
   const grouped = useMemo(() => groupByProject(filtered), [filtered])
 
@@ -210,6 +233,22 @@ export default function NowGrid() {
               onClick={() => setFilter(chip.key)}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
                 filter === chip.key
+                  ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+              }`}
+            >
+              {chip.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
+          {TYPE_CHIPS.map((chip) => (
+            <button
+              key={chip.key}
+              onClick={() => setTypeFilter(chip.key)}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                typeFilter === chip.key
                   ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
                   : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
               }`}

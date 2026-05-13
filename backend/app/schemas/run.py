@@ -14,6 +14,7 @@ class RunCreate(BaseModel):
     project_id: str = "scratch"
     method_id: Optional[str] = None
     title: Optional[str] = None
+    agent_id: Optional[str] = None
 
 
 class RunUpdate(BaseModel):
