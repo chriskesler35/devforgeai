@@ -476,6 +476,16 @@ export function ApiKeysTab({ preferredProvider }: { preferredProvider?: Provider
     }
   }
 
+  // Must be above any early returns so hook call order is stable.
+  const openProviderEditor = useCallback((provider: string) => {
+    setEditing((current) => ({ ...current, [provider]: current[provider] ?? '' }))
+  }, [])
+
+  useEffect(() => {
+    if (!preferredProvider) return
+    openProviderEditor(preferredProvider)
+  }, [preferredProvider, openProviderEditor])
+
   if (loading) return <div className="text-sm text-gray-500 py-8 text-center">Loading keys…</div>
 
   const codexRuntimeBadge = runtimeStatus ? getCodexRuntimeBadge(runtimeStatus.openai_oauth) : null
@@ -485,15 +495,6 @@ export function ApiKeysTab({ preferredProvider }: { preferredProvider?: Provider
   const openRouterReady = Boolean(keyByProvider.openrouter?.is_set)
   const openAiReady = Boolean(keyByProvider.openai?.is_set || runtimeStatus?.openai_oauth.usable)
   const githubReady = Boolean(runtimeStatus?.github_copilot.usable || keyByProvider['github-copilot']?.is_set)
-
-  const openProviderEditor = (provider: string) => {
-    setEditing((current) => ({ ...current, [provider]: current[provider] ?? '' }))
-  }
-
-  useEffect(() => {
-    if (!preferredProvider) return
-    openProviderEditor(preferredProvider)
-  }, [preferredProvider])
 
   const describeProvider = (provider: string) => {
     const inventory = providerInventory[provider]
