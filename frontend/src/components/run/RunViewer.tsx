@@ -86,6 +86,7 @@ export default function RunViewer({ runId, initialEventId }: Props) {
             runId={runId}
             messages={state.messages}
             runState={state.run.state}
+            extraData={state.run.extra_data}
             onRefresh={state.refresh}
           />
           <RunEventTimeline
@@ -179,6 +180,7 @@ function MobileLayout({
             runId={state.run.id}
             messages={state.messages}
             runState={state.run.state}
+            extraData={state.run.extra_data}
             onRefresh={state.refresh}
           />
         )}

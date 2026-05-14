@@ -117,6 +117,20 @@ export async function archiveRun(id: string): Promise<Run> {
   return request<Run>(`${BASE()}/${id}/archive`, { method: 'POST' })
 }
 
+export async function deleteRun(id: string): Promise<void> {
+  const res = await fetch(`${BASE()}/${id}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw Object.assign(new Error(body.detail || `API ${res.status}`), {
+      status: res.status,
+      body,
+    })
+  }
+}
+
 export async function approveRun(
   runId: string,
   phaseId: string,

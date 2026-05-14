@@ -1,6 +1,8 @@
 """Run API routes — /v1/runs/* CRUD, lifecycle, and SSE stream."""
 
+import asyncio
 import logging
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Request, Query
@@ -9,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.middleware.auth import verify_api_key
+from app.models import Model, Provider
 from app.schemas.run import (
     RunCreate, RunUpdate, RunOut, RunDetailOut,
     RunMessageIn, RunMessageOut,
@@ -18,6 +21,12 @@ from app.schemas.run import (
 )
 from app.services import runs as run_svc
 from app.services import run_events
+from app.services.model_client import model_client
+from app.services.runtime_model_resolver import (
+    Ready as RuntimeReady,
+    NeedsLiveProbe as RuntimeNeedsLiveProbe,
+    resolve_model_for_runtime,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +45,7 @@ async def create_run(body: RunCreate, db: AsyncSession = Depends(get_db)):
         method_id=body.method_id,
         title=body.title,
         agent_id=body.agent_id,
+        model_ref=body.model_ref,
     )
     await db.commit()
     await db.refresh(run)
@@ -80,6 +90,7 @@ async def update_run(run_id: str, body: RunUpdate, db: AsyncSession = Depends(ge
         db, run,
         title=body.title,
         power_tools_enabled=body.power_tools_enabled,
+        model_ref=body.model_ref,
     )
     await db.commit()
     await db.refresh(run)
@@ -94,11 +105,13 @@ async def update_run(run_id: str, body: RunUpdate, db: AsyncSession = Depends(ge
 async def post_message(run_id: str, body: RunMessageIn, db: AsyncSession = Depends(get_db)):
     run = await run_svc.get_run(db, run_id)
 
+    # --- Slash commands ---
     slash_result = await run_svc.handle_slash_command(db, run, body.content)
     if slash_result:
         await db.commit()
         return slash_result
 
+    # --- Store user message ---
     msg = await run_events.record_message(
         db, run_id,
         role=body.role,
@@ -107,6 +120,125 @@ async def post_message(run_id: str, body: RunMessageIn, db: AsyncSession = Depen
     )
     await db.commit()
     await db.refresh(msg)
+
+    # --- LLM call (only for user messages with a model selected) ---
+    model_ref = (run.extra_data or {}).get("model_ref")
+    if body.role != "user" or not model_ref:
+        return msg
+
+    # Resolve model + provider
+    resolved = await resolve_model_for_runtime(db, model_ref, intent="chat")
+    if not isinstance(resolved, (RuntimeReady, RuntimeNeedsLiveProbe)):
+        # Model not reachable — store an error message and return the user msg
+        error_text = getattr(resolved, "user_message", "Model is unavailable.")
+        await run_events.record_message(db, run_id, role="assistant", content=f"⚠️ {error_text}")
+        await db.commit()
+        return msg
+
+    llm_model: Model = resolved.model
+    llm_provider: Provider = resolved.provider
+
+    # Build chat-completions message list from Run history
+    all_messages = await run_svc.get_run_messages(db, run_id, limit=100)
+    chat_messages = []
+    for m in all_messages:
+        chat_messages.append({"role": m.role, "content": m.content})
+
+    # Transition to running
+    if run.state == "awaiting_input":
+        try:
+            run = await run_svc.transition(db, run, "running")
+        except Exception:
+            pass  # If transition fails (e.g. already running), continue anyway
+
+    # Emit model_request event
+    await run_events.emit(
+        db, run_id, "model_request",
+        summary=f"Calling {llm_model.model_id}",
+        payload={"model_ref": model_ref, "message_count": len(chat_messages)},
+    )
+    await db.commit()
+
+    # Call LLM with image generation tool available
+    from app.services.run_image_gen import IMAGE_TOOL_SCHEMA, handle_image_tool_call
+
+    t0 = time.time()
+    assistant_text = ""
+    tokens_in = 0
+    tokens_out = 0
+    image_generated = False
+    try:
+        resp_text, tool_calls, in_tok, out_tok = await asyncio.wait_for(
+            model_client.call_model_with_tools(
+                model=llm_model,
+                provider=llm_provider,
+                messages=chat_messages,
+                tools=[IMAGE_TOOL_SCHEMA],
+            ),
+            timeout=120,
+        )
+        assistant_text = resp_text
+        tokens_in = in_tok
+        tokens_out = out_tok
+
+        # Handle image generation tool calls
+        for tc in tool_calls:
+            if tc["name"] == "generate_image":
+                image_generated = True
+                tool_result = await handle_image_tool_call(
+                    db, run_id, tc["arguments"],
+                )
+                # If the LLM also produced text, store it separately
+                if assistant_text.strip():
+                    await run_events.record_message(
+                        db, run_id, role="assistant",
+                        content=assistant_text,
+                    )
+                # The image message was already stored by handle_image_tool_call
+                assistant_text = ""  # Don't store again below
+
+    except asyncio.TimeoutError:
+        assistant_text = "⚠️ The model did not respond within 120 seconds."
+        logger.warning("LLM timeout for run %s model %s", run_id, model_ref)
+    except Exception as exc:
+        assistant_text = f"⚠️ Model error: {exc}"
+        logger.warning("LLM error for run %s: %s", run_id, exc)
+
+    duration_ms = int((time.time() - t0) * 1000)
+
+    # Store assistant text response (if not already handled by tool call)
+    if assistant_text:
+        await run_events.record_message(
+            db, run_id, role="assistant", content=assistant_text,
+        )
+
+    # Emit model_response event with metrics
+    cost_usd = None
+    if tokens_in or tokens_out:
+        try:
+            cost_usd = model_client.estimate_cost(tokens_in, tokens_out, llm_model)
+        except Exception:
+            pass
+
+    summary = "Image generated" if image_generated else (assistant_text or "")[:120]
+    await run_events.emit(
+        db, run_id, "model_response",
+        summary=summary,
+        duration_ms=duration_ms,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+        cost_usd=cost_usd,
+        payload={"model_id": llm_model.model_id, "provider": llm_provider.name},
+    )
+
+    # Transition back to awaiting_input
+    if run.state == "running":
+        try:
+            run = await run_svc.transition(db, run, "awaiting_input")
+        except Exception:
+            pass
+
+    await db.commit()
     return msg
 
 
@@ -182,6 +314,13 @@ async def archive_run(run_id: str, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await db.refresh(run)
     return run
+
+
+@router.delete("/{run_id}", status_code=204, dependencies=[Depends(verify_api_key)])
+async def delete_run(run_id: str, db: AsyncSession = Depends(get_db)):
+    run = await run_svc.get_run(db, run_id)
+    await run_svc.delete_run(db, run)
+    await db.commit()
 
 
 # ---------------------------------------------------------------------------

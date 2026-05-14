@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useRuns } from '@/hooks/useRuns'
 import { useKeyedOptimisticAction } from '@/hooks/useOptimisticAction'
-import { approveRun, resumeRun, archiveRun } from '@/lib/runs/api'
+import { approveRun, resumeRun, archiveRun, deleteRun } from '@/lib/runs/api'
 import { TERMINAL_STATES, ACTIVE_STATES } from '@/lib/runs/types'
 import type { Run, RunState } from '@/lib/runs/types'
 
@@ -435,6 +435,21 @@ function RunCard({
             label="Acknowledge"
             color="red"
             onClick={() => onAction(run.id, () => archiveRun(run.id), 'Acknowledge')}
+          />
+        )}
+        {/* Archive (for active runs) / Delete (for terminal runs) */}
+        {ACTIVE_STATES.has(run.state) && (
+          <ActionButton
+            label="Archive"
+            color="gray"
+            onClick={() => onAction(run.id, () => archiveRun(run.id), 'Archive')}
+          />
+        )}
+        {(TERMINAL_STATES.has(run.state) || run.state === 'archived') && (
+          <ActionButton
+            label="Delete"
+            color="red"
+            onClick={() => onAction(run.id, () => deleteRun(run.id), 'Delete')}
           />
         )}
       </div>

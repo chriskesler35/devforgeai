@@ -86,11 +86,13 @@ export interface RunCreateInput {
   method_id?: string
   title?: string
   agent_id?: string
+  model_ref?: string
 }
 
 export interface RunUpdateInput {
   title?: string
   power_tools_enabled?: boolean
+  model_ref?: string
 }
 
 export interface RunMessageInput {

@@ -15,11 +15,13 @@ class RunCreate(BaseModel):
     method_id: Optional[str] = None
     title: Optional[str] = None
     agent_id: Optional[str] = None
+    model_ref: Optional[str] = None
 
 
 class RunUpdate(BaseModel):
     title: Optional[str] = None
     power_tools_enabled: Optional[bool] = None
+    model_ref: Optional[str] = None
 
 
 class RunMessageIn(BaseModel):

@@ -44,6 +44,7 @@ async def create_run(
     method_id: str | None = None,
     title: str | None = None,
     agent_id: str | None = None,
+    model_ref: str | None = None,
 ) -> Run:
     project = await db.get(Project, project_id)
     if not project or not project.is_active:
@@ -52,6 +53,8 @@ async def create_run(
     extra: dict = {}
     if agent_id:
         extra["agent_id"] = agent_id
+    if model_ref:
+        extra["model_ref"] = model_ref
 
     run = Run(
         id=str(uuid.uuid4()),
@@ -99,14 +102,32 @@ async def update_run(
     *,
     title: str | None = None,
     power_tools_enabled: bool | None = None,
+    model_ref: str | None = None,
 ) -> Run:
     if title is not None:
         run.title = title
     if power_tools_enabled is not None:
         run.power_tools_enabled = power_tools_enabled
+    if model_ref is not None:
+        extra = dict(run.extra_data or {})
+        extra["model_ref"] = model_ref
+        run.extra_data = extra
     run.updated_at = datetime.now(timezone.utc)
     await db.flush()
     return run
+
+
+# ---------------------------------------------------------------------------
+# Delete
+# ---------------------------------------------------------------------------
+
+async def delete_run(db: AsyncSession, run: Run) -> None:
+    """Hard-delete a Run and all its children (phases, messages, events).
+
+    CASCADE on the FK handles child rows automatically.
+    """
+    await db.delete(run)
+    await db.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +351,7 @@ async def handle_slash_command(
 
     Supported commands:
       /method <name>  — attach a method to this Run
+      /imagine <prompt> — generate an image from a text prompt
       /fork <event_id> — handled by POST /v1/runs/:id/fork (frontend sends it directly)
     """
     stripped = content.strip()
@@ -349,6 +371,24 @@ async def handle_slash_command(
             summary=f"Attached method: {method_id}",
         )
         return {"handled": True, "action": "method_attached", "method_id": run.method_id}
+
+    if cmd == "/imagine" and len(parts) > 1:
+        prompt = parts[1].strip()
+        if not prompt:
+            return None  # Fall through to regular message handling
+
+        # Record the user's /imagine command as a message
+        from app.services.run_events import record_message
+        await record_message(db, run.id, role="user", content=content)
+
+        # Generate the image
+        from app.services.run_image_gen import generate_image_for_run
+        result = await generate_image_for_run(db, run.id, prompt)
+        return {
+            "handled": True,
+            "action": "image_generated",
+            **result,
+        }
 
     return None
 
