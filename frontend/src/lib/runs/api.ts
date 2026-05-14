@@ -131,6 +131,15 @@ export async function deleteRun(id: string): Promise<void> {
   }
 }
 
+export async function bulkDeleteRuns(
+  params: { ids?: string[]; state?: string; terminal?: boolean },
+): Promise<{ deleted: number }> {
+  return request<{ deleted: number }>(`${BASE()}/bulk-delete`, {
+    method: 'POST',
+    body: JSON.stringify(params),
+  })
+}
+
 export async function approveRun(
   runId: string,
   phaseId: string,

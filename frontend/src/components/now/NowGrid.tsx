@@ -1,11 +1,11 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useRuns } from '@/hooks/useRuns'
 import { useKeyedOptimisticAction } from '@/hooks/useOptimisticAction'
-import { approveRun, resumeRun, archiveRun, deleteRun } from '@/lib/runs/api'
+import { approveRun, resumeRun, archiveRun, deleteRun, bulkDeleteRuns } from '@/lib/runs/api'
 import { TERMINAL_STATES, ACTIVE_STATES } from '@/lib/runs/types'
 import type { Run, RunState } from '@/lib/runs/types'
 
@@ -111,6 +111,22 @@ export default function NowGrid() {
   const [search, setSearch] = useState('')
   const [projectFilter, setProjectFilter] = useState<string | null>(null)
   const [recentCollapsed, setRecentCollapsed] = useState<Set<string>>(new Set())
+  const [bulkDeleting, setBulkDeleting] = useState(false)
+  const [confirmClear, setConfirmClear] = useState(false)
+
+  const handleBulkDelete = useCallback(async (params: { ids?: string[]; state?: string; terminal?: boolean }) => {
+    setBulkDeleting(true)
+    try {
+      const result = await bulkDeleteRuns(params)
+      refresh()
+      setConfirmClear(false)
+      return result.deleted
+    } catch {
+      // error handled by refresh
+    } finally {
+      setBulkDeleting(false)
+    }
+  }, [refresh])
 
   const nonArchived = useMemo(
     () => runs.filter((r) => r.state !== 'archived'),
@@ -192,12 +208,47 @@ export default function NowGrid() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Now</h1>
-        <Link
-          href="/runs/new"
-          className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-orange-600 hover:bg-orange-700 rounded-lg transition-colors"
-        >
-          + New Run
-        </Link>
+        <div className="flex items-center gap-2">
+          {/* Bulk clear */}
+          {filtered.length > 0 && !confirmClear && (
+            <button
+              onClick={() => setConfirmClear(true)}
+              disabled={bulkDeleting}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 rounded-lg transition-colors disabled:opacity-50"
+            >
+              Clear {filter === 'recent' ? 'recent' : filter === 'all' ? 'all' : 'filtered'} ({filtered.length})
+            </button>
+          )}
+          {confirmClear && (
+            <div className="flex items-center gap-2 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-1.5">
+              <span className="text-xs text-red-700 dark:text-red-400 font-medium">
+                Delete {filtered.length} runs?
+              </span>
+              <button
+                onClick={() => {
+                  const ids = filtered.map((r) => r.id)
+                  handleBulkDelete({ ids })
+                }}
+                disabled={bulkDeleting}
+                className="text-xs font-semibold px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {bulkDeleting ? 'Deleting...' : 'Yes, delete'}
+              </button>
+              <button
+                onClick={() => setConfirmClear(false)}
+                className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+          <Link
+            href="/runs/new"
+            className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-orange-600 hover:bg-orange-700 rounded-lg transition-colors"
+          >
+            + New Run
+          </Link>
+        </div>
       </div>
 
       {/* Filter bar */}

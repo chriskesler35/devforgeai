@@ -323,6 +323,45 @@ async def delete_run(run_id: str, db: AsyncSession = Depends(get_db)):
     await db.commit()
 
 
+@router.post("/bulk-delete", status_code=200, dependencies=[Depends(verify_api_key)])
+async def bulk_delete_runs(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete multiple runs by ID list, or all runs matching a state filter.
+
+    Body: { "ids": [...] }  — delete specific runs
+      or: { "state": "completed" }  — delete all runs in that state
+      or: { "terminal": true }  — delete all completed/failed/cancelled runs
+    """
+    deleted = 0
+
+    if "ids" in body and isinstance(body["ids"], list):
+        for rid in body["ids"]:
+            try:
+                run = await run_svc.get_run(db, str(rid))
+                await run_svc.delete_run(db, run)
+                deleted += 1
+            except Exception:
+                pass
+
+    elif body.get("terminal"):
+        runs = await run_svc.list_runs(db, limit=200)
+        for run in runs:
+            if run.state in run_svc.TERMINAL_STATES:
+                await run_svc.delete_run(db, run)
+                deleted += 1
+
+    elif "state" in body:
+        runs = await run_svc.list_runs(db, states=[body["state"]], limit=200)
+        for run in runs:
+            await run_svc.delete_run(db, run)
+            deleted += 1
+
+    await db.commit()
+    return {"deleted": deleted}
+
+
 # ---------------------------------------------------------------------------
 # Method attachment + fork
 # ---------------------------------------------------------------------------
