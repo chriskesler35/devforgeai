@@ -38,12 +38,12 @@ export default function RunChatPane({ runId, messages, runState, extraData, onRe
     async function load() {
       try {
         const res = await fetch(
-          `${getApiBase()}/v1/models?usable_only=true&active_only=true&chat_only=true&limit=100`,
+          `${getApiBase()}/v1/models?usable_only=true&active_only=true&chat_only=true&limit=200`,
           { headers: getAuthHeaders() },
         )
         if (!res.ok) throw new Error(`API ${res.status}`)
         const data = await res.json()
-        const items: ModelOption[] = (data.models || []).map((m: any) => ({
+        const items: ModelOption[] = (data.data || data.models || []).map((m: any) => ({
           id: m.id,
           model_id: m.model_id,
           display_name: m.display_name || m.model_id,
@@ -88,8 +88,10 @@ export default function RunChatPane({ runId, messages, runState, extraData, onRe
     const text = input.trim()
     if (!text || sending) return
 
-    // Warn if no model is selected
-    if (!currentModelRef) {
+    const isSlashCommand = text.startsWith('/')
+
+    // Warn if no model is selected (but allow slash commands through)
+    if (!currentModelRef && !isSlashCommand) {
       addToast({
         type: 'error',
         title: 'No model selected',
@@ -147,14 +149,26 @@ export default function RunChatPane({ runId, messages, runState, extraData, onRe
             className="flex-1 text-xs rounded-md border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-2 py-1 outline-none focus:border-orange-400 focus:ring-1 focus:ring-orange-400 truncate"
           >
             <option value="">Select a model...</option>
-            {models.map((m) => (
-              <option
-                key={`${m.provider_name}/${m.model_id}`}
-                value={`${m.provider_name}/${m.model_id}`}
-              >
-                {m.provider_name} / {m.display_name}
-              </option>
-            ))}
+            {(() => {
+              const grouped = new Map<string, ModelOption[]>()
+              for (const m of models) {
+                const list = grouped.get(m.provider_name) || []
+                list.push(m)
+                grouped.set(m.provider_name, list)
+              }
+              return Array.from(grouped.entries()).map(([provider, providerModels]) => (
+                <optgroup key={provider} label={provider}>
+                  {providerModels.map((m) => (
+                    <option
+                      key={`${m.provider_name}/${m.model_id}`}
+                      value={`${m.provider_name}/${m.model_id}`}
+                    >
+                      {m.display_name}
+                    </option>
+                  ))}
+                </optgroup>
+              ))
+            })()}
           </select>
         )}
       </div>
@@ -192,7 +206,7 @@ export default function RunChatPane({ runId, messages, runState, extraData, onRe
             onKeyDown={handleKeyDown}
             placeholder={
               !currentModelRef
-                ? 'Select a model first...'
+                ? 'Select a model above, or type /imagine...'
                 : runState === 'awaiting_input'
                 ? 'Type a message or /command...'
                 : 'Send a message...'
