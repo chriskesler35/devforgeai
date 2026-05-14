@@ -80,10 +80,10 @@ rewrites) is deferred 30 days per plan.
 ## Known Gaps / Future Work
 
 1. **Chunk 14 (Phase B cleanup)**: Deferred 30 days. Delete legacy route files, move redirects to next.config.js rewrites. Earliest start: 2026-06-12.
-2. **Projects route write-through**: `projects_sync.py` syncs from JSON → DB on startup, but no write-through route exists yet for creating projects via API.
-3. **Legacy pipelines_to_runs_adapter**: `get_or_create_companion_run()` exists and works for the by-legacy endpoint, but the legacy pipeline event loop doesn't auto-push events into Run events yet. This means companion Runs created from legacy pipelines start empty — they link but don't replay.
-4. **NowLauncher**: The old `NowLauncher` component (`frontend/src/components/now/NowLive.tsx`) and `ActiveRunsIndicator` are no longer mounted in the sidebar but still exist as files. Phase B can delete them.
-5. **`useOptimisticAction` unification**: Hook exists but NowGrid uses its own inline optimistic pattern (works fine, just not unified). Low priority.
+2. ~~**Projects route write-through**~~ → **Closed 2026-05-14.** Full CRUD already exists in `backend/app/routes/projects.py` (POST, GET, PATCH, DELETE). JSON→DB sync is startup-only, not bidirectional, but is sufficient for current needs.
+3. ~~**Legacy pipelines_to_runs_adapter**~~ → **Closed 2026-05-14.** `_push()` in `pipelines.py` now bridges significant pipeline events to companion Run events via `_bridge_event_to_companion_run()`. Event type mapping covers phase lifecycle, approvals, commands, warnings, and pipeline status changes.
+4. ~~**NowLauncher**~~ → **Closed 2026-05-14.** Deleted `NowLive.tsx`, `NowMocks.tsx`, `mocks/now/page.tsx`, and `ActiveRunsIndicator.tsx`.
+5. ~~**`useOptimisticAction` unification**~~ → **Closed 2026-05-14.** Added `useKeyedOptimisticAction` hook (per-key busy tracking). NowGrid refactored to use it.
 
 ---
 

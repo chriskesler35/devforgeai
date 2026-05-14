@@ -1,10 +1,10 @@
 'use client'
 
-import { useCallback, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useRuns } from '@/hooks/useRuns'
-import { useToast } from '@/app/ToastProvider'
+import { useKeyedOptimisticAction } from '@/hooks/useOptimisticAction'
 import { approveRun, resumeRun, archiveRun } from '@/lib/runs/api'
 import { TERMINAL_STATES, ACTIVE_STATES } from '@/lib/runs/types'
 import type { Run, RunState } from '@/lib/runs/types'
@@ -105,12 +105,11 @@ export default function NowGrid() {
   const initialType: TypeFilter = urlFilter === 'method' ? 'method' : urlType === 'chat' ? 'chat' : urlType === 'session' ? 'session' : 'all'
 
   const { runs, loading, error, refresh } = useRuns()
-  const { addToast } = useToast()
+  const { isBusy: isActionBusy, run: runAction } = useKeyedOptimisticAction(refresh)
   const [filter, setFilter] = useState<Filter>('active')
   const [typeFilter, setTypeFilter] = useState<TypeFilter>(initialType)
   const [search, setSearch] = useState('')
   const [projectFilter, setProjectFilter] = useState<string | null>(null)
-  const [busyActions, setBusyActions] = useState<Set<string>>(new Set())
   const [recentCollapsed, setRecentCollapsed] = useState<Set<string>>(new Set())
 
   const nonArchived = useMemo(
@@ -161,29 +160,6 @@ export default function NowGrid() {
     [nonArchived],
   )
 
-  const runAction = useCallback(
-    async (runId: string, action: () => Promise<unknown>, label: string) => {
-      setBusyActions((prev) => new Set(prev).add(runId))
-      try {
-        await action()
-        refresh()
-      } catch (err: any) {
-        addToast({
-          type: 'error',
-          title: `${label} failed`,
-          message: err.message ?? 'Unknown error',
-          autoClose: 5000,
-        })
-      } finally {
-        setBusyActions((prev) => {
-          const next = new Set(prev)
-          next.delete(runId)
-          return next
-        })
-      }
-    },
-    [refresh, addToast],
-  )
 
   if (loading) {
     return (
@@ -330,7 +306,7 @@ export default function NowGrid() {
                       <RunCard
                         key={run.id}
                         run={run}
-                        busy={busyActions.has(run.id)}
+                        busy={isActionBusy(run.id)}
                         onAction={runAction}
                       />
                     ))}
@@ -362,7 +338,7 @@ export default function NowGrid() {
                           <RunCard
                             key={run.id}
                             run={run}
-                            busy={busyActions.has(run.id)}
+                            busy={isActionBusy(run.id)}
                             onAction={runAction}
                           />
                         ))}

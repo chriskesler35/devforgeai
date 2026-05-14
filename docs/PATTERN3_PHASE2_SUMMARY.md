@@ -194,11 +194,11 @@ From REQUIREMENTS.md Pattern 3:
 
 ## Known Limitations & Next Steps
 
-### Phase 2 Limitations
-1. **Background monitoring not wired:** ProviderHealthService has `start_background_monitor()` but not yet called in `lifespan`
-2. **Selection logging incomplete:** `log_selection_decision()` logs to stdout, not database (future table)
-3. **Fallback chains hardcoded:** Should be configurable via database (future)
-4. **Health dashboard incomplete:** Needs aggregation logic in routes
+### Phase 2 Limitations (updated 2026-05-14)
+1. ~~**Background monitoring not wired**~~ → **Closed.** `run_provider_health_monitor()` is wired into app lifespan (`main.py` lines 279-299) with configurable interval via `MODEL_HEALTH_CHECK_INTERVAL_SECONDS` env var (default 300s).
+2. ~~**Selection logging incomplete**~~ → **Closed.** `log_selection_decision()` now persists to `ModelSelectionLog` table in DB and logs to stdout. Query route at `GET /v1/model-verification/models/selection-log` with feature/result filters.
+3. ~~**Fallback chains hardcoded**~~ → **Closed.** `_load_user_configured_fallback_refs()` reads `runtime_fallback_order` from AppSettings (supports JSON list or per-feature object). Hardcoded chains in `get_fallback_chain()` serve as defaults only.
+4. ~~**Health dashboard incomplete**~~ → **Closed.** Models page (`/models`) renders provider health summaries, model health counts (verified/degraded/failed), runtime status, selection log entries, and diagnosis suites. Backend routes exist at `/v1/model-verification/health`, `/v1/model-verification/providers/health`, `/v1/model-verification/models/selection-log`, `/v1/model-verification/diagnosis`.
 
 ### Phase 3 Priorities
 

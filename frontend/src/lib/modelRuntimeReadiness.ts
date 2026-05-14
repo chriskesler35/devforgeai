@@ -13,7 +13,7 @@
 //            at runtime with a 404 / scope error.
 //
 // Every model selector in the app (chat dropdown, persona forms, pipeline
-// phase pickers, NowLive provider-state card) should consult this module
+// phase pickers, provider-state cards) should consult this module
 // rather than rolling its own check. New runtime gates (e.g., Responses-only
 // transport) extend `Reason` here, not in each call site.
 

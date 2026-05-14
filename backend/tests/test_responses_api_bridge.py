@@ -176,7 +176,7 @@ async def test_call_responses_api_forwards_credentials_and_returns_envelope(monk
     assert captured["api_key"] == "sk-test"
     assert captured["extra_headers"] == {"x-trace-id": "abc"}
     assert captured["temperature"] == 0.2
-    # Bridge always calls aresponses with stream=False on the wire (see docstring).
+    # Non-streaming calls pass stream=False on the wire.
     assert captured["stream"] is False
     # And the envelope is chat-completions-shaped.
     assert result.choices[0].message.content == "bridged response"
@@ -184,17 +184,27 @@ async def test_call_responses_api_forwards_credentials_and_returns_envelope(monk
 
 
 @pytest.mark.asyncio
-async def test_call_responses_api_streaming_wraps_as_single_chunk(monkeypatch):
-    """When stream=True is requested, the bridge fetches the full response
-    and yields it as a single chunk via an async generator. Downstream
-    streaming consumers can iterate it without special-casing."""
-    async def fake_aresponses(**_kwargs):
-        return SimpleNamespace(
-            id="resp_stream",
-            model="openai/gpt-5-codex",
-            output_text="streamed-as-single",
-            usage=SimpleNamespace(input_tokens=2, output_tokens=2),
+async def test_call_responses_api_streaming_yields_incremental_deltas(monkeypatch):
+    """When stream=True, the bridge requests real streaming from the Responses
+    API and translates output_text.delta events into chat-completions-shaped
+    delta chunks. Downstream streaming consumers iterate them as normal."""
+
+    async def _fake_stream():
+        """Simulate Responses API streaming events."""
+        yield SimpleNamespace(type="response.output_text.delta", delta="Hello", response_id="resp_s")
+        yield SimpleNamespace(type="response.output_text.delta", delta=" world", response_id="resp_s")
+        yield SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(
+                id="resp_s",
+                model="openai/gpt-5-codex",
+                usage=SimpleNamespace(input_tokens=2, output_tokens=4),
+            ),
         )
+
+    async def fake_aresponses(**kwargs):
+        assert kwargs["stream"] is True, "Bridge must pass stream=True on the wire"
+        return _fake_stream()
 
     monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
 
@@ -210,8 +220,17 @@ async def test_call_responses_api_streaming_wraps_as_single_chunk(monkeypatch):
     async for chunk in generator:
         chunks.append(chunk)
 
-    assert len(chunks) == 1, "single-chunk streaming wrapper should yield exactly one chunk"
-    assert chunks[0].choices[0].message.content == "streamed-as-single"
+    # Two delta chunks + one finish chunk
+    assert len(chunks) == 3
+    # First two carry incremental text via .delta.content (not .message.content)
+    assert chunks[0].choices[0].delta.content == "Hello"
+    assert chunks[0].object == "chat.completion.chunk"
+    assert chunks[1].choices[0].delta.content == " world"
+    # Last chunk has finish_reason="stop" and usage info
+    assert chunks[2].choices[0].finish_reason == "stop"
+    assert chunks[2].usage.prompt_tokens == 2
+    assert chunks[2].usage.completion_tokens == 4
+    assert chunks[2].usage.total_tokens == 6
 
 
 # ─── Top-level call_model integration ─────────────────────────────────────────

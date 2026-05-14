@@ -1,6 +1,6 @@
 # DevForgeAI — Session Handoff (Live)
 
-**Last updated:** 2026-05-13
+**Last updated:** 2026-05-14
 **Active branch:** main
 **Backend:** `:19001` (launcher startup and status verified)
 **Frontend:** `:3001`
@@ -47,11 +47,11 @@ Pattern: symbol used inside file but never imported. Same root cause repeating.
 
 **Verification command after restart:**
 ```powershell
-C:\Python314\python.exe devforgeai.py stop
-C:\Python314\python.exe devforgeai.py start backend
+C:\Python313\python.exe devforgeai.py stop
+C:\Python313\python.exe devforgeai.py start backend
 Start-Sleep 5
 Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:19001/health' | Select-Object StatusCode
-Get-Content G:\Model_Mesh\logs\backend_stderr.log -Tail 30
+Get-Content C:\Users\chris\DevForgeAI\model_mesh\logs\backend_stderr.log -Tail 30
 ```
 Look for: NO occurrences of `name 'is_codex_proxy_reachable' is not defined`. Then ask user to retry pipeline `f88a7392-aa4a-4bd7-8f29-1a4bc4eacc18`.
 
@@ -152,13 +152,22 @@ Output:
 
 **Slot E Doc 1 (The Run — work model + viewer UX) — DESIGN DOC WRITTEN, AWAITING USER REVIEW.** See `docs/superpowers/specs/2026-05-12-the-run-design.md`. All 7 brainstorm decisions logged in §2 of that doc. Wireframes for the assembled design are embedded in §5.3 as text. Visual companion mockups preserved locally at `.superpowers/brainstorm/671-1778623161/` but gitignored.
 
+### Session 2026-05-14 — gap audit + doc cleanup
+
+- **Gap audit complete.** Conversations/[id] redirect shim confirmed present (false negative in earlier search). Stale `COMPLETION_GAP_CHECKLIST.md` updated (Codex transport marked closed, streaming limitation added). Stale `Python314` path fixed to `Python313`. GAP_CLOSURE_LOG item #3 closed.
+- Settings page refactor pulled from upstream (7 tab components extracted).
+- Responses API bridge + 11 tests pulled from upstream.
+
 ### To pick up
 
-1. **Chunk 14 (Phase B cleanup)** — deferred 30 days from 2026-05-13. Earliest start: 2026-06-12. Delete legacy page files, move redirects to `next.config.js` rewrites.
-2. **Live smoke test** — start backend + frontend, visit every legacy URL listed in Doc 2 §4, verify redirects and banner behavior.
-3. **D2 implementation continuation** — the original resolver roadmap. No longer blocked by UI work.
-4. **gpt-5-codex Responses API transport** — gap log open item 1. Still pending.
-5. **Live runtime smoke tests** — `/v1/api-keys/runtime-status` + Codex routing — pending credentials/proxy availability.
+1. **Chunk 14 (Phase B cleanup)** — deferred 30 days from 2026-05-13. Earliest start: 2026-06-12. Delete legacy page files (`NowLive.tsx`, `NowMocks.tsx`, `mocks/now/page.tsx`), move redirects to `next.config.js` rewrites.
+2. **Live smoke test** — start backend + frontend, visit every legacy URL listed in Doc 2 §4, verify redirects and banner behavior. Must be done interactively (sandbox blocks localhost).
+3. **Credentialed runtime smoke tests** — hit `/v1/api-keys/runtime-status`, test OpenAI key path, Codex proxy path, fallback behavior. Requires real API keys — user must run manually.
+4. **Responses API streaming** — `gpt-5-codex` responses are buffered as single chunk. Follow-up if streaming UX matters.
+5. **Legacy pipeline → Run event replay** — companion Runs from legacy pipelines start empty (link only, no event replay).
+6. **Projects write-through API** — no route for creating/updating projects programmatically yet.
+7. **Background provider health monitor** — `ProviderHealthService.start_background_monitor()` not wired into app lifespan.
+8. **Selection decision audit logging** — `log_selection_decision()` logs to stdout, not DB. No frontend audit trail.
 
 ## M2 Execution Delta (2026-05-09)
 

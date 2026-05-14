@@ -1,6 +1,6 @@
 # DevForgeAI Completion Gap Checklist
 
-Updated: 2026-05-11
+Updated: 2026-05-14
 Scope source: REQUIREMENTS.md acceptance criteria for Pattern 1, Pattern 2, Pattern 3.
 
 ## Status Legend
@@ -152,9 +152,10 @@ See `docs/GAP_CLOSURE_LOG.md` for the active gap log from the 2026-05-11 laptop 
 
 Current open items:
 
-- Codex-family model transport needs explicit endpoint mapping (`chat_completions` vs `responses`) before Responses-only models can be considered fully supported.
+- ~~Codex-family model transport needs explicit endpoint mapping~~ → **Closed 2026-05-13.** Responses API bridge shipped in `model_client.py` with 11 tests. See `docs/GAP_CLOSURE_LOG.md` for details.
 - Credentialed live runtime smoke tests still need local secrets/proxy availability; backend startup and `/health` are now verified.
 - Release readiness should require frontend build, focused backend runtime tests, and Alembic single-head/migration checks.
+- ~~Responses API streaming for `gpt-5-codex` is buffered~~ → **Closed 2026-05-14.** Real incremental streaming via `response.output_text.delta` events now translates to chat-completions delta chunks.
 
 ## Definition of Fully Completed
 

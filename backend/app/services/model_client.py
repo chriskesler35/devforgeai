@@ -188,21 +188,18 @@ async def _call_responses_api(
 ):
     """Call ``litellm.aresponses`` and return a chat-completions-shaped result.
 
-    Streaming note: v1 of the bridge does NOT stream incrementally. When the
-    caller asks for stream=True we fetch the full response, then yield it as
-    a single chunk so the existing ``_stream_response`` consumer works. The
-    Responses API has a different streaming-event vocabulary (`response.output_text.delta`)
-    that would need its own translation layer to surface as chat-completions
-    chunks — out of scope for closing the gap-log item, in scope for a
-    follow-up if streaming UX for Responses-only models matters.
+    When *stream=True* the function requests real server-side streaming from
+    the Responses API and translates ``response.output_text.delta`` events
+    into chat-completions-shaped delta chunks so the existing
+    ``_stream_response`` consumer works transparently.  When *stream=False*
+    the full response is fetched and wrapped in the chat-completions envelope.
     """
     instructions, input_value = _messages_to_responses_input(messages)
 
     kwargs: dict[str, Any] = {
         "model": litellm_model,
         "input": input_value,
-        # Always non-streaming on the wire — see docstring.
-        "stream": False,
+        "stream": stream,
     }
     if instructions:
         kwargs["instructions"] = instructions
@@ -219,14 +216,57 @@ async def _call_responses_api(
     if tool_choice is not None:
         kwargs["tool_choice"] = tool_choice
 
-    raw = await litellm.aresponses(**kwargs)
-    envelope = _responses_to_chat_envelope(raw, fallback_model_id=litellm_model)
+    if not stream:
+        raw = await litellm.aresponses(**kwargs)
+        return _responses_to_chat_envelope(raw, fallback_model_id=litellm_model)
 
-    if stream:
-        async def _single_chunk():
-            yield envelope
-        return _single_chunk()
-    return envelope
+    # Streaming path — translate Responses API events into chat-completions
+    # delta chunks.  litellm.aresponses(stream=True) returns an async iterator
+    # of event objects.  We yield SimpleNamespace chunks that look like:
+    #   chunk.choices[0].delta.content = "<text>"
+    # so ``_stream_response`` (and any caller doing ``async for chunk in …``)
+    # works identically to the acompletion streaming path.
+    raw_stream = await litellm.aresponses(**kwargs)
+
+    async def _delta_generator():
+        accumulated_text = ""
+        async for event in raw_stream:
+            event_type = getattr(event, "type", None)
+            # The Responses API emits "response.output_text.delta" for
+            # incremental text.  Extract the delta text and yield a chunk.
+            if event_type == "response.output_text.delta":
+                delta_text = getattr(event, "delta", "") or ""
+                if delta_text:
+                    accumulated_text += delta_text
+                    delta = SimpleNamespace(role=None, content=delta_text)
+                    choice = SimpleNamespace(index=0, delta=delta, finish_reason=None)
+                    yield SimpleNamespace(
+                        id=getattr(event, "response_id", None) or "",
+                        object="chat.completion.chunk",
+                        model=litellm_model,
+                        choices=[choice],
+                    )
+            elif event_type == "response.completed":
+                # Final event — emit finish_reason="stop" and include usage
+                resp = getattr(event, "response", None)
+                usage = getattr(resp, "usage", None) if resp else None
+                delta = SimpleNamespace(role=None, content=None)
+                choice = SimpleNamespace(index=0, delta=delta, finish_reason="stop")
+                chunk = SimpleNamespace(
+                    id=getattr(resp, "id", None) or "",
+                    object="chat.completion.chunk",
+                    model=getattr(resp, "model", litellm_model) or litellm_model,
+                    choices=[choice],
+                )
+                if usage:
+                    chunk.usage = SimpleNamespace(
+                        prompt_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+                        completion_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+                        total_tokens=int(getattr(usage, "input_tokens", 0) or 0) + int(getattr(usage, "output_tokens", 0) or 0),
+                    )
+                yield chunk
+
+    return _delta_generator()
 
 # Drop params unsupported by specific providers (e.g. GPT-5 only accepts
 # temperature=1, Anthropic ignores some OpenAI-specific fields, etc).

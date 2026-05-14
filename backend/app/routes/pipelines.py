@@ -397,6 +397,33 @@ def _build_method_switch_handoff_task(
 
 
 # ─── Event helpers ────────────────────────────────────────────────────────────
+
+# Pipeline event types that map to Run event kinds.  Events not in this map
+# are still persisted to PipelineEvent but not replayed to a companion Run.
+_PIPELINE_TO_RUN_KIND: Dict[str, str] = {
+    "phase_thinking":          "phase_start",
+    "phase_progress":          "agent_start",
+    "phase_branch":            "phase_start",
+    "phase_skipped":           "phase_end",
+    "files_written":           "tool_result",
+    "command_running":         "tool_call",
+    "command_completed":       "tool_result",
+    "command_awaiting_approval": "approval_gate",
+    "awaiting_approval":       "approval_gate",
+    "phase_approved":          "user_intervention",
+    "phase_rejected":          "user_intervention",
+    "warning":                 "error",
+    "info":                    "model_response",
+    "pipeline_done":           "phase_end",
+    "pipeline_paused":         "user_intervention",
+    "pipeline_resumed":        "user_intervention",
+    "pipeline_created":        "phase_start",
+}
+
+# Cache of pipeline_id → companion_run_id (None = no companion).
+_companion_run_cache: Dict[str, Optional[str]] = {}
+
+
 def _push(pipeline_id: str, type: str, **payload):
     evt = {
         "type": type,
@@ -424,6 +451,15 @@ def _push(pipeline_id: str, type: str, **payload):
             asyncio.create_task(_persist_event(pipeline_id, evt))
         except RuntimeError:
             # No running loop (rare — only when called from sync test contexts)
+            pass
+
+    # Bridge: replay significant pipeline events into the companion Run so
+    # the Run viewer shows live activity.  Best-effort, never blocks _push.
+    run_kind = _PIPELINE_TO_RUN_KIND.get(type)
+    if run_kind and type != "ping":
+        try:
+            asyncio.create_task(_bridge_event_to_companion_run(pipeline_id, evt, run_kind))
+        except RuntimeError:
             pass
 
 
@@ -457,6 +493,60 @@ async def _persist_event(pipeline_id: str, evt: dict) -> None:
             await db.commit()
     except Exception as e:
         logger.debug("PipelineEvent persistence failed for %s: %s", pipeline_id, e)
+
+
+async def _bridge_event_to_companion_run(
+    pipeline_id: str, evt: dict, run_kind: str
+) -> None:
+    """Best-effort forward of a pipeline event to the companion Run.
+
+    Looks up (and caches) the companion Run via extra_data.legacy_pipeline_id.
+    If no companion Run exists yet, we skip silently — the companion is created
+    on-demand when a user visits the legacy URL, and replay begins from that
+    point forward.
+    """
+    from app.services import run_events
+    from app.models.run import Run
+
+    try:
+        # Fast-path: check cache first
+        cached = _companion_run_cache.get(pipeline_id)
+        if cached is None and pipeline_id in _companion_run_cache:
+            # Explicitly cached as "no companion" — skip
+            return
+
+        async with AsyncSessionLocal() as db:
+            if cached is None:
+                # Look up companion Run
+                result = await db.execute(
+                    select(Run.id).where(
+                        Run.extra_data["legacy_pipeline_id"].as_string() == pipeline_id
+                    )
+                )
+                row = result.scalar()
+                _companion_run_cache[pipeline_id] = row  # may be None
+                if not row:
+                    return
+                cached = row
+
+            # Build a summary from the pipeline event payload
+            p = evt.get("payload") or {}
+            phase_name = p.get("phase_name", "")
+            message = p.get("message", "")
+            summary = message or phase_name or evt.get("type", run_kind)
+            if phase_name and message:
+                summary = f"{phase_name}: {message}"
+
+            await run_events.emit(
+                db,
+                cached,
+                run_kind,
+                summary[:200],
+                payload={"pipeline_event_type": evt.get("type"), **p},
+            )
+            await db.commit()
+    except Exception as exc:
+        logger.debug("Companion Run bridge failed for pipeline %s: %s", pipeline_id, exc)
 
 
 async def recover_orphan_pipelines() -> dict:

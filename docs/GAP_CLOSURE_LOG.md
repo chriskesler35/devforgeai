@@ -1,6 +1,6 @@
 # DevForgeAI Gap Closure Log
 
-Updated: 2026-05-11
+Updated: 2026-05-14
 
 This file tracks gaps found during the May 2026 laptop sync/review. It is intentionally evidence-based: a gap is only marked closed when the repo has code and verification to back it up.
 
@@ -125,10 +125,12 @@ This file tracks gaps found during the May 2026 laptop sync/review. It is intent
     `test_workbench_runtime_resolution` + `test_pipeline_runtime_failover`) →
     **28 passed**.
   - `ruff check .` → all checks passed.
-- v1 limitation: streaming Responses-API responses are buffered, then yielded
-  as a single chunk via an async generator. Translating Responses-API streaming
-  events (`response.output_text.delta`) into chat-completions chunks is a
-  follow-up if streaming UX for Responses-only models matters.
+- ~~v1 limitation: streaming was buffered~~ → **Closed 2026-05-14.**
+  Streaming now uses real server-side Responses API streaming. Delta events
+  (`response.output_text.delta`) are translated into chat-completions-shaped
+  delta chunks (`chunk.choices[0].delta.content`) so `_stream_response` and
+  all SSE consumers work transparently. Test updated to verify incremental
+  multi-chunk streaming behavior.
 
 2. **Credentialed runtime smoke tests still need secrets/proxy availability**
    - Backend startup and `/health` are verified locally, but credentialed model calls still depend on local secrets and any configured Codex-compatible proxy.
@@ -136,11 +138,9 @@ This file tracks gaps found during the May 2026 laptop sync/review. It is intent
      - Run `/v1/api-keys/runtime-status`.
      - Run live model routing smoke tests for OpenAI API key path, OpenAI-Codex proxy path if configured, and fallback behavior.
 
-3. **Completion checklist previously overstated readiness**
-   - `docs/COMPLETION_GAP_CHECKLIST.md` should not say there are no high-impact gaps unless build, focused backend tests, and migration-head checks are included in the evidence.
-   - Next work:
-     - Keep this gap log linked from the completion checklist.
-     - Promote verification commands to required release criteria.
+~~3. **Completion checklist previously overstated readiness**~~ → **Closed 2026-05-14**.
+   - Updated `COMPLETION_GAP_CHECKLIST.md`: marked Codex transport as closed, added Responses API streaming limitation, linked this gap log.
+   - Verification commands already present in the "Current Required Verification Set" section below.
 
 ## Current Required Verification Set
 
